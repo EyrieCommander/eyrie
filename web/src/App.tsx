@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { Routes, Route, Link, useParams } from "react-router-dom";
 import type { AgentInfo } from "./lib/types";
 import { fetchAgents } from "./lib/api";
 import AgentCard from "./components/AgentCard";
@@ -7,7 +8,6 @@ import { Bird, RefreshCw } from "lucide-react";
 
 export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,12 +30,10 @@ export default function App() {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  const selectedAgent = agents.find((a) => a.name === selected);
-
   return (
     <div className="mx-auto min-h-screen max-w-5xl px-6 py-8">
       <header className="mb-8 flex items-center justify-between">
-        <div className="flex items-center gap-3">
+        <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
           <Bird className="h-8 w-8 text-accent" />
           <div>
             <h1 className="text-2xl font-bold tracking-tight">Eyrie</h1>
@@ -43,7 +41,7 @@ export default function App() {
               Claw Agent Management Dashboard
             </p>
           </div>
-        </div>
+        </Link>
         <button
           onClick={refresh}
           disabled={loading}
@@ -60,48 +58,72 @@ export default function App() {
         </div>
       )}
 
-      {selectedAgent ? (
-        <AgentDetail
-          agent={selectedAgent}
-          onBack={() => setSelected(null)}
+      <Routes>
+        <Route
+          path="/"
+          element={<AgentList agents={agents} loading={loading} />}
         />
-      ) : (
-        <div>
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-lg font-semibold">
-              Agents
-              {!loading && (
-                <span className="ml-2 text-sm font-normal text-text-muted">
-                  ({agents.length} discovered)
-                </span>
-              )}
-            </h2>
-          </div>
+        <Route
+          path="/agents/:name/:tab?"
+          element={<AgentDetailRoute agents={agents} />}
+        />
+      </Routes>
+    </div>
+  );
+}
 
-          {loading && agents.length === 0 ? (
-            <div className="flex items-center justify-center py-20 text-text-muted">
-              Discovering agents...
-            </div>
-          ) : agents.length === 0 ? (
-            <div className="rounded-lg border border-border bg-surface p-8 text-center">
-              <p className="text-text-muted">
-                No agents discovered. Make sure ZeroClaw or OpenClaw is
-                installed and configured.
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-4 sm:grid-cols-2">
-              {agents.map((agent) => (
-                <AgentCard
-                  key={agent.name}
-                  agent={agent}
-                  onSelect={setSelected}
-                />
-              ))}
-            </div>
+function AgentList({ agents, loading }: { agents: AgentInfo[]; loading: boolean }) {
+  return (
+    <div>
+      <div className="mb-4 flex items-center justify-between">
+        <h2 className="text-lg font-semibold">
+          Agents
+          {!loading && (
+            <span className="ml-2 text-sm font-normal text-text-muted">
+              ({agents.length} discovered)
+            </span>
           )}
+        </h2>
+      </div>
+
+      {loading && agents.length === 0 ? (
+        <div className="flex items-center justify-center py-20 text-text-muted">
+          Discovering agents...
+        </div>
+      ) : agents.length === 0 ? (
+        <div className="rounded-lg border border-border bg-surface p-8 text-center">
+          <p className="text-text-muted">
+            No agents discovered. Make sure ZeroClaw or OpenClaw is
+            installed and configured.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-4 sm:grid-cols-2">
+          {agents.map((agent) => (
+            <AgentCard
+              key={agent.name}
+              agent={agent}
+            />
+          ))}
         </div>
       )}
     </div>
   );
+}
+
+function AgentDetailRoute({ agents }: { agents: AgentInfo[] }) {
+  const { name } = useParams<{ name: string }>();
+  const agent = agents.find((a) => a.name === name);
+
+  if (!agent) {
+    return (
+      <div className="py-20 text-center text-text-muted">
+        {agents.length === 0
+          ? "Loading agents..."
+          : `Agent "${name}" not found.`}
+      </div>
+    );
+  }
+
+  return <AgentDetail agent={agent} />;
 }

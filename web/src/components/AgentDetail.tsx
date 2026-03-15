@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useParams, Link } from "react-router-dom";
 import {
   ArrowLeft,
   Play,
@@ -22,13 +23,18 @@ import {
 
 interface AgentDetailProps {
   agent: AgentInfo;
-  onBack: () => void;
 }
 
-type Tab = "overview" | "logs" | "activity" | "config";
+const validTabs = ["overview", "logs", "activity", "config"] as const;
+type Tab = (typeof validTabs)[number];
 
-export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
-  const [tab, setTab] = useState<Tab>("overview");
+export default function AgentDetail({ agent }: AgentDetailProps) {
+  const { tab: tabParam } = useParams<{ tab?: string }>();
+
+  const tab: Tab = validTabs.includes(tabParam as Tab)
+    ? (tabParam as Tab)
+    : "overview";
+
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [config, setConfig] = useState<string | null>(null);
@@ -77,13 +83,13 @@ export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <button
-          onClick={onBack}
+        <Link
+          to="/"
           className="flex items-center gap-2 text-text-muted transition-colors hover:text-text"
         >
           <ArrowLeft className="h-4 w-4" />
           Back
-        </button>
+        </Link>
 
         <div className="flex gap-2">
           {!agent.alive ? (
@@ -129,27 +135,21 @@ export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
       </div>
 
       <div className="flex gap-1 border-b border-border">
-        <TabButton
-          active={tab === "overview"}
-          onClick={() => setTab("overview")}
-        >
+        <TabLink to={`/agents/${agent.name}/overview`} active={tab === "overview"}>
           Overview
-        </TabButton>
-        <TabButton active={tab === "logs"} onClick={() => setTab("logs")}>
+        </TabLink>
+        <TabLink to={`/agents/${agent.name}/logs`} active={tab === "logs"}>
           <ScrollText className="mr-1.5 inline h-4 w-4" />
           Logs
-        </TabButton>
-        <TabButton
-          active={tab === "activity"}
-          onClick={() => setTab("activity")}
-        >
+        </TabLink>
+        <TabLink to={`/agents/${agent.name}/activity`} active={tab === "activity"}>
           <Zap className="mr-1.5 inline h-4 w-4" />
           Activity
-        </TabButton>
-        <TabButton active={tab === "config"} onClick={() => setTab("config")}>
+        </TabLink>
+        <TabLink to={`/agents/${agent.name}/config`} active={tab === "config"}>
           <Settings className="mr-1.5 inline h-4 w-4" />
           Config
-        </TabButton>
+        </TabLink>
       </div>
 
       {tab === "overview" && <OverviewTab agent={agent} />}
@@ -465,18 +465,19 @@ function ActionButton({
   );
 }
 
-function TabButton({
+function TabLink({
+  to,
   active,
-  onClick,
   children,
 }: {
+  to: string;
   active: boolean;
-  onClick: () => void;
   children: React.ReactNode;
 }) {
   return (
-    <button
-      onClick={onClick}
+    <Link
+      to={to}
+      replace
       className={`flex items-center px-4 py-2.5 text-sm font-medium transition-colors ${
         active
           ? "border-b-2 border-accent text-accent"
@@ -484,6 +485,6 @@ function TabButton({
       }`}
     >
       {children}
-    </button>
+    </Link>
   );
 }

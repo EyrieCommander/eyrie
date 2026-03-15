@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import {
   Activity,
   Server,
@@ -10,7 +11,6 @@ import type { AgentInfo } from "../lib/types";
 
 interface AgentCardProps {
   agent: AgentInfo;
-  onSelect: (name: string) => void;
 }
 
 function formatUptime(seconds: number): string {
@@ -31,13 +31,13 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
-export default function AgentCard({ agent, onSelect }: AgentCardProps) {
+export default function AgentCard({ agent }: AgentCardProps) {
   const alive = agent.alive;
 
   return (
-    <button
-      onClick={() => onSelect(agent.name)}
-      className="w-full text-left rounded-lg border border-border bg-surface p-5 transition-colors hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-accent/50"
+    <Link
+      to={`/agents/${agent.name}`}
+      className="block w-full text-left rounded-lg border border-border bg-surface p-5 transition-colors hover:bg-surface-hover focus:outline-none focus:ring-2 focus:ring-accent/50"
     >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
@@ -91,6 +91,6 @@ export default function AgentCard({ agent, onSelect }: AgentCardProps) {
           ))}
         </div>
       )}
-    </button>
+    </Link>
   );
 }
