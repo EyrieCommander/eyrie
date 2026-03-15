@@ -1,9 +1,15 @@
 package adapter
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -12,20 +18,22 @@ import (
 // OpenClawAdapter communicates with an OpenClaw instance via its WebSocket RPC gateway.
 // OpenClaw exposes a single WebSocket endpoint at ws://host:port with RPC methods.
 type OpenClawAdapter struct {
-	id      string
-	name    string
-	host    string
-	port    int
-	token   string
+	id         string
+	name       string
+	host       string
+	port       int
+	token      string
+	configPath string
 }
 
-func NewOpenClawAdapter(id, name, host string, port int, token string) *OpenClawAdapter {
+func NewOpenClawAdapter(id, name, host string, port int, token, configPath string) *OpenClawAdapter {
 	return &OpenClawAdapter{
-		id:    id,
-		name:  name,
-		host:  host,
-		port:  port,
-		token: token,
+		id:         id,
+		name:       name,
+		host:       host,
+		port:       port,
+		token:      token,
+		configPath: configPath,
 	}
 }
 
@@ -122,12 +130,16 @@ func (o *OpenClawAdapter) Restart(ctx context.Context) error {
 
 // TailLogs subscribes to the OpenClaw logs.tail RPC stream.
 func (o *OpenClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error) {
+	var history []LogEntry
+	if o.configPath != "" {
+		history = readHistoricalLogs(openclawLogPath(o.configPath), defaultHistoryLines, parseOpenClawLogLine)
+	}
+
 	conn, err := o.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	// Send the logs.tail RPC request
 	req := rpcRequest{
 		Method: "logs.tail",
 		Params: map[string]any{"sinceMs": 60000},
@@ -139,7 +151,18 @@ func (o *OpenClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 	}
 
 	ch := make(chan LogEntry, 64)
-	go o.readLogStream(ctx, conn, ch)
+	go func() {
+		for _, entry := range history {
+			select {
+			case ch <- entry:
+			case <-ctx.Done():
+				conn.Close(websocket.StatusNormalClosure, "")
+				close(ch)
+				return
+			}
+		}
+		o.readLogStream(ctx, conn, ch)
+	}()
 	return ch, nil
 }
 
@@ -178,17 +201,95 @@ func (o *OpenClawAdapter) readLogStream(ctx context.Context, conn *websocket.Con
 	}
 }
 
-// TailActivity subscribes to the OpenClaw WebSocket event stream and emits
-// structured ActivityEvents for agent and chat events.
+// TailActivity emits recent conversation history as activity events, then
+// subscribes to the OpenClaw WebSocket event stream for live events.
 func (o *OpenClawAdapter) TailActivity(ctx context.Context) (<-chan ActivityEvent, error) {
+	history := o.recentConversationActivity(ctx)
+
 	conn, err := o.dial(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	ch := make(chan ActivityEvent, 64)
-	go o.readActivityStream(ctx, conn, ch)
+	go func() {
+		for _, ev := range history {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				conn.Close(websocket.StatusNormalClosure, "")
+				close(ch)
+				return
+			}
+		}
+		o.readActivityStream(ctx, conn, ch)
+	}()
 	return ch, nil
+}
+
+// recentConversationActivity loads the most recent sessions' chat messages and
+// converts them to ActivityEvents with separators between sessions.
+func (o *OpenClawAdapter) recentConversationActivity(ctx context.Context) []ActivityEvent {
+	sessions, err := o.Sessions(ctx)
+	if err != nil || len(sessions) == 0 {
+		return nil
+	}
+
+	maxSessions := 3
+	if len(sessions) < maxSessions {
+		maxSessions = len(sessions)
+	}
+
+	var events []ActivityEvent
+	for i := 0; i < maxSessions; i++ {
+		messages, err := o.ChatHistory(ctx, sessions[i].Key, 25)
+		if err != nil || len(messages) == 0 {
+			continue
+		}
+
+		if len(events) > 0 {
+			label := sessions[i].Title
+			if label == "" {
+				label = sessions[i].Key
+			}
+			ts := messages[0].Timestamp
+			if sessions[i].LastMsg != nil {
+				ts = *sessions[i].LastMsg
+			}
+			events = append(events, ActivityEvent{
+				Timestamp: ts,
+				Type:      "separator",
+				Summary:   label + " — " + ts.Format("Jan 2, 3:04 PM"),
+			})
+		}
+
+		for j, m := range messages {
+			if j > 0 {
+				gap := m.Timestamp.Sub(messages[j-1].Timestamp)
+				if gap >= 30*time.Minute {
+					events = append(events, ActivityEvent{
+						Timestamp: m.Timestamp,
+						Type:      "separator",
+						Summary:   m.Timestamp.Format("Jan 2, 3:04 PM"),
+					})
+				}
+			}
+
+			summary := m.Content
+			fullContent := ""
+			if len(summary) > 100 {
+				fullContent = fmt.Sprintf("[%s] %s", m.Role, summary)
+				summary = summary[:100] + "..."
+			}
+			events = append(events, ActivityEvent{
+				Timestamp:   m.Timestamp,
+				Type:        "chat",
+				Summary:     fmt.Sprintf("[%s] %s", m.Role, summary),
+				FullContent: fullContent,
+			})
+		}
+	}
+	return events
 }
 
 func (o *OpenClawAdapter) readActivityStream(ctx context.Context, conn *websocket.Conn, ch chan<- ActivityEvent) {
@@ -281,97 +382,239 @@ func (o *OpenClawAdapter) parseOpenClawEvent(event string, payload map[string]an
 	return ev
 }
 
-func (o *OpenClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
-	result, err := o.rpcCall(ctx, "sessions.list", map[string]any{
-		"includeDerivedTitles": true,
-		"includeLastMessage":  true,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	rawSessions, ok := result["sessions"].([]any)
-	if !ok {
+// Sessions reads session metadata directly from OpenClaw's on-disk session
+// store rather than using the WebSocket RPC (which requires a full device-auth
+// handshake that Eyrie does not implement).
+func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
+	agentsDir := o.agentsDir()
+	if agentsDir == "" {
 		return nil, nil
 	}
 
-	sessions := make([]Session, 0, len(rawSessions))
-	for _, raw := range rawSessions {
-		sm, ok := raw.(map[string]any)
-		if !ok {
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return nil, fmt.Errorf("reading agents dir: %w", err)
+	}
+
+	var sessions []Session
+	for _, entry := range entries {
+		if !entry.IsDir() {
 			continue
 		}
-		s := Session{}
-		if v, ok := sm["key"].(string); ok {
-			s.Key = v
-		} else if v, ok := sm["sessionKey"].(string); ok {
-			s.Key = v
+		sessFile := filepath.Join(agentsDir, entry.Name(), "sessions", "sessions.json")
+		data, err := os.ReadFile(sessFile)
+		if err != nil {
+			continue
 		}
-		if v, ok := sm["title"].(string); ok {
-			s.Title = v
-		} else if v, ok := sm["derivedTitle"].(string); ok {
-			s.Title = v
+
+		var store map[string]json.RawMessage
+		if json.Unmarshal(data, &store) != nil {
+			continue
 		}
-		if v, ok := sm["channel"].(string); ok {
-			s.Channel = v
-		}
-		if v, ok := sm["lastMessageAt"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
+
+		for key, raw := range store {
+			var meta struct {
+				SessionID   string `json:"sessionId"`
+				UpdatedAt   int64  `json:"updatedAt"`
+				LastChannel string `json:"lastChannel"`
+				ChatType    string `json:"chatType"`
+			}
+			if json.Unmarshal(raw, &meta) != nil {
+				continue
+			}
+
+			s := Session{
+				Key:     key,
+				Title:   key,
+				Channel: meta.LastChannel,
+			}
+			if meta.UpdatedAt > 0 {
+				t := time.UnixMilli(meta.UpdatedAt)
 				s.LastMsg = &t
 			}
-		}
-		if s.Key != "" {
 			sessions = append(sessions, s)
 		}
 	}
 
+	sort.Slice(sessions, func(i, j int) bool {
+		if sessions[i].LastMsg == nil {
+			return false
+		}
+		if sessions[j].LastMsg == nil {
+			return true
+		}
+		return sessions[i].LastMsg.After(*sessions[j].LastMsg)
+	})
+
 	return sessions, nil
 }
 
-func (o *OpenClawAdapter) ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
-	result, err := o.rpcCall(ctx, "chat.history", map[string]any{
-		"sessionKey": sessionKey,
-		"limit":      limit,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	rawMessages, ok := result["messages"].([]any)
-	if !ok {
+// ChatHistory reads the JSONL transcript file for a given session key directly
+// from disk. It extracts user and assistant messages, handling OpenClaw's
+// content format (array of {type, text} objects).
+func (o *OpenClawAdapter) ChatHistory(_ context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
+	agentsDir := o.agentsDir()
+	if agentsDir == "" {
 		return nil, nil
 	}
 
-	messages := make([]ChatMessage, 0, len(rawMessages))
-	for _, raw := range rawMessages {
-		mm, ok := raw.(map[string]any)
-		if !ok {
-			continue
-		}
-		m := ChatMessage{}
-		if v, ok := mm["role"].(string); ok {
-			m.Role = v
-		}
-		if v, ok := mm["content"].(string); ok {
-			m.Content = v
-		}
-		if v, ok := mm["channel"].(string); ok {
-			m.Channel = v
-		}
-		if v, ok := mm["timestamp"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				m.Timestamp = t
-			}
-		}
-		if v, ok := mm["createdAt"].(string); ok {
-			if t, err := time.Parse(time.RFC3339, v); err == nil {
-				m.Timestamp = t
-			}
-		}
-		messages = append(messages, m)
+	sessionID, sessionFile := o.findSessionFile(agentsDir, sessionKey)
+	if sessionFile == "" {
+		return nil, fmt.Errorf("session %q not found (id=%s)", sessionKey, sessionID)
 	}
 
+	f, err := os.Open(sessionFile)
+	if err != nil {
+		return nil, fmt.Errorf("opening transcript: %w", err)
+	}
+	defer f.Close()
+
+	var messages []ChatMessage
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 256*1024), 2*1024*1024)
+
+	for scanner.Scan() {
+		var entry struct {
+			Type      string `json:"type"`
+			Timestamp string `json:"timestamp"`
+			Message   struct {
+				Role    string `json:"role"`
+				Content any    `json:"content"`
+			} `json:"message"`
+		}
+		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
+			continue
+		}
+		if entry.Type != "message" {
+			continue
+		}
+		role := entry.Message.Role
+		if role != "user" && role != "assistant" {
+			continue
+		}
+
+		content := cleanOpenClawContent(role, extractTextContent(entry.Message.Content))
+		if content == "" {
+			continue
+		}
+
+		var ts time.Time
+		if t, err := time.Parse(time.RFC3339Nano, entry.Timestamp); err == nil {
+			ts = t
+		}
+
+		messages = append(messages, ChatMessage{
+			Timestamp: ts,
+			Role:      role,
+			Content:   content,
+		})
+	}
+
+	if limit > 0 && len(messages) > limit {
+		messages = messages[len(messages)-limit:]
+	}
 	return messages, nil
+}
+
+// agentsDir derives the OpenClaw agents directory from the config path.
+// e.g. ~/.openclaw/openclaw.json -> ~/.openclaw/agents/
+func (o *OpenClawAdapter) agentsDir() string {
+	if o.configPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(o.configPath), "agents")
+}
+
+// findSessionFile locates the JSONL transcript for a session key by reading
+// sessions.json from each agent directory.
+func (o *OpenClawAdapter) findSessionFile(agentsDir, sessionKey string) (string, string) {
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return "", ""
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessFile := filepath.Join(agentsDir, entry.Name(), "sessions", "sessions.json")
+		data, err := os.ReadFile(sessFile)
+		if err != nil {
+			continue
+		}
+
+		var store map[string]struct {
+			SessionID   string `json:"sessionId"`
+			SessionFile string `json:"sessionFile"`
+		}
+		if json.Unmarshal(data, &store) != nil {
+			continue
+		}
+
+		if meta, ok := store[sessionKey]; ok {
+			if meta.SessionFile != "" {
+				return meta.SessionID, meta.SessionFile
+			}
+			jsonlPath := filepath.Join(agentsDir, entry.Name(), "sessions", meta.SessionID+".jsonl")
+			return meta.SessionID, jsonlPath
+		}
+	}
+	return "", ""
+}
+
+// extractTextContent handles OpenClaw's message content, which can be either a
+// plain string or an array of {type:"text", text:"..."} content blocks.
+func extractTextContent(content any) string {
+	switch v := content.(type) {
+	case string:
+		return v
+	case []any:
+		var parts []string
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				if m["type"] == "text" {
+					if text, ok := m["text"].(string); ok {
+						parts = append(parts, text)
+					}
+				}
+			}
+		}
+		return joinNonEmpty(parts)
+	}
+	return ""
+}
+
+// openclawSenderMetaRe matches the "Sender (untrusted metadata): ```json...```"
+// preamble that OpenClaw injects into user messages for channel context.
+var openclawSenderMetaRe = regexp.MustCompile(`(?s)^Sender \(untrusted metadata\):\s*` + "```" + `json\s*\{[^}]*\}\s*` + "```" + `\s*`)
+
+// openclawTimestampRe matches the "[Fri 2026-03-13 22:02 GMT+8]" prefix.
+var openclawTimestampRe = regexp.MustCompile(`^\[[A-Z][a-z]{2} \d{4}-\d{2}-\d{2} \d{2}:\d{2}[^\]]*\]\s*`)
+
+// cleanOpenClawContent strips OpenClaw-injected metadata from message content.
+func cleanOpenClawContent(role, content string) string {
+	if role == "user" {
+		content = openclawSenderMetaRe.ReplaceAllString(content, "")
+		content = openclawTimestampRe.ReplaceAllString(content, "")
+	}
+	if role == "assistant" {
+		content = strings.TrimPrefix(content, "[[reply_to_current]]")
+		content = strings.TrimPrefix(content, "[[reply_in_thread]]")
+	}
+	return strings.TrimSpace(content)
+}
+
+func joinNonEmpty(parts []string) string {
+	var result []string
+	for _, p := range parts {
+		if p != "" {
+			result = append(result, p)
+		}
+	}
+	if len(result) == 0 {
+		return ""
+	}
+	return result[0]
 }
 
 func (o *OpenClawAdapter) Personality(ctx context.Context) (*Personality, error) {

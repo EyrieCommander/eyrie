@@ -124,16 +124,15 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 	switch d.Framework {
 	case "zeroclaw":
 		return adapter.NewZeroClawAdapter(
-			d.Name, d.Name, d.URL(), d.Token,
+			d.Name, d.Name, d.URL(), d.Token, d.ConfigPath,
 		)
 	case "openclaw":
 		return adapter.NewOpenClawAdapter(
-			d.Name, d.Name, d.Host, d.Port, d.Token,
+			d.Name, d.Name, d.Host, d.Port, d.Token, d.ConfigPath,
 		)
 	default:
-		// Default to HTTP-based adapter
 		return adapter.NewZeroClawAdapter(
-			d.Name, d.Name, d.URL(), d.Token,
+			d.Name, d.Name, d.URL(), d.Token, d.ConfigPath,
 		)
 	}
 }

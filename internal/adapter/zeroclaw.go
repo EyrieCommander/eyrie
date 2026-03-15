@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"sort"
 	"strings"
 	"time"
 )
@@ -15,19 +16,21 @@ import (
 // ZeroClawAdapter communicates with a ZeroClaw instance via its HTTP REST gateway.
 // ZeroClaw exposes: GET /health, GET /api/status, GET /api/config, GET /api/events (SSE).
 type ZeroClawAdapter struct {
-	id      string
-	name    string
-	baseURL string
-	token   string
-	client  *http.Client
+	id         string
+	name       string
+	baseURL    string
+	token      string
+	configPath string
+	client     *http.Client
 }
 
-func NewZeroClawAdapter(id, name, baseURL, token string) *ZeroClawAdapter {
+func NewZeroClawAdapter(id, name, baseURL, token, configPath string) *ZeroClawAdapter {
 	return &ZeroClawAdapter{
-		id:      id,
-		name:    name,
-		baseURL: strings.TrimRight(baseURL, "/"),
-		token:   token,
+		id:         id,
+		name:       name,
+		baseURL:    strings.TrimRight(baseURL, "/"),
+		token:      token,
+		configPath: configPath,
 		client: &http.Client{
 			Timeout: 10 * time.Second,
 		},
@@ -128,8 +131,16 @@ func (z *ZeroClawAdapter) Restart(ctx context.Context) error {
 	return runCLI(ctx, "zeroclaw", "service", "restart")
 }
 
-// TailLogs connects to the ZeroClaw SSE event stream at GET /api/events.
+// TailLogs emits historical log entries from the daemon log file, then
+// connects to the ZeroClaw SSE event stream for live entries.
 func (z *ZeroClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error) {
+	// Pre-read historical entries before creating the channel
+	var history []LogEntry
+	if z.configPath != "" {
+		history = readHistoricalLogs(zeroclawLogPath(z.configPath), defaultHistoryLines, parseZeroClawLogLine)
+	}
+
+	// Connect to live stream before returning so callers get an immediate error on auth failure
 	req, err := http.NewRequestWithContext(ctx, "GET", z.baseURL+"/api/events", nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating SSE request: %w", err)
@@ -139,7 +150,6 @@ func (z *ZeroClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
-	// Use a client without timeout for streaming
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -152,7 +162,19 @@ func (z *ZeroClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 	}
 
 	ch := make(chan LogEntry, 64)
-	go z.readSSE(ctx, resp.Body, ch)
+	go func() {
+		// Emit history first, then hand off to the live SSE reader
+		for _, entry := range history {
+			select {
+			case ch <- entry:
+			case <-ctx.Done():
+				resp.Body.Close()
+				close(ch)
+				return
+			}
+		}
+		z.readSSE(ctx, resp.Body, ch)
+	}()
 	return ch, nil
 }
 
@@ -200,9 +222,11 @@ func (z *ZeroClawAdapter) readSSE(ctx context.Context, body io.ReadCloser, ch ch
 	}
 }
 
-// TailActivity connects to the ZeroClaw SSE event stream and returns typed
-// activity events (agent_start, tool_call, llm_request, etc.) instead of raw logs.
+// TailActivity emits historical activity from the daemon log, then connects to
+// the ZeroClaw SSE event stream for live events.
 func (z *ZeroClawAdapter) TailActivity(ctx context.Context) (<-chan ActivityEvent, error) {
+	history := z.recentConversationActivity(ctx)
+
 	req, err := http.NewRequestWithContext(ctx, "GET", z.baseURL+"/api/events", nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating SSE request: %w", err)
@@ -224,8 +248,86 @@ func (z *ZeroClawAdapter) TailActivity(ctx context.Context) (<-chan ActivityEven
 	}
 
 	ch := make(chan ActivityEvent, 64)
-	go z.readActivitySSE(ctx, resp.Body, ch)
+	go func() {
+		for _, ev := range history {
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				resp.Body.Close()
+				close(ch)
+				return
+			}
+		}
+		z.readActivitySSE(ctx, resp.Body, ch)
+	}()
 	return ch, nil
+}
+
+// recentConversationActivity loads conversation memory entries and converts
+// them to ActivityEvents so the Activity tab has meaningful content on load.
+// Inserts separator events at conversation boundaries detected by session_id
+// changes or time gaps >30 minutes.
+func (z *ZeroClawAdapter) recentConversationActivity(ctx context.Context) []ActivityEvent {
+	entries, err := z.fetchMemoryEntries(ctx)
+	if err != nil || len(entries) == 0 {
+		return nil
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Timestamp.Before(entries[j].Timestamp)
+	})
+
+	limit := 50
+	if len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+
+	events := make([]ActivityEvent, 0, len(entries)*2)
+	for i, e := range entries {
+		if i > 0 {
+			if sep := detectConversationBoundary(entries[i-1], entries[i]); sep != nil {
+				events = append(events, *sep)
+			}
+		}
+
+		role := "user"
+		if strings.HasPrefix(e.Key, "assistant_resp") {
+			role = "assistant"
+		}
+		summary := e.Content
+		fullContent := ""
+		if len(summary) > 100 {
+			fullContent = fmt.Sprintf("[%s] %s", role, summary)
+			summary = summary[:100] + "..."
+		}
+		events = append(events, ActivityEvent{
+			Timestamp:   e.Timestamp,
+			Type:        "chat",
+			Summary:     fmt.Sprintf("[%s] %s", role, summary),
+			FullContent: fullContent,
+		})
+	}
+	return events
+}
+
+const conversationGap = 30 * time.Minute
+
+func detectConversationBoundary(prev, cur zcMemoryEntry) *ActivityEvent {
+	if prev.SessionID != "" && cur.SessionID != "" && prev.SessionID != cur.SessionID {
+		return &ActivityEvent{
+			Timestamp: cur.Timestamp,
+			Type:      "separator",
+			Summary:   cur.Timestamp.Format("Jan 2, 3:04 PM"),
+		}
+	}
+	if cur.Timestamp.Sub(prev.Timestamp) >= conversationGap {
+		return &ActivityEvent{
+			Timestamp: cur.Timestamp,
+			Type:      "separator",
+			Summary:   cur.Timestamp.Format("Jan 2, 3:04 PM"),
+		}
+	}
+	return nil
 }
 
 func (z *ZeroClawAdapter) readActivitySSE(ctx context.Context, body io.ReadCloser, ch chan<- ActivityEvent) {
@@ -335,12 +437,97 @@ func (z *ZeroClawAdapter) parseActivityEvent(eventType, data string) *ActivityEv
 	return ev
 }
 
-func (z *ZeroClawAdapter) Sessions(_ context.Context) ([]Session, error) {
-	return nil, nil
+// Sessions returns a single synthetic session representing the ZeroClaw
+// conversation memory (ZeroClaw stores flat memories, not discrete sessions).
+func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
+	entries, err := z.fetchMemoryEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(entries) == 0 {
+		return nil, nil
+	}
+
+	var newest time.Time
+	for _, e := range entries {
+		if e.Timestamp.After(newest) {
+			newest = e.Timestamp
+		}
+	}
+
+	return []Session{{
+		Key:     "memory",
+		Title:   fmt.Sprintf("Conversations (%d messages)", len(entries)),
+		LastMsg: &newest,
+	}}, nil
 }
 
-func (z *ZeroClawAdapter) ChatHistory(_ context.Context, _ string, _ int) ([]ChatMessage, error) {
-	return nil, nil
+// ChatHistory fetches conversation memories from the ZeroClaw REST API.
+func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, _ string, limit int) ([]ChatMessage, error) {
+	entries, err := z.fetchMemoryEntries(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Timestamp.Before(entries[j].Timestamp)
+	})
+
+	if limit > 0 && len(entries) > limit {
+		entries = entries[len(entries)-limit:]
+	}
+
+	messages := make([]ChatMessage, 0, len(entries))
+	for _, e := range entries {
+		role := "user"
+		if strings.HasPrefix(e.Key, "assistant_resp") {
+			role = "assistant"
+		}
+		messages = append(messages, ChatMessage{
+			Timestamp: e.Timestamp,
+			Role:      role,
+			Content:   e.Content,
+		})
+	}
+	return messages, nil
+}
+
+type zcMemoryEntry struct {
+	Content   string    `json:"content"`
+	Timestamp time.Time `json:"-"`
+	RawTS     string    `json:"timestamp"`
+	Category  string    `json:"category"`
+	Key       string    `json:"key"`
+	SessionID string    `json:"session_id"`
+}
+
+func (z *ZeroClawAdapter) fetchMemoryEntries(ctx context.Context) ([]zcMemoryEntry, error) {
+	body, err := z.getRaw(ctx, "/api/memory")
+	if err != nil {
+		return nil, fmt.Errorf("fetching memory: %w", err)
+	}
+
+	var resp struct {
+		Entries []zcMemoryEntry `json:"entries"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, fmt.Errorf("parsing memory response: %w", err)
+	}
+
+	var filtered []zcMemoryEntry
+	for i := range resp.Entries {
+		e := &resp.Entries[i]
+		if e.Category != "conversation" {
+			continue
+		}
+		if t, err := time.Parse(time.RFC3339Nano, e.RawTS); err == nil {
+			e.Timestamp = t
+		} else if t, err := time.Parse("2006-01-02T15:04:05.999999999-07:00", e.RawTS); err == nil {
+			e.Timestamp = t
+		}
+		filtered = append(filtered, *e)
+	}
+	return filtered, nil
 }
 
 func (z *ZeroClawAdapter) Personality(ctx context.Context) (*Personality, error) {

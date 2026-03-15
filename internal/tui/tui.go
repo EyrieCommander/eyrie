@@ -18,7 +18,6 @@ const (
 	tabStatus   = 0
 	tabLogs     = 1
 	tabActivity = 2
-	tabHistory  = 3
 
 	maxBufferSize = 500
 )
@@ -56,8 +55,6 @@ type activityStreamMsg struct {
 	ctx   context.Context
 }
 
-type sessionsMsg []adapter.Session
-type chatHistoryMsg []adapter.ChatMessage
 type streamDoneMsg struct{}
 type streamErrorMsg struct{ err error }
 
@@ -78,15 +75,11 @@ type Model struct {
 	logEntries []adapter.LogEntry
 	logScroll  int
 
-	// Activity tab
-	activityEvents []adapter.ActivityEvent
-	activityScroll int
-
-	// History tab
-	sessions      []adapter.Session
-	chatMessages  []adapter.ChatMessage
-	sessionCursor int
-	viewingChat   bool
+	// Activity tab (merged with conversation history)
+	activityEvents   []adapter.ActivityEvent
+	activityScroll   int
+	activityCursor   int
+	expandedActivity int // -1 = none expanded
 
 	// Stream error (e.g. auth failure)
 	streamErr error
@@ -108,8 +101,9 @@ func Run(cfg config.Config) error {
 
 func initialModel(cfg config.Config) Model {
 	return Model{
-		cfg:    cfg,
-		agents: fetchAgents(cfg),
+		cfg:              cfg,
+		agents:           fetchAgents(cfg),
+		expandedActivity: -1,
 	}
 }
 
@@ -175,17 +169,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.activityScroll = max(0, len(m.activityEvents)-m.detailContentHeight())
 		return m, waitForActivityEvent(msg.ctx, msg.ch)
 
-	case sessionsMsg:
-		m.sessions = []adapter.Session(msg)
-		m.sessionCursor = 0
-		m.viewingChat = false
-		return m, nil
-
-	case chatHistoryMsg:
-		m.chatMessages = []adapter.ChatMessage(msg)
-		m.viewingChat = true
-		return m, nil
-
 	case streamDoneMsg:
 		return m, nil
 
@@ -211,18 +194,16 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.switchTab(tabLogs)
 	case "3":
 		return m, m.switchTab(tabActivity)
-	case "4":
-		return m, m.switchTab(tabHistory)
 
 	case "left", "h":
 		prev := m.activeTab - 1
 		if prev < tabStatus {
-			prev = tabHistory
+			prev = tabActivity
 		}
 		return m, m.switchTab(prev)
 	case "right", "l":
 		next := m.activeTab + 1
-		if next > tabHistory {
+		if next > tabActivity {
 			next = tabStatus
 		}
 		return m, m.switchTab(next)
@@ -233,14 +214,20 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.handleDown()
 
 	case "enter":
-		if m.activeTab == tabHistory && !m.viewingChat && len(m.sessions) > 0 {
-			return m, m.fetchChatHistory()
+		if m.activeTab == tabActivity && len(m.activityEvents) > 0 {
+			absIdx := m.activityScroll + m.activityCursor
+			if absIdx < len(m.activityEvents) && m.activityEvents[absIdx].Type == "chat" {
+				if m.expandedActivity == absIdx {
+					m.expandedActivity = -1
+				} else {
+					m.expandedActivity = absIdx
+				}
+			}
 		}
 
 	case "esc":
-		if m.activeTab == tabHistory && m.viewingChat {
-			m.viewingChat = false
-			m.chatMessages = nil
+		if m.activeTab == tabActivity && m.expandedActivity >= 0 {
+			m.expandedActivity = -1
 		}
 
 	case "r":
@@ -268,17 +255,13 @@ func (m *Model) handleUp() tea.Cmd {
 		}
 		return nil
 	case tabActivity:
-		if m.activityScroll > 0 {
+		if m.activityCursor > 0 {
+			m.activityCursor--
+		} else if m.activityScroll > 0 {
 			m.activityScroll--
 		}
 		return nil
-	case tabHistory:
-		if !m.viewingChat && m.sessionCursor > 0 {
-			m.sessionCursor--
-		}
-		return nil
 	}
-	// Status tab: navigate agent list
 	if m.cursor > 0 {
 		m.cursor--
 		return m.onAgentChanged()
@@ -296,13 +279,13 @@ func (m *Model) handleDown() tea.Cmd {
 		return nil
 	case tabActivity:
 		h := m.detailContentHeight()
-		if m.activityScroll < len(m.activityEvents)-h {
-			m.activityScroll++
-		}
-		return nil
-	case tabHistory:
-		if !m.viewingChat && m.sessionCursor < len(m.sessions)-1 {
-			m.sessionCursor++
+		absIdx := m.activityScroll + m.activityCursor
+		if absIdx < len(m.activityEvents)-1 {
+			if m.activityCursor < h-1 {
+				m.activityCursor++
+			} else {
+				m.activityScroll++
+			}
 		}
 		return nil
 	}
@@ -333,13 +316,9 @@ func (m *Model) switchTab(tab int) tea.Cmd {
 	case tabActivity:
 		m.activityEvents = nil
 		m.activityScroll = 0
+		m.activityCursor = 0
+		m.expandedActivity = -1
 		return m.startActivityStream()
-	case tabHistory:
-		m.sessions = nil
-		m.chatMessages = nil
-		m.viewingChat = false
-		m.sessionCursor = 0
-		return m.fetchSessions()
 	}
 
 	return nil
@@ -357,12 +336,9 @@ func (m *Model) onAgentChanged() tea.Cmd {
 	case tabActivity:
 		m.activityEvents = nil
 		m.activityScroll = 0
+		m.activityCursor = 0
+		m.expandedActivity = -1
 		return m.startActivityStream()
-	case tabHistory:
-		m.sessions = nil
-		m.chatMessages = nil
-		m.viewingChat = false
-		return m.fetchSessions()
 	}
 
 	return nil
@@ -462,41 +438,6 @@ func waitForActivityEvent(ctx context.Context, ch <-chan adapter.ActivityEvent) 
 			}
 			return activityStreamMsg{event: event, ch: ch, ctx: ctx}
 		}
-	}
-}
-
-func (m *Model) fetchSessions() tea.Cmd {
-	agent := m.currentAgent()
-	if agent == nil {
-		return nil
-	}
-
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		sessions, err := agent.Sessions(ctx)
-		if err != nil || sessions == nil {
-			return sessionsMsg(nil)
-		}
-		return sessionsMsg(sessions)
-	}
-}
-
-func (m *Model) fetchChatHistory() tea.Cmd {
-	agent := m.currentAgent()
-	if agent == nil || m.sessionCursor >= len(m.sessions) {
-		return nil
-	}
-
-	sessionKey := m.sessions[m.sessionCursor].Key
-	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		messages, err := agent.ChatHistory(ctx, sessionKey, 50)
-		if err != nil {
-			return chatHistoryMsg(nil)
-		}
-		return chatHistoryMsg(messages)
 	}
 }
 
@@ -642,20 +583,8 @@ func (m Model) helpBar() string {
 		}
 	case tabActivity:
 		lines = []string{
-			helpKey("\u2191/\u2193") + " scroll  " + tabHelp,
+			helpKey("\u2191/\u2193") + " select  " + helpKey("enter") + " expand  " + helpKey("esc") + " collapse  " + tabHelp,
 			helpKey("r") + " refresh  " + helpKey("q") + " quit",
-		}
-	case tabHistory:
-		if m.viewingChat {
-			lines = []string{
-				helpKey("Esc") + " back to sessions  " + tabHelp,
-				helpKey("q") + " quit",
-			}
-		} else {
-			lines = []string{
-				helpKey("\u2191/\u2193") + " select session  " + helpKey("Enter") + " view messages",
-				tabHelp + "  " + helpKey("q") + " quit",
-			}
 		}
 	}
 
@@ -677,7 +606,7 @@ func (m Model) renderDetailPane(width int) string {
 
 	var b strings.Builder
 
-	tabs := []string{"1:Status", "2:Logs", "3:Activity", "4:History"}
+	tabs := []string{"1:Status", "2:Logs", "3:Activity"}
 	var tabParts []string
 	for i, label := range tabs {
 		if i == m.activeTab {
@@ -696,8 +625,6 @@ func (m Model) renderDetailPane(width int) string {
 		b.WriteString(m.renderLogsContent())
 	case tabActivity:
 		b.WriteString(m.renderActivityContent())
-	case tabHistory:
-		b.WriteString(m.renderHistoryContent())
 	}
 
 	return boxStyle.Width(width).Render(b.String())
@@ -826,17 +753,125 @@ func (m Model) renderActivityContent() string {
 		end = len(m.activityEvents)
 	}
 
-	for _, ev := range m.activityEvents[start:end] {
+	for i, ev := range m.activityEvents[start:end] {
+		absIdx := start + i
+		isCursor := (i == m.activityCursor)
+		prefix := "  "
+		if isCursor {
+			prefix = "\u25b8 "
+		}
+
+		if ev.Type == "separator" {
+			sep := renderSeparatorLine(ev.Summary, m.width/2)
+			b.WriteString(sep + "\n")
+			continue
+		}
+
 		ts := ev.Timestamp.Format("15:04:05")
-		typeStr := activityTypeStyle(ev.Type).Render(fmt.Sprintf("[%-14s]", ev.Type))
-		b.WriteString(fmt.Sprintf("%s %s %s\n", dimStyle.Render(ts), typeStr, ev.Summary))
+		var line string
+		if ev.Type == "chat" {
+			line = fmt.Sprintf("%s%s %s", prefix, dimStyle.Render(ts), renderChatSummary(ev.Summary))
+		} else {
+			typeStr := activityTypeStyle(ev.Type).Render(fmt.Sprintf("[%-14s]", ev.Type))
+			line = fmt.Sprintf("%s%s %s %s", prefix, dimStyle.Render(ts), typeStr, ev.Summary)
+		}
+
+		if isCursor {
+			line = selectedStyle.Render(line)
+		}
+		b.WriteString(line + "\n")
+
+		if m.expandedActivity == absIdx && ev.Type == "chat" {
+			content := ev.FullContent
+			if content == "" {
+				content = ev.Summary
+			}
+			content = strings.TrimPrefix(content, "[user] ")
+			content = strings.TrimPrefix(content, "[assistant] ")
+			b.WriteString(renderExpandedContent(content, m.width/2-4))
+		}
 	}
 
 	if len(m.activityEvents) > h {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("\n-- %d/%d (j/k to scroll) --", end, len(m.activityEvents))))
+		b.WriteString(dimStyle.Render(fmt.Sprintf("\n-- %d/%d --", m.activityScroll+m.activityCursor+1, len(m.activityEvents))))
+	}
+
+	if m.cursor < len(m.agents) && m.activityHasOnlyUserChat() {
+		fw := m.agents[m.cursor].Discovered.Framework
+		if fw == "zeroclaw" {
+			b.WriteString("\n\n")
+			b.WriteString(dimStyle.Render(
+				"Only user messages shown. To see bot replies, ensure memory.auto_save = true\n" +
+					"in ZeroClaw config and restart. Older conversations before this feature won't\n" +
+					"have replies stored."))
+		}
 	}
 
 	return b.String()
+}
+
+func renderSeparatorLine(label string, width int) string {
+	if width < 10 {
+		width = 40
+	}
+	padLen := (width - len(label) - 2) / 2
+	if padLen < 3 {
+		padLen = 3
+	}
+	line := strings.Repeat("\u2500", padLen)
+	return dimStyle.Render(fmt.Sprintf("%s %s %s", line, label, line))
+}
+
+func renderExpandedContent(content string, width int) string {
+	if width < 20 {
+		width = 60
+	}
+	var b strings.Builder
+	b.WriteString(dimStyle.Render("    \u2502 "))
+	b.WriteString("\n")
+	for _, line := range wrapText(content, width) {
+		b.WriteString(dimStyle.Render("    \u2502 "))
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	b.WriteString(dimStyle.Render("    \u2502 "))
+	b.WriteString("\n")
+	return b.String()
+}
+
+func wrapText(s string, width int) []string {
+	if width <= 0 {
+		return []string{s}
+	}
+	var lines []string
+	for len(s) > width {
+		brk := strings.LastIndex(s[:width], " ")
+		if brk <= 0 {
+			brk = width
+		}
+		lines = append(lines, s[:brk])
+		s = strings.TrimLeft(s[brk:], " ")
+	}
+	if len(s) > 0 {
+		lines = append(lines, s)
+	}
+	return lines
+}
+
+func (m Model) activityHasOnlyUserChat() bool {
+	hasUser := false
+	for _, ev := range m.activityEvents {
+		if ev.Type != "chat" {
+			continue
+		}
+		if strings.HasPrefix(ev.Summary, "[assistant]") {
+			return false
+		}
+		if strings.HasPrefix(ev.Summary, "[user]") {
+			hasUser = true
+		}
+	}
+	return hasUser
 }
 
 func (m Model) renderStreamError() string {
@@ -856,105 +891,6 @@ func (m Model) renderStreamError() string {
 		b.WriteString(dimStyle.Render("The pairing code is shown in the agent's console on startup."))
 	} else {
 		b.WriteString(dimStyle.Render(errMsg))
-	}
-
-	return b.String()
-}
-
-func (m Model) renderHistoryContent() string {
-	if m.cursor < len(m.agents) && !m.agents[m.cursor].Alive {
-		return dimStyle.Render("Agent is not running.")
-	}
-
-	if m.cursor < len(m.agents) && m.agents[m.cursor].Discovered.Framework == "zeroclaw" {
-		return dimStyle.Render("Conversation history is not supported by ZeroClaw.")
-	}
-
-	if m.viewingChat {
-		return m.renderChatThread()
-	}
-
-	if m.sessions == nil {
-		return dimStyle.Render("Loading sessions...")
-	}
-
-	if len(m.sessions) == 0 {
-		return dimStyle.Render("No sessions found.")
-	}
-
-	var b strings.Builder
-	b.WriteString(labelStyle.Render("Sessions"))
-	b.WriteString(dimStyle.Render("  (Enter to view, Esc to go back)"))
-	b.WriteString("\n\n")
-
-	for i, s := range m.sessions {
-		cur := " "
-		if m.sessionCursor == i {
-			cur = "\u25b6"
-		}
-
-		title := s.Title
-		if title == "" {
-			title = s.Key
-		}
-		if len(title) > 40 {
-			title = title[:40] + "..."
-		}
-
-		age := ""
-		if s.LastMsg != nil {
-			age = " (" + timeAgo(*s.LastMsg) + ")"
-		}
-
-		channel := ""
-		if s.Channel != "" {
-			channel = " [" + s.Channel + "]"
-		}
-
-		line := fmt.Sprintf("%s %s%s%s", cur, title, channel, age)
-		if m.sessionCursor == i {
-			b.WriteString(selectedStyle.Render(line))
-		} else {
-			b.WriteString(line)
-		}
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
-func (m Model) renderChatThread() string {
-	if len(m.chatMessages) == 0 {
-		return dimStyle.Render("No messages in this session.")
-	}
-
-	var b strings.Builder
-	b.WriteString(labelStyle.Render("Chat History"))
-	b.WriteString(dimStyle.Render("  (Esc to go back)"))
-	b.WriteString("\n\n")
-
-	for _, msg := range m.chatMessages {
-		ts := ""
-		if !msg.Timestamp.IsZero() {
-			ts = msg.Timestamp.Format("15:04") + " "
-		}
-
-		var roleStyle lipgloss.Style
-		switch msg.Role {
-		case "user":
-			roleStyle = userRoleStyle
-		case "assistant":
-			roleStyle = assistantRoleStyle
-		default:
-			roleStyle = dimStyle
-		}
-
-		content := msg.Content
-		if len(content) > 200 {
-			content = content[:200] + "..."
-		}
-
-		b.WriteString(fmt.Sprintf("%s%s %s\n", dimStyle.Render(ts), roleStyle.Render(msg.Role+":"), content))
 	}
 
 	return b.String()
@@ -1096,6 +1032,18 @@ func activityTypeStyle(typ string) lipgloss.Style {
 	default:
 		return lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
 	}
+}
+
+// renderChatSummary applies role-based coloring to chat activity summaries
+// with the format "[role] message content".
+func renderChatSummary(summary string) string {
+	if strings.HasPrefix(summary, "[user] ") {
+		return userRoleStyle.Render("user:") + " " + strings.TrimPrefix(summary, "[user] ")
+	}
+	if strings.HasPrefix(summary, "[assistant] ") {
+		return assistantRoleStyle.Render("assistant:") + " " + strings.TrimPrefix(summary, "[assistant] ")
+	}
+	return summary
 }
 
 func formatMemory(bytes uint64) string {

@@ -31,7 +31,7 @@ func New(cfg config.Config) *Server {
 	s.server = &http.Server{
 		Handler:      s.mux,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		WriteTimeout: 0, // SSE streams need unbounded writes
 		IdleTimeout:  60 * time.Second,
 	}
 	return s
@@ -42,6 +42,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/agents/{name}/config", s.handleAgentConfig)
 	s.mux.HandleFunc("POST /api/agents/{name}/{action}", s.handleAgentAction)
 	s.mux.HandleFunc("GET /api/agents/{name}/logs", s.handleAgentLogs)
+	s.mux.HandleFunc("GET /api/agents/{name}/activity", s.handleAgentActivity)
+	s.mux.HandleFunc("GET /api/agents/{name}/sessions", s.handleAgentSessions)
+	s.mux.HandleFunc("GET /api/agents/{name}/sessions/{session}/messages", s.handleAgentMessages)
 
 	// Serve embedded frontend
 	distFS, err := fs.Sub(staticFS, "static")

@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import {
   ArrowLeft,
   Play,
@@ -6,20 +6,31 @@ import {
   RotateCcw,
   ScrollText,
   Settings,
+  Zap,
 } from "lucide-react";
-import type { AgentInfo, LogEntry } from "../lib/types";
-import { agentAction, fetchAgentConfig, streamLogs } from "../lib/api";
+import type {
+  AgentInfo,
+  LogEntry,
+  ActivityEvent,
+} from "../lib/types";
+import {
+  agentAction,
+  fetchAgentConfig,
+  streamLogs,
+  streamActivity,
+} from "../lib/api";
 
 interface AgentDetailProps {
   agent: AgentInfo;
   onBack: () => void;
 }
 
-type Tab = "overview" | "logs" | "config";
+type Tab = "overview" | "logs" | "activity" | "config";
 
 export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
   const [tab, setTab] = useState<Tab>("overview");
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  const [activity, setActivity] = useState<ActivityEvent[]>([]);
   const [config, setConfig] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
 
@@ -39,8 +50,19 @@ export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
 
   useEffect(() => {
     if (tab === "logs" && agent.alive) {
+      setLogs([]);
       const close = streamLogs(agent.name, (entry) => {
         setLogs((prev) => [...prev.slice(-200), entry]);
+      });
+      return close;
+    }
+  }, [tab, agent.name, agent.alive]);
+
+  useEffect(() => {
+    if (tab === "activity" && agent.alive) {
+      setActivity([]);
+      const close = streamActivity(agent.name, (event) => {
+        setActivity((prev) => [...prev.slice(-200), event]);
       });
       return close;
     }
@@ -117,6 +139,13 @@ export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
           <ScrollText className="mr-1.5 inline h-4 w-4" />
           Logs
         </TabButton>
+        <TabButton
+          active={tab === "activity"}
+          onClick={() => setTab("activity")}
+        >
+          <Zap className="mr-1.5 inline h-4 w-4" />
+          Activity
+        </TabButton>
         <TabButton active={tab === "config"} onClick={() => setTab("config")}>
           <Settings className="mr-1.5 inline h-4 w-4" />
           Config
@@ -125,6 +154,9 @@ export default function AgentDetail({ agent, onBack }: AgentDetailProps) {
 
       {tab === "overview" && <OverviewTab agent={agent} />}
       {tab === "logs" && <LogsTab logs={logs} alive={agent.alive} />}
+      {tab === "activity" && (
+        <ActivityTab events={activity} alive={agent.alive} framework={agent.framework} />
+      )}
       {tab === "config" && <ConfigTab config={config} alive={agent.alive} />}
     </div>
   );
@@ -241,6 +273,156 @@ function ConfigTab({
     <pre className="max-h-[60vh] overflow-auto rounded-lg border border-border bg-surface p-4 font-mono text-sm text-text">
       {config ?? "Loading..."}
     </pre>
+  );
+}
+
+const activityTypeColors: Record<string, string> = {
+  agent_start: "text-green",
+  agent_end: "text-green",
+  tool_call: "text-accent",
+  tool_call_start: "text-accent",
+  llm_request: "text-yellow",
+  error: "text-red",
+  chat: "text-accent-hover",
+};
+
+function ActivityTab({
+  events,
+  alive,
+  framework,
+}: {
+  events: ActivityEvent[];
+  alive: boolean;
+  framework: string;
+}) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [events.length]);
+
+  if (!alive) {
+    return (
+      <p className="text-text-muted">
+        Agent is not running. Start it to see activity.
+      </p>
+    );
+  }
+
+  const hasOnlyUserChat =
+    events.length > 0 &&
+    events.some((e) => e.type === "chat" && e.summary.startsWith("[user]")) &&
+    !events.some((e) => e.type === "chat" && e.summary.startsWith("[assistant]"));
+
+  return (
+    <div className="space-y-3">
+      <div
+        ref={scrollRef}
+        className="max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-surface p-4 font-mono text-sm"
+      >
+        {events.length === 0 ? (
+          <p className="text-text-muted">
+            Waiting for activity events... Conversation history and live events
+            will appear here.
+          </p>
+        ) : (
+          events.map((event, i) =>
+            event.type === "separator" ? (
+              <SeparatorRow key={i} label={event.summary} />
+            ) : event.type === "chat" ? (
+              <ChatEventRow
+                key={i}
+                event={event}
+                expanded={expandedIndex === i}
+                onToggle={() => setExpandedIndex(expandedIndex === i ? null : i)}
+              />
+            ) : (
+              <div key={i} className="py-0.5">
+                <span className="text-text-muted">
+                  {new Date(event.timestamp).toLocaleTimeString()}
+                </span>{" "}
+                <span
+                  className={`font-medium ${activityTypeColors[event.type] ?? "text-text-muted"}`}
+                >
+                  [{event.type}]
+                </span>{" "}
+                <span className="text-text">{event.summary}</span>
+              </div>
+            ),
+          )
+        )}
+      </div>
+      {hasOnlyUserChat && framework === "zeroclaw" && (
+        <p className="text-xs text-text-muted">
+          Only user messages are shown. To see bot replies, ensure{" "}
+          <code className="rounded bg-surface-hover px-1">memory.auto_save = true</code>{" "}
+          in the ZeroClaw config and restart the agent. Conversations from before
+          this feature was enabled won&apos;t have replies stored.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SeparatorRow({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 py-2">
+      <div className="h-px flex-1 bg-border" />
+      <span className="text-xs text-text-muted">{label}</span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+function ChatEventRow({
+  event,
+  expanded,
+  onToggle,
+}: {
+  event: ActivityEvent;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const summary = event.summary;
+  const isUser = summary.startsWith("[user]");
+  const isAssistant = summary.startsWith("[assistant]");
+  const truncatedContent = summary.replace(/^\[(user|assistant)\]\s*/, "");
+  const hasFullContent = !!event.full_content;
+
+  const fullText = event.full_content
+    ? event.full_content.replace(/^\[(user|assistant)\]\s*/, "")
+    : truncatedContent;
+
+  return (
+    <div
+      className={`py-0.5 ${hasFullContent ? "cursor-pointer hover:bg-surface-hover/50 rounded px-1 -mx-1" : ""}`}
+      onClick={hasFullContent ? onToggle : undefined}
+    >
+      <div>
+        <span className="text-text-muted">
+          {new Date(event.timestamp).toLocaleTimeString()}
+        </span>{" "}
+        <span
+          className={`font-medium ${isUser ? "text-green" : isAssistant ? "text-accent" : "text-text-muted"}`}
+        >
+          {isUser ? "user:" : isAssistant ? "assistant:" : "chat:"}
+        </span>{" "}
+        <span className="text-text">
+          {expanded ? fullText : truncatedContent}
+        </span>
+        {hasFullContent && !expanded && (
+          <span className="ml-1 text-text-muted text-xs">▸</span>
+        )}
+      </div>
+      {expanded && (
+        <div className="mt-1 whitespace-pre-wrap border-l-2 border-border pl-3 text-text-muted text-xs">
+          {fullText}
+        </div>
+      )}
+    </div>
   );
 }
 

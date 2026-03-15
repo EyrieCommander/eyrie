@@ -36,3 +36,30 @@ export interface LogEntry {
   level: string;
   message: string;
 }
+
+export interface ActivityEvent {
+  timestamp: string;
+  type: string;
+  summary: string;
+  full_content?: string;
+  fields?: Record<string, unknown>;
+}
+
+export interface Session {
+  key: string;
+  title: string;
+  last_message?: string;
+  channel?: string;
+}
+
+export interface SessionsResponse {
+  supported: boolean;
+  sessions: Session[];
+}
+
+export interface ChatMessage {
+  timestamp: string;
+  role: "user" | "assistant";
+  content: string;
+  channel?: string;
+}

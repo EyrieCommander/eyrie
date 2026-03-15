@@ -84,10 +84,11 @@ type Personality struct {
 }
 
 type ActivityEvent struct {
-	Timestamp time.Time      `json:"timestamp"`
-	Type      string         `json:"type"` // "agent_start", "agent_end", "tool_call", "tool_call_start", "llm_request", "error", "chat"
-	Summary   string         `json:"summary"`
-	Fields    map[string]any `json:"fields,omitempty"`
+	Timestamp   time.Time      `json:"timestamp"`
+	Type        string         `json:"type"` // "agent_start", "agent_end", "tool_call", "tool_call_start", "llm_request", "error", "chat", "separator"
+	Summary     string         `json:"summary"`
+	FullContent string         `json:"full_content,omitempty"`
+	Fields      map[string]any `json:"fields,omitempty"`
 }
 
 type Session struct {
