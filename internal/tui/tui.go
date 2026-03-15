@@ -16,8 +16,8 @@ import (
 
 const (
 	tabStatus   = 0
-	tabLogs     = 1
-	tabActivity = 2
+	tabActivity = 1
+	tabLogs     = 2
 
 	maxBufferSize = 500
 )
@@ -191,19 +191,19 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "1":
 		return m, m.switchTab(tabStatus)
 	case "2":
-		return m, m.switchTab(tabLogs)
-	case "3":
 		return m, m.switchTab(tabActivity)
+	case "3":
+		return m, m.switchTab(tabLogs)
 
 	case "left", "h":
 		prev := m.activeTab - 1
 		if prev < tabStatus {
-			prev = tabActivity
+			prev = tabLogs
 		}
 		return m, m.switchTab(prev)
 	case "right", "l":
 		next := m.activeTab + 1
-		if next > tabActivity {
+		if next > tabLogs {
 			next = tabStatus
 		}
 		return m, m.switchTab(next)
@@ -606,7 +606,7 @@ func (m Model) renderDetailPane(width int) string {
 
 	var b strings.Builder
 
-	tabs := []string{"1:Status", "2:Logs", "3:Activity"}
+	tabs := []string{"1:Status", "2:Activity", "3:Logs"}
 	var tabParts []string
 	for i, label := range tabs {
 		if i == m.activeTab {

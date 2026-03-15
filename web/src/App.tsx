@@ -1,10 +1,10 @@
 import { useEffect, useState, useCallback } from "react";
-import { Routes, Route, Link, useParams } from "react-router-dom";
+import { Routes, Route, Navigate, Link, useParams } from "react-router-dom";
+import { RefreshCw } from "lucide-react";
 import type { AgentInfo } from "./lib/types";
 import { fetchAgents } from "./lib/api";
-import AgentCard from "./components/AgentCard";
+import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
-import { Bird, RefreshCw } from "lucide-react";
 
 export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -31,82 +31,188 @@ export default function App() {
   }, [refresh]);
 
   return (
-    <div className="mx-auto min-h-screen max-w-5xl px-6 py-8">
-      <header className="mb-8 flex items-center justify-between">
-        <Link to="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-          <Bird className="h-8 w-8 text-accent" />
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight">Eyrie</h1>
-            <p className="text-sm text-text-muted">
-              Claw Agent Management Dashboard
-            </p>
-          </div>
-        </Link>
-        <button
-          onClick={refresh}
-          disabled={loading}
-          className="flex items-center gap-2 rounded-md border border-border px-3 py-1.5 text-sm text-text-muted transition-colors hover:bg-surface-hover hover:text-text disabled:opacity-50"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </button>
-      </header>
+    <div className="flex h-screen overflow-hidden">
+      <Sidebar agents={agents} />
 
-      {error && (
-        <div className="mb-6 rounded-lg border border-red/30 bg-red/5 px-4 py-3 text-sm text-red">
-          {error}
+      <main className="flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-5xl px-8 py-8">
+          {error && (
+            <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
+              {error}
+            </div>
+          )}
+
+          <Routes>
+            <Route path="/" element={<Navigate to="/agents/overview" replace />} />
+            <Route
+              path="/agents/overview"
+              element={
+                <AgentList
+                  agents={agents}
+                  loading={loading}
+                  onRefresh={refresh}
+                />
+              }
+            />
+            <Route
+              path="/agents/:name/:tab?"
+              element={<AgentDetailRoute agents={agents} />}
+            />
+          </Routes>
         </div>
-      )}
-
-      <Routes>
-        <Route
-          path="/"
-          element={<AgentList agents={agents} loading={loading} />}
-        />
-        <Route
-          path="/agents/:name/:tab?"
-          element={<AgentDetailRoute agents={agents} />}
-        />
-      </Routes>
+      </main>
     </div>
   );
 }
 
-function AgentList({ agents, loading }: { agents: AgentInfo[]; loading: boolean }) {
+function formatUptime(seconds: number): string {
+  if (!seconds) return "-";
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.floor((seconds % 86400) / 3600);
+  const mins = Math.floor((seconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function formatBytes(bytes: number): string {
+  if (!bytes) return "-";
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
+}
+
+function AgentList({
+  agents,
+  loading,
+  onRefresh,
+}: {
+  agents: AgentInfo[];
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const running = agents.filter((a) => a.alive).length;
+  const totalUptime = agents.reduce(
+    (sum, a) => sum + (a.health?.uptime ?? 0),
+    0,
+  );
+  const avgUptime = agents.length > 0 ? totalUptime / agents.length : 0;
+
   return (
-    <div>
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-lg font-semibold">
-          Agents
-          {!loading && (
-            <span className="ml-2 text-sm font-normal text-text-muted">
-              ({agents.length} discovered)
-            </span>
-          )}
-        </h2>
+    <div className="space-y-6">
+      <div className="text-xs text-text-muted">~/agents/overview</div>
+
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold"><span className="text-accent">&gt;</span> agent_overview</h1>
+          <p className="mt-1 text-xs text-text-muted">
+            // monitor agent status and activity
+          </p>
+        </div>
+        <button
+          onClick={onRefresh}
+          disabled={loading}
+          className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          $ refresh
+        </button>
+      </div>
+
+      <div className="grid grid-cols-3 gap-4">
+        <StatCard label="total_agents" value={String(agents.length)} />
+        <StatCard label="running" value={String(running)} highlight />
+        <StatCard label="avg_uptime" value={formatUptime(avgUptime)} />
       </div>
 
       {loading && agents.length === 0 ? (
-        <div className="flex items-center justify-center py-20 text-text-muted">
+        <div className="py-12 text-center text-xs text-text-muted">
           Discovering agents...
         </div>
       ) : agents.length === 0 ? (
-        <div className="rounded-lg border border-border bg-surface p-8 text-center">
-          <p className="text-text-muted">
-            No agents discovered. Make sure ZeroClaw or OpenClaw is
-            installed and configured.
-          </p>
+        <div className="rounded border border-border bg-surface p-8 text-center text-xs text-text-muted">
+          No agents discovered. Make sure ZeroClaw or OpenClaw is installed and
+          configured.
         </div>
       ) : (
-        <div className="grid gap-4 sm:grid-cols-2">
-          {agents.map((agent) => (
-            <AgentCard
-              key={agent.name}
-              agent={agent}
-            />
-          ))}
+        <div className="overflow-hidden rounded border border-border">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-border bg-surface text-left text-text-muted">
+                <th className="px-4 py-2.5 font-medium">name</th>
+                <th className="px-4 py-2.5 font-medium">framework</th>
+                <th className="px-4 py-2.5 font-medium">status</th>
+                <th className="px-4 py-2.5 font-medium">port</th>
+                <th className="px-4 py-2.5 font-medium">memory</th>
+              </tr>
+            </thead>
+            <tbody>
+              {agents.map((agent) => (
+                <tr
+                  key={agent.name}
+                  className="border-b border-border last:border-0 transition-colors hover:bg-surface-hover/50"
+                >
+                  <td className="px-4 py-2.5">
+                    <Link
+                      to={`/agents/${agent.name}`}
+                      className="flex items-center gap-2 text-text hover:text-accent transition-colors"
+                    >
+                      <span
+                        className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
+                      />
+                      {agent.name}
+                    </Link>
+                  </td>
+                  <td className="px-4 py-2.5 text-text-secondary">
+                    {agent.framework}
+                  </td>
+                  <td className="px-4 py-2.5">
+                    <span
+                      className={`rounded px-2 py-0.5 text-[10px] font-medium uppercase ${
+                        agent.alive
+                          ? "bg-green/10 text-green"
+                          : "bg-red/10 text-red"
+                      }`}
+                    >
+                      {agent.alive ? "running" : "stopped"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-2.5 text-text-secondary">
+                    :{agent.port}
+                  </td>
+                  <td className="px-4 py-2.5 text-text-secondary">
+                    {agent.health ? formatBytes(agent.health.ram_bytes) : "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
+    </div>
+  );
+}
+
+function StatCard({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
+  return (
+    <div className="rounded border border-border bg-surface p-4">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+        {label}
+      </p>
+      <p
+        className={`mt-1.5 text-xl font-bold ${highlight ? "text-accent" : "text-text"}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
@@ -117,7 +223,7 @@ function AgentDetailRoute({ agents }: { agents: AgentInfo[] }) {
 
   if (!agent) {
     return (
-      <div className="py-20 text-center text-text-muted">
+      <div className="py-20 text-center text-xs text-text-muted">
         {agents.length === 0
           ? "Loading agents..."
           : `Agent "${name}" not found.`}

@@ -1,13 +1,9 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
 import {
-  ArrowLeft,
   Play,
   Square,
   RotateCcw,
-  ScrollText,
-  Settings,
-  Zap,
 } from "lucide-react";
 import type {
   AgentInfo,
@@ -25,7 +21,7 @@ interface AgentDetailProps {
   agent: AgentInfo;
 }
 
-const validTabs = ["overview", "logs", "activity", "config"] as const;
+const validTabs = ["overview", "activity", "logs", "config"] as const;
 type Tab = (typeof validTabs)[number];
 
 export default function AgentDetail({ agent }: AgentDetailProps) {
@@ -84,32 +80,31 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <Link
-          to="/"
-          className="flex items-center gap-2 text-text-muted transition-colors hover:text-text"
+          to="/agents/overview"
+          className="text-xs text-text-muted transition-colors hover:text-text"
         >
-          <ArrowLeft className="h-4 w-4" />
-          Back
+          &lt; back
         </Link>
 
         <div className="flex gap-2">
           {!agent.alive ? (
             <ActionButton
-              icon={<Play className="h-4 w-4" />}
-              label="Start"
+              icon={<Play className="h-3.5 w-3.5" />}
+              label="start"
               onClick={() => handleAction("start")}
               disabled={actionPending}
             />
           ) : (
             <>
               <ActionButton
-                icon={<RotateCcw className="h-4 w-4" />}
-                label="Restart"
+                icon={<RotateCcw className="h-3.5 w-3.5" />}
+                label="restart"
                 onClick={() => handleAction("restart")}
                 disabled={actionPending}
               />
               <ActionButton
-                icon={<Square className="h-4 w-4" />}
-                label="Stop"
+                icon={<Square className="h-3.5 w-3.5" />}
+                label="stop"
                 onClick={() => handleAction("stop")}
                 disabled={actionPending}
                 variant="danger"
@@ -121,42 +116,36 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
 
       <div>
         <div className="flex items-center gap-3">
-          <div
+          <span
             className={`h-3 w-3 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
           />
-          <h2 className="text-2xl font-bold">{agent.name}</h2>
-          <span className="rounded-md bg-surface-hover px-2 py-1 text-sm text-text-muted">
+          <h2 className="text-xl font-bold">{agent.name}</h2>
+          <span className="rounded border border-border-strong bg-surface-hover px-2 py-0.5 text-[11px] text-text-secondary">
             {agent.framework}
           </span>
         </div>
-        <p className="mt-1 text-text-muted">
-          Gateway: {agent.host}:{agent.port}
+        <p className="mt-1 text-xs text-text-muted">
+          // gateway: {agent.host}:{agent.port}
         </p>
       </div>
 
-      <div className="flex gap-1 border-b border-border">
-        <TabLink to={`/agents/${agent.name}/overview`} active={tab === "overview"}>
-          Overview
-        </TabLink>
-        <TabLink to={`/agents/${agent.name}/logs`} active={tab === "logs"}>
-          <ScrollText className="mr-1.5 inline h-4 w-4" />
-          Logs
-        </TabLink>
-        <TabLink to={`/agents/${agent.name}/activity`} active={tab === "activity"}>
-          <Zap className="mr-1.5 inline h-4 w-4" />
-          Activity
-        </TabLink>
-        <TabLink to={`/agents/${agent.name}/config`} active={tab === "config"}>
-          <Settings className="mr-1.5 inline h-4 w-4" />
-          Config
-        </TabLink>
+      <div className="flex border-b border-border">
+        {validTabs.map((t) => (
+          <TabLink
+            key={t}
+            to={`/agents/${agent.name}/${t}`}
+            active={tab === t}
+          >
+            {t}
+          </TabLink>
+        ))}
       </div>
 
       {tab === "overview" && <OverviewTab agent={agent} />}
-      {tab === "logs" && <LogsTab logs={logs} alive={agent.alive} />}
       {tab === "activity" && (
         <ActivityTab events={activity} alive={agent.alive} framework={agent.framework} />
       )}
+      {tab === "logs" && <LogsTab logs={logs} alive={agent.alive} />}
       {tab === "config" && <ConfigTab config={config} alive={agent.alive} />}
     </div>
   );
@@ -167,46 +156,52 @@ function OverviewTab({ agent }: { agent: AgentInfo }) {
   const status = agent.status;
 
   return (
-    <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-      <InfoCard label="Status" value={agent.alive ? "Running" : "Stopped"} />
-      <InfoCard label="PID" value={health?.pid?.toString() ?? "-"} />
-      <InfoCard
-        label="Uptime"
-        value={
-          health?.uptime
-            ? `${Math.floor(health.uptime / 3600)}h ${Math.floor((health.uptime % 3600) / 60)}m`
-            : "-"
-        }
-      />
-      <InfoCard label="Provider" value={status?.provider ?? "-"} />
-      <InfoCard label="Model" value={status?.model ?? "-"} />
-      <InfoCard
-        label="Channels"
-        value={status?.channels?.join(", ") || "-"}
-      />
+    <div className="space-y-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <InfoCard
+          label="STATUS"
+          value={agent.alive ? "running" : "stopped"}
+          highlight={agent.alive}
+        />
+        <InfoCard label="PID" value={health?.pid?.toString() ?? "-"} />
+        <InfoCard
+          label="UPTIME"
+          value={
+            health?.uptime
+              ? `${Math.floor(health.uptime / 3600)}h ${Math.floor((health.uptime % 3600) / 60)}m`
+              : "-"
+          }
+        />
+        <InfoCard label="PROVIDER" value={status?.provider ?? "-"} />
+        <InfoCard label="MODEL" value={status?.model ?? "-"} />
+        <InfoCard
+          label="CHANNELS"
+          value={status?.channels?.join(", ") || "-"}
+        />
+      </div>
 
       {health?.components && Object.keys(health.components).length > 0 && (
-        <div className="col-span-full">
-          <h3 className="mb-2 text-sm font-medium text-text-muted">
+        <div>
+          <h3 className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
             Components
           </h3>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {Object.entries(health.components).map(([name, comp]) => (
               <div
                 key={name}
-                className="rounded-md border border-border bg-surface p-3"
+                className="rounded border border-border bg-surface p-3"
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium">{name}</span>
+                  <span className="text-xs font-medium">{name}</span>
                   <span
-                    className={`text-xs ${comp.status === "ok" ? "text-green" : "text-red"}`}
+                    className={`text-[10px] ${comp.status === "ok" ? "text-green" : "text-red"}`}
                   >
                     {comp.status}
                   </span>
                 </div>
                 {comp.restart_count > 0 && (
-                  <p className="mt-1 text-xs text-yellow">
-                    Restarts: {comp.restart_count}
+                  <p className="mt-1 text-[10px] text-yellow">
+                    restarts: {comp.restart_count}
                   </p>
                 )}
               </div>
@@ -219,14 +214,27 @@ function OverviewTab({ agent }: { agent: AgentInfo }) {
 }
 
 function LogsTab({ logs, alive }: { logs: LogEntry[]; alive: boolean }) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [logs.length]);
+
   if (!alive) {
     return (
-      <p className="text-text-muted">Agent is not running. Start it to see logs.</p>
+      <p className="text-xs text-text-muted">
+        Agent is not running. Start it to see logs.
+      </p>
     );
   }
 
   return (
-    <div className="max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-surface p-4 font-mono text-sm">
+    <div
+      ref={scrollRef}
+      className="max-h-[calc(100vh-320px)] overflow-y-auto rounded border border-border bg-surface p-4 text-xs"
+    >
       {logs.length === 0 ? (
         <p className="text-text-muted">Waiting for log entries...</p>
       ) : (
@@ -236,13 +244,13 @@ function LogsTab({ logs, alive }: { logs: LogEntry[]; alive: boolean }) {
               {new Date(entry.timestamp).toLocaleTimeString()}
             </span>{" "}
             <span
-              className={
+              className={`font-medium ${
                 entry.level === "error"
                   ? "text-red"
                   : entry.level === "warn"
                     ? "text-yellow"
-                    : "text-text-muted"
-              }
+                    : "text-green"
+              }`}
             >
               [{entry.level}]
             </span>{" "}
@@ -263,14 +271,14 @@ function ConfigTab({
 }) {
   if (!alive) {
     return (
-      <p className="text-text-muted">
+      <p className="text-xs text-text-muted">
         Agent is not running. Start it to view config.
       </p>
     );
   }
 
   return (
-    <pre className="max-h-[60vh] overflow-auto rounded-lg border border-border bg-surface p-4 font-mono text-sm text-text">
+    <pre className="max-h-[calc(100vh-320px)] overflow-auto rounded border border-border bg-surface p-5 text-xs text-text leading-relaxed">
       {config ?? "Loading..."}
     </pre>
   );
@@ -283,7 +291,7 @@ const activityTypeColors: Record<string, string> = {
   tool_call_start: "text-accent",
   llm_request: "text-yellow",
   error: "text-red",
-  chat: "text-accent-hover",
+  chat: "text-purple",
 };
 
 function ActivityTab({
@@ -306,7 +314,7 @@ function ActivityTab({
 
   if (!alive) {
     return (
-      <p className="text-text-muted">
+      <p className="text-xs text-text-muted">
         Agent is not running. Start it to see activity.
       </p>
     );
@@ -321,7 +329,7 @@ function ActivityTab({
     <div className="space-y-3">
       <div
         ref={scrollRef}
-        className="max-h-[60vh] overflow-y-auto rounded-lg border border-border bg-surface p-4 font-mono text-sm"
+        className="max-h-[calc(100vh-320px)] overflow-y-auto rounded border border-border bg-surface p-4 text-xs"
       >
         {events.length === 0 ? (
           <p className="text-text-muted">
@@ -356,11 +364,10 @@ function ActivityTab({
         )}
       </div>
       {hasOnlyUserChat && framework === "zeroclaw" && (
-        <p className="text-xs text-text-muted">
+        <p className="text-[10px] text-text-muted">
           Only user messages are shown. To see bot replies, ensure{" "}
           <code className="rounded bg-surface-hover px-1">memory.auto_save = true</code>{" "}
-          in the ZeroClaw config and restart the agent. Conversations from before
-          this feature was enabled won&apos;t have replies stored.
+          in the ZeroClaw config and restart the agent.
         </p>
       )}
     </div>
@@ -371,7 +378,7 @@ function SeparatorRow({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-3 py-2">
       <div className="h-px flex-1 bg-border" />
-      <span className="text-xs text-text-muted">{label}</span>
+      <span className="text-[10px] text-text-muted whitespace-nowrap">{label}</span>
       <div className="h-px flex-1 bg-border" />
     </div>
   );
@@ -406,7 +413,7 @@ function ChatEventRow({
           {new Date(event.timestamp).toLocaleTimeString()}
         </span>{" "}
         <span
-          className={`font-medium ${isUser ? "text-green" : isAssistant ? "text-accent" : "text-text-muted"}`}
+          className={`font-medium ${isUser ? "text-green" : isAssistant ? "text-purple" : "text-text-muted"}`}
         >
           {isUser ? "user:" : isAssistant ? "assistant:" : "chat:"}
         </span>{" "}
@@ -414,11 +421,11 @@ function ChatEventRow({
           {expanded ? fullText : truncatedContent}
         </span>
         {hasFullContent && !expanded && (
-          <span className="ml-1 text-text-muted text-xs">▸</span>
+          <span className="ml-1 text-text-muted">▸</span>
         )}
       </div>
       {expanded && (
-        <div className="mt-1 whitespace-pre-wrap border-l-2 border-border pl-3 text-text-muted text-xs">
+        <div className="mt-1 whitespace-pre-wrap border-l-2 border-border pl-3 text-text-muted text-[11px] leading-relaxed">
           {fullText}
         </div>
       )}
@@ -426,13 +433,25 @@ function ChatEventRow({
   );
 }
 
-function InfoCard({ label, value }: { label: string; value: string }) {
+function InfoCard({
+  label,
+  value,
+  highlight,
+}: {
+  label: string;
+  value: string;
+  highlight?: boolean;
+}) {
   return (
-    <div className="rounded-lg border border-border bg-surface p-4">
-      <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
+    <div className="rounded border border-border bg-surface p-4">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
         {label}
       </p>
-      <p className="mt-1 text-lg font-semibold">{value}</p>
+      <p
+        className={`mt-1.5 text-lg font-semibold ${highlight ? "text-accent" : "text-text"}`}
+      >
+        {value}
+      </p>
     </div>
   );
 }
@@ -451,16 +470,16 @@ function ActionButton({
   variant?: "default" | "danger";
 }) {
   const base =
-    "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium transition-colors disabled:opacity-50";
+    "flex items-center gap-1.5 rounded px-3 py-1.5 text-xs font-medium transition-colors disabled:opacity-50";
   const styles =
     variant === "danger"
       ? "border border-red/30 text-red hover:bg-red/10"
-      : "border border-border text-text hover:bg-surface-hover";
+      : "border border-border text-text-secondary hover:bg-surface-hover hover:text-text";
 
   return (
     <button onClick={onClick} disabled={disabled} className={`${base} ${styles}`}>
       {icon}
-      {label}
+      $ {label}
     </button>
   );
 }
@@ -478,10 +497,10 @@ function TabLink({
     <Link
       to={to}
       replace
-      className={`flex items-center px-4 py-2.5 text-sm font-medium transition-colors ${
+      className={`px-5 py-2.5 text-xs font-medium transition-colors ${
         active
           ? "border-b-2 border-accent text-accent"
-          : "text-text-muted hover:text-text"
+          : "text-text-secondary hover:text-text"
       }`}
     >
       {children}
