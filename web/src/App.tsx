@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { Routes, Route, Navigate, Link, useParams } from "react-router-dom";
+import { Routes, Route, Navigate, useParams, useNavigate } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
 import type { AgentInfo } from "./lib/types";
 import { fetchAgents } from "./lib/api";
@@ -65,8 +65,9 @@ export default function App() {
   );
 }
 
-function formatUptime(seconds: number): string {
-  if (!seconds) return "-";
+function formatUptime(nanoseconds: number): string {
+  if (!nanoseconds) return "-";
+  const seconds = nanoseconds / 1e9;
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
@@ -92,6 +93,7 @@ function AgentList({
   loading: boolean;
   onRefresh: () => void;
 }) {
+  const navigate = useNavigate();
   const running = agents.filter((a) => a.alive).length;
   const totalUptime = agents.reduce(
     (sum, a) => sum + (a.health?.uptime ?? 0),
@@ -145,26 +147,25 @@ function AgentList({
                 <th className="px-4 py-2.5 font-medium">status</th>
                 <th className="px-4 py-2.5 font-medium">port</th>
                 <th className="px-4 py-2.5 font-medium">memory</th>
+                <th className="px-4 py-2.5 font-medium">cpu</th>
               </tr>
             </thead>
-            <tbody>
+            <tbody className="[&>tr+tr]:border-t [&>tr+tr]:border-border">
               {agents.map((agent) => (
                 <tr
                   key={agent.name}
-                  className="border-b border-border last:border-0 transition-colors hover:bg-surface-hover/50"
+                  onClick={() => navigate(`/agents/${agent.name}`)}
+                  className="group relative cursor-pointer transition-all hover:bg-surface-hover/50 hover:shadow-[inset_0_0_0_1px_var(--color-accent)] hover:z-10"
                 >
-                  <td className="px-4 py-2.5">
-                    <Link
-                      to={`/agents/${agent.name}`}
-                      className="flex items-center gap-2 text-text hover:text-accent transition-colors"
-                    >
+                  <td className="px-4 py-2.5 transition-colors group-hover:text-accent">
+                    <span className="flex items-center gap-2">
                       <span
                         className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
                       />
                       {agent.name}
-                    </Link>
+                    </span>
                   </td>
-                  <td className="px-4 py-2.5 text-text-secondary">
+                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
                     {agent.framework}
                   </td>
                   <td className="px-4 py-2.5">
@@ -178,11 +179,16 @@ function AgentList({
                       {agent.alive ? "running" : "stopped"}
                     </span>
                   </td>
-                  <td className="px-4 py-2.5 text-text-secondary">
+                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
                     :{agent.port}
                   </td>
-                  <td className="px-4 py-2.5 text-text-secondary">
+                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
                     {agent.health ? formatBytes(agent.health.ram_bytes) : "-"}
+                  </td>
+                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
+                    {agent.health?.cpu_percent != null
+                      ? `${agent.health.cpu_percent.toFixed(1)}%`
+                      : "-"}
                   </td>
                 </tr>
               ))}

@@ -2,6 +2,9 @@ package adapter
 
 import (
 	"context"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 )
 
@@ -34,6 +37,13 @@ type Agent interface {
 	Sessions(ctx context.Context) ([]Session, error)
 	ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error)
 
+	// Chat: send a message and get the assistant's reply.
+	// sessionKey identifies the conversation (e.g. "agent:main:main"); empty means default.
+	SendMessage(ctx context.Context, message, sessionKey string) (*ChatMessage, error)
+
+	// DeleteSession resets/removes a conversation session.
+	DeleteSession(ctx context.Context, sessionKey string) error
+
 	// Personality
 	Personality(ctx context.Context) (*Personality, error)
 }
@@ -49,6 +59,7 @@ type HealthStatus struct {
 	Alive      bool                       `json:"alive"`
 	Uptime     time.Duration              `json:"uptime"`
 	RAM        uint64                     `json:"ram_bytes"`
+	CPU        float64                    `json:"cpu_percent"`
 	PID        int                        `json:"pid,omitempty"`
 	Components map[string]ComponentHealth `json:"components,omitempty"`
 }
@@ -92,10 +103,11 @@ type ActivityEvent struct {
 }
 
 type Session struct {
-	Key     string     `json:"key"`
-	Title   string     `json:"title"`
-	LastMsg *time.Time `json:"last_message,omitempty"`
-	Channel string     `json:"channel,omitempty"`
+	Key      string     `json:"key"`
+	Title    string     `json:"title"`
+	LastMsg  *time.Time `json:"last_message,omitempty"`
+	Channel  string     `json:"channel,omitempty"`
+	ReadOnly bool       `json:"readonly,omitempty"`
 }
 
 type ChatMessage struct {
@@ -117,6 +129,68 @@ type DiscoveredAgent struct {
 
 func (d *DiscoveredAgent) URL() string {
 	return "http://" + d.Host + ":" + itoa(d.Port)
+}
+
+// pidFromPort returns the PID of the process listening on the given TCP port.
+// Returns 0 if the lookup fails.
+func pidFromPort(port int) int {
+	if port <= 0 {
+		return 0
+	}
+	out, err := exec.Command("lsof", "-ti", "tcp:"+strconv.Itoa(port), "-sTCP:LISTEN").Output()
+	if err != nil {
+		return 0
+	}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		pid, err := strconv.Atoi(strings.TrimSpace(line))
+		if err == nil && pid > 0 {
+			return pid
+		}
+	}
+	return 0
+}
+
+// processStats returns RSS (bytes), CPU (percent), and uptime for the given PID
+// in a single ps call. Returns zeros if the PID is invalid or lookup fails.
+func processStats(pid int) (rss uint64, cpu float64, uptime time.Duration) {
+	if pid <= 0 {
+		return 0, 0, 0
+	}
+	out, err := exec.Command("ps", "-o", "rss=,pcpu=,etime=", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return 0, 0, 0
+	}
+	fields := strings.Fields(strings.TrimSpace(string(out)))
+	if len(fields) < 3 {
+		return 0, 0, 0
+	}
+	kb, _ := strconv.ParseUint(fields[0], 10, 64)
+	pct, _ := strconv.ParseFloat(fields[1], 64)
+	return kb * 1024, pct, parseEtime(fields[2])
+}
+
+// parseEtime parses ps etime format: [[dd-]hh:]mm:ss
+func parseEtime(s string) time.Duration {
+	var days, hours, mins, secs int
+	// Split off days if present
+	if idx := strings.Index(s, "-"); idx >= 0 {
+		days, _ = strconv.Atoi(s[:idx])
+		s = s[idx+1:]
+	}
+	parts := strings.Split(s, ":")
+	switch len(parts) {
+	case 3:
+		hours, _ = strconv.Atoi(parts[0])
+		mins, _ = strconv.Atoi(parts[1])
+		secs, _ = strconv.Atoi(parts[2])
+	case 2:
+		mins, _ = strconv.Atoi(parts[0])
+		secs, _ = strconv.Atoi(parts[1])
+	}
+	return time.Duration(days)*24*time.Hour +
+		time.Duration(hours)*time.Hour +
+		time.Duration(mins)*time.Minute +
+		time.Duration(secs)*time.Second
 }
 
 func itoa(i int) string {

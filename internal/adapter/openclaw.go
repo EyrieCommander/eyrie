@@ -3,6 +3,10 @@ package adapter
 import (
 	"bufio"
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -45,56 +49,91 @@ func (o *OpenClawAdapter) BaseURL() string {
 }
 
 func (o *OpenClawAdapter) Health(ctx context.Context) (*HealthStatus, error) {
-	result, err := o.rpcCall(ctx, "health", nil)
-	if err != nil {
-		return &HealthStatus{Alive: false}, err
-	}
-
 	hs := &HealthStatus{
 		Alive:      true,
 		Components: make(map[string]ComponentHealth),
 	}
 
-	if raw, ok := result["uptime_seconds"].(float64); ok {
-		hs.Uptime = time.Duration(raw) * time.Second
-	}
-	if raw, ok := result["pid"].(float64); ok {
-		hs.PID = int(raw)
-	}
-	if comps, ok := result["components"].(map[string]any); ok {
-		for name, v := range comps {
-			if cm, ok := v.(map[string]any); ok {
-				ch := ComponentHealth{}
-				if s, ok := cm["status"].(string); ok {
-					ch.Status = s
+	result, err := o.rpcCall(ctx, "health", nil)
+	if err == nil {
+		if raw, ok := result["uptime_seconds"].(float64); ok {
+			hs.Uptime = time.Duration(raw) * time.Second
+		}
+		if raw, ok := result["pid"].(float64); ok {
+			hs.PID = int(raw)
+		}
+		if comps, ok := result["components"].(map[string]any); ok {
+			for name, v := range comps {
+				if cm, ok := v.(map[string]any); ok {
+					ch := ComponentHealth{}
+					if s, ok := cm["status"].(string); ok {
+						ch.Status = s
+					}
+					hs.Components[name] = ch
 				}
-				hs.Components[name] = ch
 			}
 		}
+	}
+
+	if hs.PID == 0 {
+		hs.PID = pidFromPort(o.port)
+	}
+	var psUptime time.Duration
+	hs.RAM, hs.CPU, psUptime = processStats(hs.PID)
+	if hs.Uptime == 0 {
+		hs.Uptime = psUptime
 	}
 
 	return hs, nil
 }
 
 func (o *OpenClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
-	result, err := o.rpcCall(ctx, "status", nil)
-	if err != nil {
-		return nil, err
-	}
-
 	as := &AgentStatus{
 		GatewayPort: o.port,
 	}
-	if v, ok := result["provider"].(string); ok {
-		as.Provider = v
+
+	result, err := o.rpcCall(ctx, "status", nil)
+	if err == nil {
+		if v, ok := result["provider"].(string); ok {
+			as.Provider = v
+		}
+		if v, ok := result["model"].(string); ok {
+			as.Model = v
+		}
+		if v, ok := result["channels"].([]any); ok {
+			for _, ch := range v {
+				if s, ok := ch.(string); ok {
+					as.Channels = append(as.Channels, s)
+				}
+			}
+		}
+		return as, nil
 	}
-	if v, ok := result["model"].(string); ok {
-		as.Model = v
-	}
-	if v, ok := result["channels"].([]any); ok {
-		for _, ch := range v {
-			if s, ok := ch.(string); ok {
-				as.Channels = append(as.Channels, s)
+
+	// Fallback: extract status from config file
+	if o.configPath != "" {
+		if data, err := os.ReadFile(o.configPath); err == nil {
+			var cfg struct {
+				Agents struct {
+					Defaults struct {
+						Model struct {
+							Primary string `json:"primary"`
+						} `json:"model"`
+					} `json:"defaults"`
+				} `json:"agents"`
+				Channels map[string]json.RawMessage `json:"channels"`
+			}
+			if json.Unmarshal(data, &cfg) == nil {
+				model := cfg.Agents.Defaults.Model.Primary
+				if model != "" {
+					as.Model = model
+					if idx := strings.Index(model, "/"); idx > 0 {
+						as.Provider = model[:idx]
+					}
+				}
+				for ch := range cfg.Channels {
+					as.Channels = append(as.Channels, ch)
+				}
 			}
 		}
 	}
@@ -104,16 +143,21 @@ func (o *OpenClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 
 func (o *OpenClawAdapter) Config(ctx context.Context) (*AgentConfig, error) {
 	result, err := o.rpcCall(ctx, "config.get", nil)
-	if err != nil {
-		return nil, err
+	if err == nil {
+		raw, err := json.MarshalIndent(result, "", "  ")
+		if err == nil {
+			return &AgentConfig{Raw: string(raw), Format: "json"}, nil
+		}
 	}
 
-	raw, err := json.MarshalIndent(result, "", "  ")
-	if err != nil {
-		return nil, fmt.Errorf("marshaling config: %w", err)
+	if o.configPath != "" {
+		data, err := os.ReadFile(o.configPath)
+		if err == nil {
+			return &AgentConfig{Raw: string(data), Format: "json"}, nil
+		}
 	}
 
-	return &AgentConfig{Raw: string(raw), Format: "json"}, nil
+	return nil, fmt.Errorf("unable to retrieve OpenClaw config")
 }
 
 func (o *OpenClawAdapter) Start(ctx context.Context) error {
@@ -401,7 +445,8 @@ func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		sessFile := filepath.Join(agentsDir, entry.Name(), "sessions", "sessions.json")
+		sessDir := filepath.Join(agentsDir, entry.Name(), "sessions")
+		sessFile := filepath.Join(sessDir, "sessions.json")
 		data, err := os.ReadFile(sessFile)
 		if err != nil {
 			continue
@@ -411,6 +456,9 @@ func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
 		if json.Unmarshal(data, &store) != nil {
 			continue
 		}
+
+		// Track which session IDs are active so we can match archives
+		activeSessionIDs := make(map[string]string) // sessionID -> sessionKey
 
 		for key, raw := range store {
 			var meta struct {
@@ -423,6 +471,8 @@ func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
 				continue
 			}
 
+			activeSessionIDs[meta.SessionID] = key
+
 			s := Session{
 				Key:     key,
 				Title:   key,
@@ -431,6 +481,58 @@ func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
 			if meta.UpdatedAt > 0 {
 				t := time.UnixMilli(meta.UpdatedAt)
 				s.LastMsg = &t
+			}
+			sessions = append(sessions, s)
+		}
+
+		// Scan for archived .reset. files and surface them as read-only sessions.
+		// File pattern: <sessionID>.jsonl.reset.<ISO timestamp>
+		sessFiles, _ := os.ReadDir(sessDir)
+		for _, sf := range sessFiles {
+			name := sf.Name()
+			resetIdx := strings.Index(name, ".jsonl.reset.")
+			if resetIdx < 0 {
+				continue
+			}
+			archivedID := name[:resetIdx]
+			resetTimestamp := name[resetIdx+len(".jsonl.reset."):]
+
+			// Parse the reset timestamp for display and sorting
+			resetTime, err := time.Parse("2006-01-02T15-04-05.000Z", resetTimestamp)
+			if err != nil {
+				resetTime, err = time.Parse("2006-01-02T15-04-05.999Z", resetTimestamp)
+			}
+			if err != nil {
+				// Try without millis
+				resetTime, _ = time.Parse("2006-01-02T15-04-05Z", resetTimestamp)
+			}
+
+			parentKey := activeSessionIDs[archivedID]
+			if parentKey == "" {
+				// Archived session from an ID we no longer track — look for
+				// any active session in the same agent dir (most likely main)
+				for _, k := range activeSessionIDs {
+					parentKey = k
+					break
+				}
+			}
+
+			archiveKey := "archive:" + name
+			title := sessionShortName(parentKey)
+			if title == "" {
+				title = "archived"
+			}
+			if !resetTime.IsZero() {
+				title += " (" + resetTime.Local().Format("1/2 3:04PM") + ")"
+			}
+
+			s := Session{
+				Key:      archiveKey,
+				Title:    title,
+				ReadOnly: true,
+			}
+			if !resetTime.IsZero() {
+				s.LastMsg = &resetTime
 			}
 			sessions = append(sessions, s)
 		}
@@ -526,8 +628,25 @@ func (o *OpenClawAdapter) agentsDir() string {
 }
 
 // findSessionFile locates the JSONL transcript for a session key by reading
-// sessions.json from each agent directory.
+// sessions.json from each agent directory. Also handles "archive:<filename>"
+// keys that point to .reset. archive files.
 func (o *OpenClawAdapter) findSessionFile(agentsDir, sessionKey string) (string, string) {
+	// Handle archived session keys: "archive:<filename>"
+	if strings.HasPrefix(sessionKey, "archive:") {
+		archiveFilename := sessionKey[len("archive:"):]
+		entries, _ := os.ReadDir(agentsDir)
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			path := filepath.Join(agentsDir, entry.Name(), "sessions", archiveFilename)
+			if _, err := os.Stat(path); err == nil {
+				return archiveFilename, path
+			}
+		}
+		return "", ""
+	}
+
 	entries, err := os.ReadDir(agentsDir)
 	if err != nil {
 		return "", ""
@@ -564,6 +683,14 @@ func (o *OpenClawAdapter) findSessionFile(agentsDir, sessionKey string) (string,
 
 // extractTextContent handles OpenClaw's message content, which can be either a
 // plain string or an array of {type:"text", text:"..."} content blocks.
+func sessionShortName(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return key
+}
+
 func extractTextContent(content any) string {
 	switch v := content.(type) {
 	case string:
@@ -617,6 +744,99 @@ func joinNonEmpty(parts []string) string {
 	return result[0]
 }
 
+func (o *OpenClawAdapter) SendMessage(ctx context.Context, message, sessionKey string) (*ChatMessage, error) {
+	chatCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+	defer cancel()
+
+	if sessionKey == "" {
+		sessionKey = "agent:main:main"
+	}
+
+	conn, err := o.dial(chatCtx)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "")
+
+	req := newRPCRequest("chat.send", map[string]any{
+		"sessionKey":     sessionKey,
+		"message":        message,
+		"idempotencyKey": uuidV4(),
+	})
+	payload, _ := json.Marshal(req)
+	if err := conn.Write(chatCtx, websocket.MessageText, payload); err != nil {
+		return nil, fmt.Errorf("sending chat.send: %w", err)
+	}
+
+	for {
+		_, data, err := conn.Read(chatCtx)
+		if err != nil {
+			return nil, fmt.Errorf("reading chat response: %w", err)
+		}
+
+		var frame map[string]any
+		if err := json.Unmarshal(data, &frame); err != nil {
+			continue
+		}
+
+		frameType, _ := frame["type"].(string)
+
+		if frameType == "event" {
+			eventName, _ := frame["event"].(string)
+			if eventName != "chat" {
+				continue
+			}
+			pl, _ := frame["payload"].(map[string]any)
+			if pl == nil {
+				continue
+			}
+			state, _ := pl["state"].(string)
+			if state == "final" {
+				content, _ := pl["message"].(string)
+				return &ChatMessage{
+					Timestamp: time.Now(),
+					Role:      "assistant",
+					Content:   content,
+				}, nil
+			}
+			if state == "error" {
+				errMsg, _ := pl["errorMessage"].(string)
+				return nil, fmt.Errorf("agent error: %s", errMsg)
+			}
+			continue
+		}
+
+		if frameType == "res" {
+			var resp rpcResponse
+			if json.Unmarshal(data, &resp) != nil {
+				continue
+			}
+			if resp.Error != nil {
+				return nil, fmt.Errorf("RPC chat.send error %s: %s", resp.Error.Code, resp.Error.Message)
+			}
+			if resp.Payload != nil {
+				var result map[string]any
+				json.Unmarshal(resp.Payload, &result)
+				if content, ok := result["message"].(string); ok {
+					return &ChatMessage{
+						Timestamp: time.Now(),
+						Role:      "assistant",
+						Content:   content,
+					}, nil
+				}
+			}
+		}
+	}
+}
+
+func (o *OpenClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
+	_, err := o.rpcCall(ctx, "sessions.reset", map[string]any{"key": sessionKey})
+	if err != nil {
+		return fmt.Errorf("sessions.reset: %w", err)
+	}
+	return nil
+}
+
 func (o *OpenClawAdapter) Personality(ctx context.Context) (*Personality, error) {
 	cfg, err := o.Config(ctx)
 	if err != nil {
@@ -630,21 +850,38 @@ func (o *OpenClawAdapter) Personality(ctx context.Context) (*Personality, error)
 	}, nil
 }
 
+// OpenClaw gateway protocol: every frame is { type: "req"|"res"|"event", id, ... }.
+// The first message on a connection must be a "connect" request with client identity.
 type rpcRequest struct {
-	Method string         `json:"method"`
-	Params map[string]any `json:"params,omitempty"`
+	Type   string `json:"type"`
+	ID     string `json:"id"`
+	Method string `json:"method"`
+	Params any    `json:"params,omitempty"`
 }
 
 type rpcResponse struct {
-	Result json.RawMessage `json:"result,omitempty"`
-	Error  *rpcError       `json:"error,omitempty"`
+	Type    string          `json:"type"`
+	ID      string          `json:"id"`
+	Ok      bool            `json:"ok"`
+	Payload json.RawMessage `json:"payload,omitempty"`
+	Error   *rpcError       `json:"error,omitempty"`
 }
 
 type rpcError struct {
-	Code    int    `json:"code"`
+	Code    string `json:"code"`
 	Message string `json:"message"`
 }
 
+func newRPCRequest(method string, params any) rpcRequest {
+	return rpcRequest{
+		Type:   "req",
+		ID:     uuidV4(),
+		Method: method,
+		Params: params,
+	}
+}
+
+// dial opens a WebSocket and performs the mandatory connect handshake.
 func (o *OpenClawAdapter) dial(ctx context.Context) (*websocket.Conn, error) {
 	url := fmt.Sprintf("ws://%s:%d", o.host, o.port)
 	if o.token != "" {
@@ -655,6 +892,92 @@ func (o *OpenClawAdapter) dial(ctx context.Context) (*websocket.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("connecting to OpenClaw at %s:%d: %w", o.host, o.port, err)
 	}
+	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB — hello-ok includes a full gateway snapshot
+
+	// Read the connect.challenge event to get the server nonce
+	var challengeNonce string
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			conn.Close(websocket.StatusInternalError, "challenge read failed")
+			return nil, fmt.Errorf("reading connect challenge: %w", err)
+		}
+		var ev struct {
+			Type    string `json:"type"`
+			Event   string `json:"event"`
+			Payload struct {
+				Nonce string `json:"nonce"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(data, &ev) == nil && ev.Type == "event" && ev.Event == "connect.challenge" {
+			challengeNonce = ev.Payload.Nonce
+			break
+		}
+	}
+
+	scopes := []string{"operator.admin", "operator.read", "operator.write", "operator.approvals", "operator.pairing"}
+	connectParams := map[string]any{
+		"minProtocol": 3,
+		"maxProtocol": 3,
+		"client": map[string]any{
+			"id":       "gateway-client",
+			"version":  "0.1.0",
+			"platform": "darwin",
+			"mode":     "backend",
+		},
+		"role":   "operator",
+		"scopes": scopes,
+	}
+	if o.token != "" {
+		connectParams["auth"] = map[string]string{"token": o.token}
+	}
+	if identity := loadOrCreateDeviceIdentity(); identity != nil {
+		signedAt := time.Now().UnixMilli()
+		connectParams["device"] = identity.buildConnectDevice(o.token, scopes, signedAt, challengeNonce)
+	}
+	connectReq := newRPCRequest("connect", connectParams)
+	payload, _ := json.Marshal(connectReq)
+	if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
+		conn.Close(websocket.StatusInternalError, "connect write failed")
+		return nil, fmt.Errorf("sending connect handshake: %w", err)
+	}
+
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			conn.Close(websocket.StatusInternalError, "connect read failed")
+			return nil, fmt.Errorf("reading connect response: %w", err)
+		}
+		var frame struct {
+			Type  string    `json:"type"`
+			Ok    bool      `json:"ok"`
+			Error *rpcError `json:"error,omitempty"`
+		}
+		if err := json.Unmarshal(data, &frame); err != nil {
+			conn.Close(websocket.StatusInternalError, "connect failed")
+			return nil, fmt.Errorf("connect handshake: unmarshal: %w", err)
+		}
+		switch frame.Type {
+		case "hello-ok":
+			goto connected
+		case "res":
+			if frame.Ok {
+				goto connected
+			}
+			if frame.Error != nil {
+				conn.Close(websocket.StatusInternalError, "connect rejected")
+				return nil, fmt.Errorf("connect handshake rejected: %s: %s", frame.Error.Code, frame.Error.Message)
+			}
+			conn.Close(websocket.StatusInternalError, "connect failed")
+			return nil, fmt.Errorf("connect handshake: res ok=false with no error")
+		case "event":
+			continue
+		default:
+			continue
+		}
+	}
+connected:
+
 	return conn, nil
 }
 
@@ -669,48 +992,170 @@ func (o *OpenClawAdapter) rpcCall(ctx context.Context, method string, params map
 	}
 	defer conn.Close(websocket.StatusNormalClosure, "")
 
-	req := rpcRequest{Method: method, Params: params}
+	req := newRPCRequest(method, params)
 	payload, _ := json.Marshal(req)
 
 	if err := conn.Write(callCtx, websocket.MessageText, payload); err != nil {
 		return nil, fmt.Errorf("sending RPC %s: %w", method, err)
 	}
 
-	_, data, err := conn.Read(callCtx)
-	if err != nil {
-		return nil, fmt.Errorf("reading RPC response for %s: %w", method, err)
-	}
-
-	var resp rpcResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		// If it doesn't parse as RPC, try as raw JSON map
-		var raw map[string]any
-		if json.Unmarshal(data, &raw) == nil {
-			return raw, nil
+	for {
+		_, data, err := conn.Read(callCtx)
+		if err != nil {
+			return nil, fmt.Errorf("reading RPC response for %s: %w", method, err)
 		}
-		return nil, fmt.Errorf("parsing RPC response for %s: %w", method, err)
-	}
 
-	if resp.Error != nil {
-		return nil, fmt.Errorf("RPC %s error %d: %s", method, resp.Error.Code, resp.Error.Message)
-	}
+		var peek struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(data, &peek) == nil && peek.Type == "event" {
+			continue // skip event frames interleaved with RPC responses
+		}
 
-	var result map[string]any
-	if err := json.Unmarshal(resp.Result, &result); err != nil {
-		return nil, fmt.Errorf("parsing RPC result for %s: %w", method, err)
+		var resp rpcResponse
+		if err := json.Unmarshal(data, &resp); err != nil {
+			var raw map[string]any
+			if json.Unmarshal(data, &raw) == nil {
+				return raw, nil
+			}
+			return nil, fmt.Errorf("parsing RPC response for %s: %w", method, err)
+		}
+
+		if resp.Error != nil {
+			return nil, fmt.Errorf("RPC %s error %s: %s", method, resp.Error.Code, resp.Error.Message)
+		}
+
+		var result map[string]any
+		if resp.Payload != nil {
+			if err := json.Unmarshal(resp.Payload, &result); err != nil {
+				return nil, fmt.Errorf("parsing RPC payload for %s: %w", method, err)
+			}
+		}
+		return result, nil
 	}
-	return result, nil
 }
 
-// QuickHealthCheck does a fast HTTP probe (OpenClaw serves HTTP on the same port for the Control UI).
+// QuickHealthCheck does a fast WebSocket connect + handshake probe.
 func (o *OpenClawAdapter) QuickHealthCheck(ctx context.Context) bool {
-	url := fmt.Sprintf("http://%s:%d", o.host, o.port)
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	probeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	conn, err := o.dial(probeCtx)
 	if err != nil {
 		return false
 	}
 	conn.Close(websocket.StatusNormalClosure, "")
 	return true
+}
+
+func uuidV4() string {
+	var b [16]byte
+	rand.Read(b[:])
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:])
+}
+
+// Device identity for OpenClaw gateway authentication.
+// Without a device identity, the gateway strips all scopes from the connection.
+type deviceIdentity struct {
+	DeviceID   string
+	PublicKey  ed25519.PublicKey
+	PrivateKey ed25519.PrivateKey
+}
+
+var eyireDeviceIdentity *deviceIdentity
+
+func base64URLEncode(data []byte) string {
+	return base64.RawURLEncoding.EncodeToString(data)
+}
+
+func loadOrCreateDeviceIdentity() *deviceIdentity {
+	if eyireDeviceIdentity != nil {
+		return eyireDeviceIdentity
+	}
+
+	identityDir := filepath.Join(os.Getenv("HOME"), ".config", "eyrie")
+	identityFile := filepath.Join(identityDir, "device-identity.json")
+
+	// Try loading existing
+	if data, err := os.ReadFile(identityFile); err == nil {
+		var stored struct {
+			Version    int    `json:"version"`
+			DeviceID   string `json:"deviceId"`
+			PublicKey  string `json:"publicKey"`
+			PrivateKey string `json:"privateKey"`
+		}
+		if json.Unmarshal(data, &stored) == nil && stored.Version == 1 {
+			pub, errPub := base64URLEncode_decode(stored.PublicKey)
+			priv, errPriv := base64URLEncode_decode(stored.PrivateKey)
+			if errPub == nil && errPriv == nil && len(pub) == ed25519.PublicKeySize {
+				eyireDeviceIdentity = &deviceIdentity{
+					DeviceID:   stored.DeviceID,
+					PublicKey:  ed25519.PublicKey(pub),
+					PrivateKey: ed25519.PrivateKey(priv),
+				}
+				return eyireDeviceIdentity
+			}
+		}
+	}
+
+	// Generate new
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil
+	}
+
+	hash := sha256.Sum256(pub)
+	deviceID := fmt.Sprintf("%x", hash[:])
+
+	eyireDeviceIdentity = &deviceIdentity{
+		DeviceID:   deviceID,
+		PublicKey:  pub,
+		PrivateKey: priv,
+	}
+
+	// Persist
+	os.MkdirAll(identityDir, 0700)
+	stored, _ := json.MarshalIndent(map[string]any{
+		"version":    1,
+		"deviceId":   deviceID,
+		"publicKey":  base64URLEncode(pub),
+		"privateKey": base64URLEncode(priv),
+	}, "", "  ")
+	os.WriteFile(identityFile, stored, 0600)
+
+	return eyireDeviceIdentity
+}
+
+func base64URLEncode_decode(s string) ([]byte, error) {
+	return base64.RawURLEncoding.DecodeString(s)
+}
+
+func (id *deviceIdentity) buildConnectDevice(token string, scopes []string, signedAtMs int64, nonce string) map[string]any {
+	scopeStr := strings.Join(scopes, ",")
+	payload := strings.Join([]string{
+		"v3",
+		id.DeviceID,
+		"gateway-client",
+		"backend",
+		"operator",
+		scopeStr,
+		fmt.Sprintf("%d", signedAtMs),
+		token,
+		nonce,
+		"darwin",
+		"",
+	}, "|")
+
+	sig := ed25519.Sign(id.PrivateKey, []byte(payload))
+
+	return map[string]any{
+		"id":        id.DeviceID,
+		"publicKey": base64URLEncode(id.PublicKey),
+		"signature": base64URLEncode(sig),
+		"signedAt":  signedAtMs,
+		"nonce":     nonce,
+	}
 }
 
 var (

@@ -4,6 +4,7 @@ import {
   Server,
   Radio,
   Clock,
+  Cpu,
   MemoryStick,
   ChevronRight,
 } from "lucide-react";
@@ -13,8 +14,9 @@ interface AgentCardProps {
   agent: AgentInfo;
 }
 
-function formatUptime(seconds: number): string {
-  if (!seconds) return "-";
+function formatUptime(nanoseconds: number): string {
+  if (!nanoseconds) return "-";
+  const seconds = nanoseconds / 1e9;
   const days = Math.floor(seconds / 86400);
   const hours = Math.floor((seconds % 86400) / 3600);
   const mins = Math.floor((seconds % 3600) / 60);
@@ -69,6 +71,14 @@ export default function AgentCard({ agent }: AgentCardProps) {
           <MemoryStick className="h-4 w-4" />
           <span>
             {agent.health ? formatBytes(agent.health.ram_bytes) : "-"}
+          </span>
+        </div>
+        <div className="flex items-center gap-2 text-text-muted">
+          <Cpu className="h-4 w-4" />
+          <span>
+            {agent.health?.cpu_percent != null
+              ? `${agent.health.cpu_percent.toFixed(1)}%`
+              : "-"}
           </span>
         </div>
       </div>

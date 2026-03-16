@@ -33,6 +33,12 @@ type AgentView struct {
 	Status     *adapter.AgentStatus
 }
 
+type chatEntry struct {
+	Role    string // "user", "assistant", "error"
+	Content string
+	Time    time.Time
+}
+
 // ---------------------------------------------------------------------------
 // Bubble Tea messages
 //
@@ -49,14 +55,27 @@ type logStreamMsg struct {
 	ctx   context.Context
 }
 
-type activityStreamMsg struct {
-	event adapter.ActivityEvent
-	ch    <-chan adapter.ActivityEvent
-	ctx   context.Context
-}
-
 type streamDoneMsg struct{}
 type streamErrorMsg struct{ err error }
+
+type chatReplyMsg struct {
+	reply *adapter.ChatMessage
+	err   error
+}
+
+type sessionsLoadedMsg struct {
+	sessions []adapter.Session
+}
+
+type sessionMessagesMsg struct {
+	messages []adapter.ChatMessage
+	err      error
+}
+
+type sessionDeletedMsg struct {
+	key string
+	err error
+}
 
 // ---------------------------------------------------------------------------
 // Model
@@ -75,11 +94,20 @@ type Model struct {
 	logEntries []adapter.LogEntry
 	logScroll  int
 
-	// Activity tab (merged with conversation history)
-	activityEvents   []adapter.ActivityEvent
+	// Activity tab — session-based conversations with chat input
+	sessions         []adapter.Session
+	activeSessionIdx int
+	activeSessionKey string
+	sessionMessages  []adapter.ChatMessage
 	activityScroll   int
 	activityCursor   int
 	expandedActivity int // -1 = none expanded
+	chatInput        string
+	chatSending      bool
+	chatEditing      bool // true when input is focused
+	chatLocalMsgs    []chatEntry
+	creatingSession  bool   // true when typing a new session name
+	newSessionName   string
 
 	// Stream error (e.g. auth failure)
 	streamErr error
@@ -164,23 +192,111 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.logScroll = max(0, len(m.logEntries)-m.detailContentHeight())
 		return m, waitForLogEntry(msg.ctx, msg.ch)
 
-	case activityStreamMsg:
-		m.activityEvents = appendCapped(m.activityEvents, msg.event, maxBufferSize)
-		m.activityScroll = max(0, len(m.activityEvents)-m.detailContentHeight())
-		return m, waitForActivityEvent(msg.ctx, msg.ch)
-
 	case streamDoneMsg:
 		return m, nil
 
 	case streamErrorMsg:
 		m.streamErr = msg.err
 		return m, nil
+
+	case chatReplyMsg:
+		m.chatSending = false
+		if msg.err != nil {
+			m.chatLocalMsgs = append(m.chatLocalMsgs, chatEntry{
+				Role: "error", Content: msg.err.Error(), Time: time.Now(),
+			})
+		} else if msg.reply != nil {
+			m.chatLocalMsgs = append(m.chatLocalMsgs, chatEntry{
+				Role: msg.reply.Role, Content: msg.reply.Content, Time: msg.reply.Timestamp,
+			})
+		}
+		total := len(m.sessionMessages) + len(m.chatLocalMsgs)
+		h := m.detailContentHeight() - 3
+		if total > h {
+			m.activityScroll = total - h
+		}
+		return m, nil
+
+	case sessionsLoadedMsg:
+		m.sessions = msg.sessions
+		if len(msg.sessions) > 0 && m.activeSessionKey == "" {
+			m.activeSessionIdx = 0
+			m.activeSessionKey = msg.sessions[0].Key
+			return m, m.loadSessionMessages()
+		}
+		found := false
+		for i, s := range msg.sessions {
+			if s.Key == m.activeSessionKey {
+				m.activeSessionIdx = i
+				found = true
+				break
+			}
+		}
+		if !found && len(msg.sessions) > 0 {
+			m.activeSessionIdx = 0
+			m.activeSessionKey = msg.sessions[0].Key
+			return m, m.loadSessionMessages()
+		}
+		return m, m.loadSessionMessages()
+
+	case sessionMessagesMsg:
+		if msg.err != nil {
+			m.streamErr = msg.err
+			return m, nil
+		}
+		m.sessionMessages = msg.messages
+		m.chatLocalMsgs = nil
+		h := m.detailContentHeight() - 3
+		if len(m.sessionMessages) > h {
+			m.activityScroll = len(m.sessionMessages) - h
+		} else {
+			m.activityScroll = 0
+		}
+		m.activityCursor = 0
+		return m, nil
+
+	case sessionDeletedMsg:
+		if msg.err != nil {
+			m.streamErr = msg.err
+			return m, nil
+		}
+		remaining := make([]adapter.Session, 0, len(m.sessions))
+		for _, s := range m.sessions {
+			if s.Key != msg.key {
+				remaining = append(remaining, s)
+			}
+		}
+		m.sessions = remaining
+		if len(remaining) > 0 {
+			if m.activeSessionIdx >= len(remaining) {
+				m.activeSessionIdx = len(remaining) - 1
+			}
+			m.activeSessionKey = remaining[m.activeSessionIdx].Key
+		} else {
+			fw := m.currentAgentFramework()
+			defaultKey := "agent:main:main"
+			if fw == "zeroclaw" {
+				defaultKey = "main"
+			}
+			m.activeSessionKey = defaultKey
+			m.activeSessionIdx = 0
+		}
+		m.sessionMessages = nil
+		m.chatLocalMsgs = nil
+		return m, m.loadSessionMessages()
 	}
 
 	return m, nil
 }
 
 func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.activeTab == tabActivity && m.chatEditing {
+		return m.handleChatInput(msg)
+	}
+	if m.activeTab == tabActivity && m.creatingSession {
+		return m.handleNewSessionInput(msg)
+	}
+
 	key := msg.String()
 
 	switch key {
@@ -214,14 +330,67 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.handleDown()
 
 	case "enter":
-		if m.activeTab == tabActivity && len(m.activityEvents) > 0 {
+		if m.activeTab == tabActivity {
+			total := len(m.sessionMessages) + len(m.chatLocalMsgs)
 			absIdx := m.activityScroll + m.activityCursor
-			if absIdx < len(m.activityEvents) && m.activityEvents[absIdx].Type == "chat" {
+			if absIdx < total {
 				if m.expandedActivity == absIdx {
 					m.expandedActivity = -1
 				} else {
 					m.expandedActivity = absIdx
 				}
+			}
+		}
+
+	case "i":
+		activeReadOnly := m.activeSessionIdx < len(m.sessions) && m.sessions[m.activeSessionIdx].ReadOnly
+		if m.activeTab == tabActivity && !m.chatSending && !activeReadOnly {
+			m.chatEditing = true
+		}
+
+	case "]", "tab":
+		if m.activeTab == tabActivity && len(m.sessions) > 1 {
+			m.activeSessionIdx = (m.activeSessionIdx + 1) % len(m.sessions)
+			m.activeSessionKey = m.sessions[m.activeSessionIdx].Key
+			m.sessionMessages = nil
+			m.chatLocalMsgs = nil
+			m.activityScroll = 0
+			m.activityCursor = 0
+			m.expandedActivity = -1
+			return m, m.loadSessionMessages()
+		}
+
+	case "[", "shift+tab":
+		if m.activeTab == tabActivity && len(m.sessions) > 1 {
+			m.activeSessionIdx--
+			if m.activeSessionIdx < 0 {
+				m.activeSessionIdx = len(m.sessions) - 1
+			}
+			m.activeSessionKey = m.sessions[m.activeSessionIdx].Key
+			m.sessionMessages = nil
+			m.chatLocalMsgs = nil
+			m.activityScroll = 0
+			m.activityCursor = 0
+			m.expandedActivity = -1
+			return m, m.loadSessionMessages()
+		}
+
+	case "n":
+		if m.activeTab == tabActivity && m.currentAgentFramework() != "zeroclaw" {
+			m.creatingSession = true
+			m.newSessionName = ""
+		}
+
+	case "d":
+		if m.activeTab == tabActivity && m.currentAgentFramework() != "zeroclaw" && len(m.sessions) > 0 {
+			cur := m.sessions[m.activeSessionIdx]
+			fw := m.currentAgentFramework()
+			defaultKey := "agent:main:main"
+			if fw == "zeroclaw" {
+				defaultKey = "main"
+			}
+			if cur.Key != defaultKey {
+				return m, m.deleteCurrentSession()
 			}
 		}
 
@@ -245,6 +414,87 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 
 	return m, nil
+}
+
+func (m *Model) handleNewSessionInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+	switch key {
+	case "esc":
+		m.creatingSession = false
+		m.newSessionName = ""
+		return m, nil
+	case "ctrl+c":
+		m.cancelStream()
+		return m, tea.Quit
+	case "enter":
+		name := strings.TrimSpace(m.newSessionName)
+		if name == "" {
+			m.creatingSession = false
+			return m, nil
+		}
+		name = strings.ToLower(strings.ReplaceAll(name, " ", "-"))
+		sessionKey := "agent:main:" + name
+		m.sessions = append(m.sessions, adapter.Session{Key: sessionKey, Title: name})
+		m.activeSessionIdx = len(m.sessions) - 1
+		m.activeSessionKey = sessionKey
+		m.sessionMessages = nil
+		m.chatLocalMsgs = nil
+		m.activityScroll = 0
+		m.activityCursor = 0
+		m.creatingSession = false
+		m.newSessionName = ""
+		return m, m.loadSessionMessages()
+	case "backspace":
+		if len(m.newSessionName) > 0 {
+			m.newSessionName = m.newSessionName[:len(m.newSessionName)-1]
+		}
+		return m, nil
+	default:
+		if len(key) == 1 || key == " " {
+			m.newSessionName += key
+		}
+		return m, nil
+	}
+}
+
+func (m *Model) handleChatInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	key := msg.String()
+
+	switch key {
+	case "esc":
+		m.chatEditing = false
+		return m, nil
+	case "ctrl+c":
+		m.cancelStream()
+		return m, tea.Quit
+	case "enter":
+		text := strings.TrimSpace(m.chatInput)
+		if text == "" || m.chatSending {
+			return m, nil
+		}
+		m.chatInput = ""
+		m.chatSending = true
+		m.chatEditing = false
+		m.chatLocalMsgs = append(m.chatLocalMsgs, chatEntry{
+			Role: "user", Content: text, Time: time.Now(),
+		})
+		total := len(m.sessionMessages) + len(m.chatLocalMsgs)
+		h := m.detailContentHeight() - 3
+		if total > h {
+			m.activityScroll = total - h
+		}
+		return m, m.sendChatMessage(text)
+	case "backspace":
+		if len(m.chatInput) > 0 {
+			m.chatInput = m.chatInput[:len(m.chatInput)-1]
+		}
+		return m, nil
+	default:
+		if len(key) == 1 || key == " " {
+			m.chatInput += key
+		}
+		return m, nil
+	}
 }
 
 func (m *Model) handleUp() tea.Cmd {
@@ -278,9 +528,10 @@ func (m *Model) handleDown() tea.Cmd {
 		}
 		return nil
 	case tabActivity:
-		h := m.detailContentHeight()
+		total := len(m.sessionMessages) + len(m.chatLocalMsgs)
+		h := m.detailContentHeight() - 3
 		absIdx := m.activityScroll + m.activityCursor
-		if absIdx < len(m.activityEvents)-1 {
+		if absIdx < total-1 {
 			if m.activityCursor < h-1 {
 				m.activityCursor++
 			} else {
@@ -307,6 +558,8 @@ func (m *Model) switchTab(tab int) tea.Cmd {
 	m.cancelStream()
 	m.activeTab = tab
 	m.streamErr = nil
+	m.chatEditing = false
+	m.creatingSession = false
 
 	switch tab {
 	case tabLogs:
@@ -314,11 +567,14 @@ func (m *Model) switchTab(tab int) tea.Cmd {
 		m.logScroll = 0
 		return m.startLogStream()
 	case tabActivity:
-		m.activityEvents = nil
 		m.activityScroll = 0
 		m.activityCursor = 0
 		m.expandedActivity = -1
-		return m.startActivityStream()
+		m.chatLocalMsgs = nil
+		m.chatInput = ""
+		m.chatSending = false
+		m.sessionMessages = nil
+		return m.loadSessions()
 	}
 
 	return nil
@@ -328,17 +584,26 @@ func (m *Model) onAgentChanged() tea.Cmd {
 	m.cancelStream()
 	m.streamErr = nil
 
+	m.chatInput = ""
+	m.chatSending = false
+	m.chatEditing = false
+	m.chatLocalMsgs = nil
+	m.creatingSession = false
+	m.sessions = nil
+	m.sessionMessages = nil
+	m.activeSessionKey = ""
+	m.activeSessionIdx = 0
+
 	switch m.activeTab {
 	case tabLogs:
 		m.logEntries = nil
 		m.logScroll = 0
 		return m.startLogStream()
 	case tabActivity:
-		m.activityEvents = nil
 		m.activityScroll = 0
 		m.activityCursor = 0
 		m.expandedActivity = -1
-		return m.startActivityStream()
+		return m.loadSessions()
 	}
 
 	return nil
@@ -351,11 +616,88 @@ func (m *Model) cancelStream() {
 	}
 }
 
+func (m *Model) loadSessions() tea.Cmd {
+	agent := m.currentAgent()
+	if agent == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		sessions, err := agent.Sessions(ctx)
+		if err != nil || sessions == nil {
+			fw := ""
+			if agent != nil {
+				fw = agent.Framework()
+			}
+			defaultKey := "agent:main:main"
+			if fw == "zeroclaw" {
+				defaultKey = "main"
+			}
+			return sessionsLoadedMsg{sessions: []adapter.Session{
+				{Key: defaultKey, Title: "main"},
+			}}
+		}
+		return sessionsLoadedMsg{sessions: sessions}
+	}
+}
+
+func (m *Model) loadSessionMessages() tea.Cmd {
+	agent := m.currentAgent()
+	if agent == nil {
+		return nil
+	}
+	key := m.activeSessionKey
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		msgs, err := agent.ChatHistory(ctx, key, 100)
+		return sessionMessagesMsg{messages: msgs, err: err}
+	}
+}
+
+func (m *Model) deleteCurrentSession() tea.Cmd {
+	agent := m.currentAgent()
+	if agent == nil {
+		return nil
+	}
+	key := m.activeSessionKey
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err := agent.DeleteSession(ctx, key)
+		return sessionDeletedMsg{key: key, err: err}
+	}
+}
+
+func (m *Model) sendChatMessage(text string) tea.Cmd {
+	agent := m.currentAgent()
+	if agent == nil {
+		return func() tea.Msg {
+			return chatReplyMsg{err: fmt.Errorf("agent not available")}
+		}
+	}
+	sessionKey := m.activeSessionKey
+	return func() tea.Msg {
+		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+		defer cancel()
+		reply, err := agent.SendMessage(ctx, text, sessionKey)
+		return chatReplyMsg{reply: reply, err: err}
+	}
+}
+
 func (m *Model) currentAgent() adapter.Agent {
 	if m.cursor >= len(m.agents) || !m.agents[m.cursor].Alive {
 		return nil
 	}
 	return discovery.NewAgent(m.agents[m.cursor].Discovered)
+}
+
+func (m *Model) currentAgentFramework() string {
+	if m.cursor >= len(m.agents) {
+		return ""
+	}
+	return m.agents[m.cursor].Discovered.Framework
 }
 
 // startLogStream opens TailLogs and returns a Cmd that reads the first entry.
@@ -386,32 +728,6 @@ func (m *Model) startLogStream() tea.Cmd {
 	}
 }
 
-func (m *Model) startActivityStream() tea.Cmd {
-	agent := m.currentAgent()
-	if agent == nil {
-		return nil
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	m.streamCancel = cancel
-
-	return func() tea.Msg {
-		ch, err := agent.TailActivity(ctx)
-		if err != nil {
-			return streamErrorMsg{err: err}
-		}
-		select {
-		case <-ctx.Done():
-			return streamDoneMsg{}
-		case event, ok := <-ch:
-			if !ok {
-				return streamDoneMsg{}
-			}
-			return activityStreamMsg{event: event, ch: ch, ctx: ctx}
-		}
-	}
-}
-
 // waitForLogEntry returns a Cmd that reads the next entry from the channel.
 func waitForLogEntry(ctx context.Context, ch <-chan adapter.LogEntry) tea.Cmd {
 	return func() tea.Msg {
@@ -423,20 +739,6 @@ func waitForLogEntry(ctx context.Context, ch <-chan adapter.LogEntry) tea.Cmd {
 				return streamDoneMsg{}
 			}
 			return logStreamMsg{entry: entry, ch: ch, ctx: ctx}
-		}
-	}
-}
-
-func waitForActivityEvent(ctx context.Context, ch <-chan adapter.ActivityEvent) tea.Cmd {
-	return func() tea.Msg {
-		select {
-		case <-ctx.Done():
-			return streamDoneMsg{}
-		case event, ok := <-ch:
-			if !ok {
-				return streamDoneMsg{}
-			}
-			return activityStreamMsg{event: event, ch: ch, ctx: ctx}
 		}
 	}
 }
@@ -582,9 +884,23 @@ func (m Model) helpBar() string {
 			helpKey("r") + " refresh  " + helpKey("q") + " quit",
 		}
 	case tabActivity:
-		lines = []string{
-			helpKey("\u2191/\u2193") + " select  " + helpKey("enter") + " expand  " + helpKey("esc") + " collapse  " + tabHelp,
-			helpKey("r") + " refresh  " + helpKey("q") + " quit",
+		if m.chatEditing {
+			lines = []string{
+				helpKey("enter") + " send  " + helpKey("esc") + " cancel",
+			}
+		} else if m.creatingSession {
+			lines = []string{
+				helpKey("enter") + " create  " + helpKey("esc") + " cancel",
+			}
+		} else {
+			sessionHelp := helpKey("[/]") + " session  "
+			if m.currentAgentFramework() != "zeroclaw" {
+				sessionHelp += helpKey("n") + " new  " + helpKey("d") + " delete  "
+			}
+			lines = []string{
+				helpKey("\u2191/\u2193") + " scroll  " + helpKey("enter") + " expand  " + helpKey("i") + " chat  " + tabHelp,
+				sessionHelp + helpKey("r") + " refresh  " + helpKey("q") + " quit",
+			}
 		}
 	}
 
@@ -621,10 +937,10 @@ func (m Model) renderDetailPane(width int) string {
 	switch m.activeTab {
 	case tabStatus:
 		b.WriteString(m.renderStatusContent())
-	case tabLogs:
-		b.WriteString(m.renderLogsContent())
 	case tabActivity:
 		b.WriteString(m.renderActivityContent())
+	case tabLogs:
+		b.WriteString(m.renderLogsContent())
 	}
 
 	return boxStyle.Width(width).Render(b.String())
@@ -741,73 +1057,160 @@ func (m Model) renderActivityContent() string {
 		return m.renderStreamError()
 	}
 
-	if len(m.activityEvents) == 0 {
-		return dimStyle.Render("Waiting for activity events...")
-	}
-
 	var b strings.Builder
-	h := m.detailContentHeight()
-	start := m.activityScroll
-	end := start + h
-	if end > len(m.activityEvents) {
-		end = len(m.activityEvents)
-	}
 
-	for i, ev := range m.activityEvents[start:end] {
-		absIdx := start + i
-		isCursor := (i == m.activityCursor)
-		prefix := "  "
-		if isCursor {
-			prefix = "\u25b8 "
-		}
-
-		if ev.Type == "separator" {
-			sep := renderSeparatorLine(ev.Summary, m.width/2)
-			b.WriteString(sep + "\n")
-			continue
-		}
-
-		ts := ev.Timestamp.Format("15:04:05")
-		var line string
-		if ev.Type == "chat" {
-			line = fmt.Sprintf("%s%s %s", prefix, dimStyle.Render(ts), renderChatSummary(ev.Summary))
-		} else {
-			typeStr := activityTypeStyle(ev.Type).Render(fmt.Sprintf("[%-14s]", ev.Type))
-			line = fmt.Sprintf("%s%s %s %s", prefix, dimStyle.Render(ts), typeStr, ev.Summary)
-		}
-
-		if isCursor {
-			line = selectedStyle.Render(line)
-		}
-		b.WriteString(line + "\n")
-
-		if m.expandedActivity == absIdx && ev.Type == "chat" {
-			content := ev.FullContent
-			if content == "" {
-				content = ev.Summary
+	// Session bar
+	if len(m.sessions) > 0 {
+		var sessionParts []string
+		for i, s := range m.sessions {
+			name := sessionShortName(s.Key)
+			if s.ReadOnly {
+				name = s.Title
 			}
-			content = strings.TrimPrefix(content, "[user] ")
-			content = strings.TrimPrefix(content, "[assistant] ")
-			b.WriteString(renderExpandedContent(content, m.width/2-4))
+			if i == m.activeSessionIdx {
+				if s.ReadOnly {
+					sessionParts = append(sessionParts, dimStyle.Render("["+name+"]"))
+				} else {
+					sessionParts = append(sessionParts, activeTabStyle.Render(name))
+				}
+			} else {
+				if s.ReadOnly {
+					sessionParts = append(sessionParts, dimStyle.Render(name))
+				} else {
+					sessionParts = append(sessionParts, inactiveTabStyle.Render(name))
+				}
+			}
+		}
+		if m.creatingSession {
+			cursor := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("█")
+			sessionParts = append(sessionParts, lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("+ "+m.newSessionName+cursor))
+		} else if m.currentAgentFramework() != "zeroclaw" {
+			sessionParts = append(sessionParts, dimStyle.Render("[+new]"))
+		} else if len(m.sessions) <= 1 {
+			sessionParts = append(sessionParts, dimStyle.Render("(single session)"))
+		}
+		b.WriteString(strings.Join(sessionParts, "  "))
+		b.WriteString("\n\n")
+	}
+
+	isActiveReadOnly := m.activeSessionIdx < len(m.sessions) && m.sessions[m.activeSessionIdx].ReadOnly
+	h := m.detailContentHeight() - 5 // reserve for session bar + input bar
+
+	// Combine session messages + local pending messages
+	type msgItem struct {
+		ts      time.Time
+		role    string
+		content string
+		isLocal bool
+	}
+
+	var items []msgItem
+	for _, msg := range m.sessionMessages {
+		items = append(items, msgItem{ts: msg.Timestamp, role: msg.Role, content: msg.Content})
+	}
+	if len(m.chatLocalMsgs) > 0 && len(m.sessionMessages) > 0 {
+		items = append(items, msgItem{role: "separator", content: "new messages"})
+	}
+	for _, msg := range m.chatLocalMsgs {
+		items = append(items, msgItem{ts: msg.Time, role: msg.Role, content: msg.Content, isLocal: true})
+	}
+
+	if len(items) == 0 && !m.chatSending {
+		if isActiveReadOnly {
+			b.WriteString(dimStyle.Render("No messages in this archived session."))
+		} else {
+			b.WriteString(dimStyle.Render("No messages yet. Press i to chat."))
+		}
+		b.WriteString("\n")
+	} else {
+		start := m.activityScroll
+		end := start + h
+		if end > len(items) {
+			end = len(items)
+		}
+		if start > len(items) {
+			start = len(items)
+		}
+
+		for vi, idx := range makeRange(start, end) {
+			item := items[idx]
+			isCursor := (vi == m.activityCursor)
+			prefix := "  "
+			if isCursor {
+				prefix = "\u25b8 "
+			}
+
+			if item.role == "separator" {
+				sep := renderSeparatorLine(item.content, m.width/2)
+				b.WriteString(sep + "\n")
+				continue
+			}
+
+			ts := item.ts.Format("15:04:05")
+			var line string
+			switch item.role {
+			case "user":
+				role := userRoleStyle.Render("user:")
+				line = fmt.Sprintf("%s%s %s %s", prefix, dimStyle.Render(ts), role, item.content)
+			case "assistant":
+				role := assistantRoleStyle.Render("assistant:")
+				content := item.content
+				maxW := m.width/2 - 20
+				if maxW > 10 && len(content) > maxW {
+					content = content[:maxW] + "..."
+				}
+				line = fmt.Sprintf("%s%s %s %s", prefix, dimStyle.Render(ts), role, content)
+			case "error":
+				errLabel := lipgloss.NewStyle().Foreground(lipgloss.Color("196")).Bold(true).Render("error:")
+				line = fmt.Sprintf("%s%s %s %s", prefix, dimStyle.Render(ts), errLabel, item.content)
+			}
+
+			if isCursor {
+				line = selectedStyle.Render(line)
+			}
+			b.WriteString(line + "\n")
+
+			if m.expandedActivity == idx && len(item.content) > 80 {
+				b.WriteString(renderExpandedContent(item.content, m.width/2-4))
+			}
+		}
+
+		if m.chatSending {
+			thinking := lipgloss.NewStyle().Foreground(lipgloss.Color("141")).Render("  assistant: thinking...")
+			b.WriteString(thinking + "\n")
 		}
 	}
 
-	if len(m.activityEvents) > h {
-		b.WriteString(dimStyle.Render(fmt.Sprintf("\n-- %d/%d --", m.activityScroll+m.activityCursor+1, len(m.activityEvents))))
+	// Pad
+	lines := strings.Count(b.String(), "\n")
+	for lines < h+2 {
+		b.WriteString("\n")
+		lines++
 	}
 
-	if m.cursor < len(m.agents) && m.activityHasOnlyUserChat() {
-		fw := m.agents[m.cursor].Discovered.Framework
-		if fw == "zeroclaw" {
-			b.WriteString("\n\n")
-			b.WriteString(dimStyle.Render(
-				"Only user messages shown. To see bot replies, ensure memory.auto_save = true\n" +
-					"in ZeroClaw config and restart. Older conversations before this feature won't\n" +
-					"have replies stored."))
-		}
+	// Input bar
+	prompt := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Bold(true).Render("> ")
+	b.WriteString("─────────────────────────────\n")
+	if isActiveReadOnly {
+		b.WriteString(dimStyle.Render("  archived session (read-only)"))
+	} else if m.chatEditing {
+		cursor := lipgloss.NewStyle().Foreground(lipgloss.Color("42")).Render("█")
+		b.WriteString(prompt + m.chatInput + cursor)
+	} else if m.chatSending {
+		b.WriteString(dimStyle.Render("  waiting for response..."))
+	} else {
+		b.WriteString(prompt + dimStyle.Render("press i to type"))
 	}
 
 	return b.String()
+}
+
+func sessionShortName(key string) string {
+	parts := strings.Split(key, ":")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return key
 }
 
 func renderSeparatorLine(label string, width int) string {
@@ -858,21 +1261,6 @@ func wrapText(s string, width int) []string {
 	return lines
 }
 
-func (m Model) activityHasOnlyUserChat() bool {
-	hasUser := false
-	for _, ev := range m.activityEvents {
-		if ev.Type != "chat" {
-			continue
-		}
-		if strings.HasPrefix(ev.Summary, "[assistant]") {
-			return false
-		}
-		if strings.HasPrefix(ev.Summary, "[user]") {
-			hasUser = true
-		}
-	}
-	return hasUser
-}
 
 func (m Model) renderStreamError() string {
 	var b strings.Builder
@@ -1015,36 +1403,6 @@ func logLevelStyle(level string) lipgloss.Style {
 	}
 }
 
-func activityTypeStyle(typ string) lipgloss.Style {
-	switch typ {
-	case "agent_start":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("86"))
-	case "agent_end":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("99"))
-	case "tool_call", "tool_call_start":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
-	case "llm_request":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("117"))
-	case "error":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("196"))
-	case "chat":
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("42"))
-	default:
-		return lipgloss.NewStyle().Foreground(lipgloss.Color("242"))
-	}
-}
-
-// renderChatSummary applies role-based coloring to chat activity summaries
-// with the format "[role] message content".
-func renderChatSummary(summary string) string {
-	if strings.HasPrefix(summary, "[user] ") {
-		return userRoleStyle.Render("user:") + " " + strings.TrimPrefix(summary, "[user] ")
-	}
-	if strings.HasPrefix(summary, "[assistant] ") {
-		return assistantRoleStyle.Render("assistant:") + " " + strings.TrimPrefix(summary, "[assistant] ")
-	}
-	return summary
-}
 
 func formatMemory(bytes uint64) string {
 	if bytes == 0 {
@@ -1099,6 +1457,14 @@ func timeAgo(t time.Time) string {
 	default:
 		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
 	}
+}
+
+func makeRange(start, end int) []int {
+	r := make([]int, 0, end-start)
+	for i := start; i < end; i++ {
+		r = append(r, i)
+	}
+	return r
 }
 
 func appendCapped[T any](s []T, item T, maxSize int) []T {

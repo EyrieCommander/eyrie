@@ -110,6 +110,55 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", name)})
 }
 
+func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+	defer cancel()
+
+	agent, err := s.findAgent(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var body struct {
+		Message    string `json:"message"`
+		SessionKey string `json:"session_key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing or invalid 'message' field"})
+		return
+	}
+
+	reply, err := agent.SendMessage(ctx, body.Message, body.SessionKey)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, reply)
+}
+
+func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionKey := r.PathValue("session")
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	agent, err := s.findAgent(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := agent.DeleteSession(ctx, sessionKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) findAgent(ctx context.Context, name string) (adapter.Agent, error) {
 	result := s.runDiscovery(ctx)
 	for _, ar := range result.Agents {

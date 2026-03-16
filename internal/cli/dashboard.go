@@ -18,6 +18,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var dashboardNoOpen bool
+
 var dashboardCmd = &cobra.Command{
 	Use:   "dashboard",
 	Short: "Start the Eyrie web dashboard",
@@ -25,6 +27,7 @@ var dashboardCmd = &cobra.Command{
 }
 
 func init() {
+	dashboardCmd.Flags().BoolVar(&dashboardNoOpen, "no-open", false, "Don't open the browser automatically")
 	rootCmd.AddCommand(dashboardCmd)
 }
 
@@ -38,7 +41,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	if isEyrieDashboardRunning(cfg.Dashboard.Host, cfg.Dashboard.Port) {
 		fmt.Printf("Dashboard already running at %s\n", url)
-		if cfg.Dashboard.OpenBrowser {
+		if cfg.Dashboard.OpenBrowser && !dashboardNoOpen {
 			openBrowser(url)
 		}
 		return nil
@@ -46,7 +49,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	srv := server.New(cfg)
 
-	if cfg.Dashboard.OpenBrowser {
+	if cfg.Dashboard.OpenBrowser && !dashboardNoOpen {
 		go openBrowser(url)
 	}
 
@@ -55,14 +58,18 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	go func() {
 		<-ctx.Done()
-		slog.Info("Shutting down dashboard...")
+		if !dashboardNoOpen {
+			slog.Info("Shutting down dashboard...")
+		}
 		if err := srv.Shutdown(context.Background()); err != nil {
 			slog.Error("shutdown error", "error", err)
 		}
 	}()
 
-	fmt.Printf("Eyrie dashboard: %s\n", url)
-	fmt.Println("Press Ctrl+C to stop.")
+	if !dashboardNoOpen {
+		fmt.Printf("Eyrie dashboard: %s\n", url)
+		fmt.Println("Press Ctrl+C to stop.")
+	}
 
 	if err := srv.Start(); err != nil && ctx.Err() == nil {
 		return err

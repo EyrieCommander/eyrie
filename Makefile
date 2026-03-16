@@ -3,13 +3,31 @@ BUILD_DIR := bin
 VERSION := 0.1.0
 LDFLAGS := -ldflags "-X github.com/natalie/eyrie/internal/config.Version=$(VERSION)"
 
-.PHONY: build dev clean test lint web install
+.PHONY: build dev dev-go dev-web clean test lint web install
 
 build: web embed
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/eyrie
 
-dev:
-	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/eyrie
+# Run both Go (air) and Vite dev servers. Ctrl-C stops both.
+dev: dev-static
+	@trap 'kill 0' EXIT; \
+	cd web && npm run dev & \
+	cd $(CURDIR) && $(HOME)/go/bin/air & \
+	wait
+
+# Run only the Go backend with auto-reload
+dev-go: dev-static
+	$(HOME)/go/bin/air
+
+# Run only the Vite frontend dev server
+dev-web:
+	cd web && npm run dev
+
+# Ensure static dir has a placeholder so //go:embed compiles in dev mode
+dev-static:
+	@mkdir -p internal/server/static
+	@test -f internal/server/static/index.html || \
+		echo '<!doctype html><html><body>Use Vite dev server</body></html>' > internal/server/static/index.html
 
 web:
 	@if [ -d web/node_modules ]; then \

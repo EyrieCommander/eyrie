@@ -71,6 +71,7 @@ func (z *ZeroClawAdapter) Health(ctx context.Context) (*HealthStatus, error) {
 	if resp.Runtime != nil {
 		hs.PID = resp.Runtime.PID
 		hs.Uptime = time.Duration(resp.Runtime.Uptime) * time.Second
+		hs.RAM, hs.CPU, _ = processStats(hs.PID)
 		for name, c := range resp.Runtime.Components {
 			ch := ComponentHealth{
 				Status:       c.Status,
@@ -92,21 +93,27 @@ func (z *ZeroClawAdapter) Health(ctx context.Context) (*HealthStatus, error) {
 
 func (z *ZeroClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 	var resp struct {
-		Provider    string   `json:"provider"`
-		Model       string   `json:"model"`
-		Channels    []string `json:"channels"`
-		GatewayPort int      `json:"gateway_port"`
-		Uptime      int      `json:"uptime_seconds"`
+		Provider    string          `json:"provider"`
+		Model       string          `json:"model"`
+		Channels    map[string]bool `json:"channels"`
+		GatewayPort int             `json:"gateway_port"`
 	}
 
 	if err := z.getJSON(ctx, "/api/status", &resp); err != nil {
 		return nil, err
 	}
 
+	var channels []string
+	for name, enabled := range resp.Channels {
+		if enabled {
+			channels = append(channels, name)
+		}
+	}
+
 	return &AgentStatus{
 		Provider:    resp.Provider,
 		Model:       resp.Model,
-		Channels:    resp.Channels,
+		Channels:    channels,
 		GatewayPort: resp.GatewayPort,
 	}, nil
 }
@@ -528,6 +535,55 @@ func (z *ZeroClawAdapter) fetchMemoryEntries(ctx context.Context) ([]zcMemoryEnt
 		filtered = append(filtered, *e)
 	}
 	return filtered, nil
+}
+
+func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, _ string) (*ChatMessage, error) {
+	payload, _ := json.Marshal(map[string]string{"message": message})
+	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/webhook", strings.NewReader(string(payload)))
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if z.token != "" {
+		req.Header.Set("Authorization", "Bearer "+z.token)
+	}
+
+	chatClient := &http.Client{Timeout: 120 * time.Second}
+	resp, err := chatClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("sending message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("webhook returned %d: %s", resp.StatusCode, string(data))
+	}
+
+	var result struct {
+		Response string `json:"response"`
+		Error    string `json:"error"`
+	}
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("parsing response: %w", err)
+	}
+	if result.Error != "" {
+		return nil, fmt.Errorf("agent error: %s", result.Error)
+	}
+
+	return &ChatMessage{
+		Timestamp: time.Now(),
+		Role:      "assistant",
+		Content:   result.Response,
+	}, nil
+}
+
+func (z *ZeroClawAdapter) DeleteSession(_ context.Context, _ string) error {
+	return fmt.Errorf("session deletion not supported for ZeroClaw")
 }
 
 func (z *ZeroClawAdapter) Personality(ctx context.Context) (*Personality, error) {

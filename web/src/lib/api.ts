@@ -14,12 +14,23 @@ export async function fetchAgents(): Promise<AgentInfo[]> {
   return res.json();
 }
 
-export async function fetchAgentConfig(name: string): Promise<string> {
+export interface AgentConfig {
+  content: string;
+  format: string;
+}
+
+export async function fetchAgentConfig(name: string): Promise<AgentConfig> {
   const res = await fetch(`${BASE}/api/agents/${name}/config`);
   if (!res.ok)
     throw new Error(`Failed to fetch config: ${res.statusText}`);
   const data = await res.json();
-  return data.raw;
+  const format = data.format || "text";
+  try {
+    const parsed = JSON.parse(data.raw);
+    return { content: parsed.content ?? data.raw, format };
+  } catch {
+    return { content: data.raw, format };
+  }
 }
 
 export async function agentAction(
@@ -70,6 +81,23 @@ export function streamActivity(
   return () => es.close();
 }
 
+export async function sendMessage(
+  name: string,
+  message: string,
+  sessionKey?: string,
+): Promise<ChatMessage> {
+  const res = await fetch(`${BASE}/api/agents/${name}/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, session_key: sessionKey }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to send message: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function fetchSessions(
   name: string,
 ): Promise<SessionsResponse> {
@@ -90,4 +118,18 @@ export async function fetchChatMessages(
   if (!res.ok)
     throw new Error(`Failed to fetch messages: ${res.statusText}`);
   return res.json();
+}
+
+export async function deleteSession(
+  name: string,
+  sessionKey: string,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to delete session: ${res.statusText}`);
+  }
 }

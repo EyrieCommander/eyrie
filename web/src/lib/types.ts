@@ -12,6 +12,7 @@ export interface HealthStatus {
   alive: boolean;
   uptime: number;
   ram_bytes: number;
+  cpu_percent: number;
   pid: number;
   components?: Record<string, ComponentHealth>;
 }
@@ -50,6 +51,7 @@ export interface Session {
   title: string;
   last_message?: string;
   channel?: string;
+  readonly?: boolean;
 }
 
 export interface SessionsResponse {
