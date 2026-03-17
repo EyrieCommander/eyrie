@@ -8,3 +8,6 @@ internal/server/static/
 *.so
 *.dylib
 .DS_Store
+backup/
+.nvmrc
+.cursor/

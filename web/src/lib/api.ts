@@ -4,6 +4,7 @@ import type {
   ActivityEvent,
   SessionsResponse,
   ChatMessage,
+  ChatEvent,
 } from "./types";
 
 const BASE = "";
@@ -81,21 +82,69 @@ export function streamActivity(
   return () => es.close();
 }
 
-export async function sendMessage(
+export function streamMessage(
   name: string,
   message: string,
-  sessionKey?: string,
-): Promise<ChatMessage> {
-  const res = await fetch(`${BASE}/api/agents/${name}/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ message, session_key: sessionKey }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to send message: ${res.statusText}`);
-  }
-  return res.json();
+  sessionKey: string | undefined,
+  onEvent: (event: ChatEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/agents/${name}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, session_key: sessionKey }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({
+          type: "error",
+          error: body.error || `Failed to send message: ${res.statusText}`,
+        });
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          buffer += decoder.decode(value, { stream: true });
+        } else {
+          buffer += decoder.decode();
+        }
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              onEvent(JSON.parse(line.slice(6)));
+            } catch {
+              // skip malformed SSE lines
+            }
+          }
+        }
+        if (done) {
+          if (buffer.startsWith("data: ")) {
+            try {
+              onEvent(JSON.parse(buffer.slice(6)));
+            } catch { /* skip */ }
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({
+          type: "error",
+          error: e instanceof Error ? e.message : "Stream failed",
+        });
+      }
+    }
+  })();
+  return controller;
 }
 
 export async function fetchSessions(
@@ -120,7 +169,7 @@ export async function fetchChatMessages(
   return res.json();
 }
 
-export async function deleteSession(
+export async function resetSession(
   name: string,
   sessionKey: string,
 ): Promise<void> {
@@ -130,6 +179,34 @@ export async function deleteSession(
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to delete session: ${res.statusText}`);
+    throw new Error(body.error || `Failed to reset session: ${res.statusText}`);
+  }
+}
+
+export async function purgeSession(
+  name: string,
+  sessionKey: string,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/purge`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to purge session: ${res.statusText}`);
+  }
+}
+
+export async function hideSession(
+  name: string,
+  sessionKey: string,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/hide`,
+    { method: "POST" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to hide session: ${res.statusText}`);
   }
 }

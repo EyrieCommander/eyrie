@@ -107,6 +107,16 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.hidden != nil {
+		filtered := sessions[:0]
+		for _, sess := range sessions {
+			if !s.hidden.IsHidden(name, sess.Key) {
+				filtered = append(filtered, sess)
+			}
+		}
+		sessions = filtered
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"supported": true,
 		"sessions":  sessions,

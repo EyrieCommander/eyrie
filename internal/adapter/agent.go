@@ -41,8 +41,15 @@ type Agent interface {
 	// sessionKey identifies the conversation (e.g. "agent:main:main"); empty means default.
 	SendMessage(ctx context.Context, message, sessionKey string) (*ChatMessage, error)
 
-	// DeleteSession resets/removes a conversation session.
+	// StreamMessage sends a message and streams the response as ChatEvent values.
+	// The channel is closed when the response is complete (after a "done" or "error" event).
+	StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error)
+
+	// DeleteSession resets/removes a conversation session (archives the transcript).
 	DeleteSession(ctx context.Context, sessionKey string) error
+
+	// PurgeSession permanently removes an archived session file from disk.
+	PurgeSession(ctx context.Context, sessionKey string) error
 
 	// Personality
 	Personality(ctx context.Context) (*Personality, error)
@@ -111,10 +118,34 @@ type Session struct {
 }
 
 type ChatMessage struct {
-	Timestamp time.Time `json:"timestamp"`
-	Role      string    `json:"role"` // "user", "assistant"
-	Content   string    `json:"content"`
-	Channel   string    `json:"channel,omitempty"`
+	Timestamp time.Time      `json:"timestamp"`
+	Role      string         `json:"role"` // "user", "assistant"
+	Content   string         `json:"content"`
+	Channel   string         `json:"channel,omitempty"`
+	Parts     []ChatPart     `json:"parts,omitempty"`
+}
+
+// ChatPart is an ordered content element within a message.
+// Type is "text" or "tool_call".
+type ChatPart struct {
+	Type   string         `json:"type"`
+	Text   string         `json:"text,omitempty"`
+	ID     string         `json:"id,omitempty"`
+	Name   string         `json:"name,omitempty"`
+	Args   map[string]any `json:"args,omitempty"`
+	Output string         `json:"output,omitempty"`
+	Error  bool           `json:"error,omitempty"`
+}
+
+type ChatEvent struct {
+	Type    string         `json:"type"` // "delta", "tool_start", "tool_result", "done", "error"
+	Content string         `json:"content,omitempty"`
+	Tool    string         `json:"tool,omitempty"`
+	ToolID  string         `json:"tool_id,omitempty"`
+	Args    map[string]any `json:"args,omitempty"`
+	Output  string         `json:"output,omitempty"`
+	Success *bool          `json:"success,omitempty"`
+	Error   string         `json:"error,omitempty"`
 }
 
 // DiscoveredAgent holds the result of auto-discovery before a full adapter is created.

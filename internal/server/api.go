@@ -130,13 +130,23 @@ func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	reply, err := agent.SendMessage(ctx, body.Message, body.SessionKey)
+	eventCh, err := agent.StreamMessage(ctx, body.Message, body.SessionKey)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, reply)
+	flusher, ok := startSSE(w)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+		return
+	}
+
+	for ev := range eventCh {
+		data, _ := json.Marshal(ev)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
@@ -152,6 +162,60 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := agent.DeleteSession(ctx, sessionKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionKey := r.PathValue("session")
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	agent, err := s.findAgent(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := agent.PurgeSession(ctx, sessionKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleHideSession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionKey := r.PathValue("session")
+
+	if s.hidden == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "hidden store not available"})
+		return
+	}
+
+	if err := s.hidden.Hide(name, sessionKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleUnhideSession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionKey := r.PathValue("session")
+
+	if s.hidden == nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "hidden store not available"})
+		return
+	}
+
+	if err := s.hidden.Unhide(name, sessionKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

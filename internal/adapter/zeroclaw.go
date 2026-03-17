@@ -11,6 +11,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"nhooyr.io/websocket"
 )
 
 // ZeroClawAdapter communicates with a ZeroClaw instance via its HTTP REST gateway.
@@ -582,8 +584,101 @@ func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, _ string) (*
 	}, nil
 }
 
+func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, _ string) (<-chan ChatEvent, error) {
+	wsURL := strings.Replace(z.baseURL, "http://", "ws://", 1)
+	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
+	wsURL += "/ws/chat"
+	if z.token != "" {
+		wsURL += "?token=" + z.token
+	}
+
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("connecting to ZeroClaw WS: %w", err)
+	}
+	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB
+
+	outgoing, _ := json.Marshal(map[string]string{
+		"type":    "message",
+		"content": message,
+	})
+	if err := conn.Write(ctx, websocket.MessageText, outgoing); err != nil {
+		conn.CloseNow()
+		return nil, fmt.Errorf("sending WS message: %w", err)
+	}
+
+	ch := make(chan ChatEvent, 64)
+	go z.readStreamWS(ctx, conn, ch)
+	return ch, nil
+}
+
+func (z *ZeroClawAdapter) readStreamWS(ctx context.Context, conn *websocket.Conn, ch chan<- ChatEvent) {
+	defer close(ch)
+	defer conn.CloseNow()
+
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			return
+		}
+
+		var frame map[string]any
+		if json.Unmarshal(data, &frame) != nil {
+			continue
+		}
+
+		frameType, _ := frame["type"].(string)
+		var ev ChatEvent
+
+		switch frameType {
+		case "chunk":
+			content, _ := frame["content"].(string)
+			ev = ChatEvent{Type: "delta", Content: content}
+		case "tool_call":
+			name, _ := frame["name"].(string)
+			var args map[string]any
+			if a, ok := frame["args"].(map[string]any); ok {
+				args = a
+			}
+			ev = ChatEvent{Type: "tool_start", Tool: name, Args: args}
+		case "tool_result":
+			name, _ := frame["name"].(string)
+			output, _ := frame["output"].(string)
+			ev = ChatEvent{Type: "tool_result", Tool: name, Output: output}
+		case "done":
+			content, _ := frame["full_response"].(string)
+			ev = ChatEvent{Type: "done", Content: content}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+			}
+			return
+		case "error":
+			msg, _ := frame["message"].(string)
+			ev = ChatEvent{Type: "error", Error: msg}
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+			}
+			return
+		default:
+			continue
+		}
+
+		select {
+		case ch <- ev:
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func (z *ZeroClawAdapter) DeleteSession(_ context.Context, _ string) error {
 	return fmt.Errorf("session deletion not supported for ZeroClaw")
+}
+
+func (z *ZeroClawAdapter) PurgeSession(_ context.Context, _ string) error {
+	return fmt.Errorf("session purge not supported for ZeroClaw")
 }
 
 func (z *ZeroClawAdapter) Personality(ctx context.Context) (*Personality, error) {

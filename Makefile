@@ -29,9 +29,15 @@ dev-static:
 	@test -f internal/server/static/index.html || \
 		echo '<!doctype html><html><body>Use Vite dev server</body></html>' > internal/server/static/index.html
 
+NODE22_BIN := $(firstword $(wildcard $(HOME)/.nvm/versions/node/v22.*/bin))
+
 web:
 	@if [ -d web/node_modules ]; then \
-		cd web && npm run build; \
+		if [ -n "$(NODE22_BIN)" ]; then \
+			cd web && PATH="$(NODE22_BIN):$$PATH" npm run build; \
+		else \
+			cd web && npm run build; \
+		fi; \
 	else \
 		echo "Skipping web build (run 'cd web && npm install' first)"; \
 		mkdir -p web/dist && echo '<!doctype html><html><body>Dashboard not built</body></html>' > web/dist/index.html; \

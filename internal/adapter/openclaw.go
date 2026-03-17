@@ -107,11 +107,10 @@ func (o *OpenClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 				}
 			}
 		}
-		return as, nil
 	}
 
-	// Fallback: extract status from config file
-	if o.configPath != "" {
+	// Fill gaps from config file when RPC didn't provide values
+	if (as.Provider == "" || as.Model == "" || len(as.Channels) == 0) && o.configPath != "" {
 		if data, err := os.ReadFile(o.configPath); err == nil {
 			var cfg struct {
 				Agents struct {
@@ -125,14 +124,18 @@ func (o *OpenClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 			}
 			if json.Unmarshal(data, &cfg) == nil {
 				model := cfg.Agents.Defaults.Model.Primary
-				if model != "" {
+				if model != "" && as.Model == "" {
 					as.Model = model
+				}
+				if as.Provider == "" && model != "" {
 					if idx := strings.Index(model, "/"); idx > 0 {
 						as.Provider = model[:idx]
 					}
 				}
-				for ch := range cfg.Channels {
-					as.Channels = append(as.Channels, ch)
+				if len(as.Channels) == 0 {
+					for ch := range cfg.Channels {
+						as.Channels = append(as.Channels, ch)
+					}
 				}
 			}
 		}
@@ -485,6 +488,14 @@ func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
 			sessions = append(sessions, s)
 		}
 
+		// Merge active IDs into the persisted mapping so we remember
+		// which session key owned each UUID even after resets.
+		knownIDs := loadSessionIDMap()
+		for id, key := range activeSessionIDs {
+			knownIDs[id] = key
+		}
+		saveSessionIDMap(knownIDs)
+
 		// Scan for archived .reset. files and surface them as read-only sessions.
 		// File pattern: <sessionID>.jsonl.reset.<ISO timestamp>
 		sessFiles, _ := os.ReadDir(sessDir)
@@ -507,14 +518,14 @@ func (o *OpenClawAdapter) Sessions(_ context.Context) ([]Session, error) {
 				resetTime, _ = time.Parse("2006-01-02T15-04-05Z", resetTimestamp)
 			}
 
-			parentKey := activeSessionIDs[archivedID]
+			// Look up the parent session key: first from the persisted mapping
+			// (survives resets), then fall back to active sessions.
+			parentKey := knownIDs[archivedID]
 			if parentKey == "" {
-				// Archived session from an ID we no longer track — look for
-				// any active session in the same agent dir (most likely main)
-				for _, k := range activeSessionIDs {
-					parentKey = k
-					break
-				}
+				parentKey = activeSessionIDs[archivedID]
+			}
+			if parentKey == "" {
+				parentKey = "main"
 			}
 
 			archiveKey := "archive:" + name
@@ -580,8 +591,11 @@ func (o *OpenClawAdapter) ChatHistory(_ context.Context, sessionKey string, limi
 			Type      string `json:"type"`
 			Timestamp string `json:"timestamp"`
 			Message   struct {
-				Role    string `json:"role"`
-				Content any    `json:"content"`
+				Role       string `json:"role"`
+				Content    any    `json:"content"`
+				ToolCallID string `json:"toolCallId"`
+				ToolName   string `json:"toolName"`
+				IsError    bool   `json:"isError"`
 			} `json:"message"`
 		}
 		if json.Unmarshal(scanner.Bytes(), &entry) != nil {
@@ -590,14 +604,68 @@ func (o *OpenClawAdapter) ChatHistory(_ context.Context, sessionKey string, limi
 		if entry.Type != "message" {
 			continue
 		}
+
 		role := entry.Message.Role
+
+		if role == "toolResult" {
+			if len(messages) == 0 {
+				continue
+			}
+			last := &messages[len(messages)-1]
+			if last.Role != "assistant" {
+				continue
+			}
+			resultText := extractTextContent(entry.Message.Content)
+			for i := range last.Parts {
+				if last.Parts[i].Type == "tool_call" && last.Parts[i].ID == entry.Message.ToolCallID {
+					last.Parts[i].Output = resultText
+					last.Parts[i].Error = entry.Message.IsError
+					break
+				}
+			}
+			continue
+		}
+
 		if role != "user" && role != "assistant" {
 			continue
 		}
 
 		content := cleanOpenClawContent(role, extractTextContent(entry.Message.Content))
-		if content == "" {
+
+		var toolParts []ChatPart
+		if role == "assistant" {
+			toolParts = extractToolCallParts(entry.Message.Content)
+		}
+
+		if content == "" && len(toolParts) == 0 {
 			continue
+		}
+
+		// Build ordered parts for this entry: text first (if any), then tool calls.
+		var entryParts []ChatPart
+		if role == "assistant" {
+			if content != "" {
+				entryParts = append(entryParts, ChatPart{Type: "text", Text: content})
+			}
+			entryParts = append(entryParts, toolParts...)
+		}
+
+		// Merge consecutive assistant entries into one message so that
+		// multi-step tool-call sequences appear as a single grouped message
+		// with parts in temporal order.
+		if role == "assistant" && len(messages) > 0 {
+			last := &messages[len(messages)-1]
+			if last.Role == "assistant" {
+				last.Parts = append(last.Parts, entryParts...)
+				if content != "" {
+					if last.Content != "" {
+						last.Content += "\n" + content
+					} else {
+						last.Content = content
+					}
+				}
+				continue
+			}
 		}
 
 		var ts time.Time
@@ -609,6 +677,7 @@ func (o *OpenClawAdapter) ChatHistory(_ context.Context, sessionKey string, limi
 			Timestamp: ts,
 			Role:      role,
 			Content:   content,
+			Parts:     entryParts,
 		})
 	}
 
@@ -707,6 +776,79 @@ func extractTextContent(content any) string {
 			}
 		}
 		return joinNonEmpty(parts)
+	}
+	return ""
+}
+
+func extractToolCallParts(content any) []ChatPart {
+	arr, ok := content.([]any)
+	if !ok {
+		return nil
+	}
+	var parts []ChatPart
+	for _, item := range arr {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if m["type"] != "toolCall" {
+			continue
+		}
+		p := ChatPart{
+			Type: "tool_call",
+			Name: strVal(m, "name"),
+			ID:   strVal(m, "id"),
+		}
+		if args, ok := m["arguments"].(map[string]any); ok {
+			p.Args = args
+		}
+		parts = append(parts, p)
+	}
+	return parts
+}
+
+// sessionIDMapPath returns ~/.eyrie/session_ids.json.
+func sessionIDMapPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".eyrie", "session_ids.json")
+}
+
+func loadSessionIDMap() map[string]string {
+	p := sessionIDMapPath()
+	if p == "" {
+		return make(map[string]string)
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return make(map[string]string)
+	}
+	var m map[string]string
+	if json.Unmarshal(data, &m) != nil {
+		return make(map[string]string)
+	}
+	return m
+}
+
+func saveSessionIDMap(m map[string]string) {
+	p := sessionIDMapPath()
+	if p == "" {
+		return
+	}
+	dir := filepath.Dir(p)
+	os.MkdirAll(dir, 0700)
+	data, err := json.Marshal(m)
+	if err != nil {
+		return
+	}
+	os.WriteFile(p, data, 0600)
+}
+
+func strVal(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
 	}
 	return ""
 }
@@ -829,12 +971,193 @@ func (o *OpenClawAdapter) SendMessage(ctx context.Context, message, sessionKey s
 	}
 }
 
+func (o *OpenClawAdapter) StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error) {
+	chatCtx, cancel := context.WithTimeout(ctx, 120*time.Second)
+
+	if sessionKey == "" {
+		sessionKey = "agent:main:main"
+	}
+
+	conn, err := o.dial(chatCtx)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+
+	req := newRPCRequest("chat.send", map[string]any{
+		"sessionKey":     sessionKey,
+		"message":        message,
+		"idempotencyKey": uuidV4(),
+	})
+	payload, _ := json.Marshal(req)
+	if err := conn.Write(chatCtx, websocket.MessageText, payload); err != nil {
+		conn.CloseNow()
+		cancel()
+		return nil, fmt.Errorf("sending chat.send: %w", err)
+	}
+
+	ch := make(chan ChatEvent, 64)
+	go o.readStreamEvents(chatCtx, cancel, conn, ch)
+	return ch, nil
+}
+
+func (o *OpenClawAdapter) readStreamEvents(ctx context.Context, cancel context.CancelFunc, conn *websocket.Conn, ch chan<- ChatEvent) {
+	defer close(ch)
+	defer cancel()
+	defer conn.CloseNow()
+
+	for {
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			return
+		}
+
+		var frame map[string]any
+		if json.Unmarshal(data, &frame) != nil {
+			continue
+		}
+
+		frameType, _ := frame["type"].(string)
+
+		if frameType == "event" {
+			ev := o.parseChatStreamEvent(frame)
+			if ev == nil {
+				continue
+			}
+			select {
+			case ch <- *ev:
+			case <-ctx.Done():
+				return
+			}
+			if ev.Type == "done" || ev.Type == "error" {
+				return
+			}
+			continue
+		}
+
+		if frameType == "res" {
+			var resp rpcResponse
+			if json.Unmarshal(data, &resp) != nil {
+				continue
+			}
+			if resp.Error != nil {
+				select {
+				case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("%s: %s", resp.Error.Code, resp.Error.Message)}:
+				case <-ctx.Done():
+				}
+				return
+			}
+			if resp.Payload != nil {
+				var result map[string]any
+				json.Unmarshal(resp.Payload, &result)
+				if content, ok := result["message"].(string); ok {
+					select {
+					case ch <- ChatEvent{Type: "done", Content: content}:
+					case <-ctx.Done():
+					}
+					return
+				}
+			}
+		}
+	}
+}
+
+func (o *OpenClawAdapter) parseChatStreamEvent(frame map[string]any) *ChatEvent {
+	eventName, _ := frame["event"].(string)
+	pl, _ := frame["payload"].(map[string]any)
+	if pl == nil {
+		return nil
+	}
+
+	str := func(key string) string {
+		if v, ok := pl[key].(string); ok {
+			return v
+		}
+		return ""
+	}
+
+	switch eventName {
+	case "chat":
+		state := str("state")
+		switch state {
+		case "final":
+			return &ChatEvent{Type: "done", Content: str("message")}
+		case "error":
+			return &ChatEvent{Type: "error", Error: str("errorMessage")}
+		case "aborted":
+			return &ChatEvent{Type: "error", Error: "response aborted"}
+		default:
+			delta := str("delta")
+			if delta == "" {
+				delta = str("message")
+			}
+			if delta != "" {
+				return &ChatEvent{Type: "delta", Content: delta}
+			}
+			return nil
+		}
+	case "agent":
+		seq := str("seq")
+		if toolName := str("tool"); toolName != "" {
+			if seq == "tool_start" || seq == "toolCall" {
+				var args map[string]any
+				if a, ok := pl["args"].(map[string]any); ok {
+					args = a
+				} else if a, ok := pl["arguments"].(map[string]any); ok {
+					args = a
+				}
+				toolID := str("toolCallId")
+				if toolID == "" {
+					toolID = str("id")
+				}
+				return &ChatEvent{Type: "tool_start", Tool: toolName, ToolID: toolID, Args: args}
+			}
+			if seq == "tool_result" || seq == "toolResult" {
+				output := str("output")
+				if output == "" {
+					output = str("result")
+				}
+				success := true
+				if v, ok := pl["success"].(bool); ok {
+					success = v
+				}
+				return &ChatEvent{Type: "tool_result", Tool: toolName, Output: output, Success: &success}
+			}
+		}
+		return nil
+	default:
+		return nil
+	}
+}
+
 func (o *OpenClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
 	_, err := o.rpcCall(ctx, "sessions.reset", map[string]any{"key": sessionKey})
 	if err != nil {
 		return fmt.Errorf("sessions.reset: %w", err)
 	}
 	return nil
+}
+
+func (o *OpenClawAdapter) PurgeSession(_ context.Context, sessionKey string) error {
+	if !strings.HasPrefix(sessionKey, "archive:") {
+		return fmt.Errorf("only archived sessions can be purged")
+	}
+	archiveFilename := sessionKey[len("archive:"):]
+	agentsDir := o.agentsDir()
+	if agentsDir == "" {
+		return fmt.Errorf("cannot determine agents directory")
+	}
+	entries, _ := os.ReadDir(agentsDir)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		path := filepath.Join(agentsDir, entry.Name(), "sessions", archiveFilename)
+		if _, err := os.Stat(path); err == nil {
+			return os.Remove(path)
+		}
+	}
+	return fmt.Errorf("archive file not found: %s", archiveFilename)
 }
 
 func (o *OpenClawAdapter) Personality(ctx context.Context) (*Personality, error) {

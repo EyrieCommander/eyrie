@@ -22,10 +22,16 @@ type Server struct {
 	cfg    config.Config
 	mux    *http.ServeMux
 	server *http.Server
+	hidden *config.HiddenStore
 }
 
 func New(cfg config.Config) *Server {
-	s := &Server{cfg: cfg}
+	hidden, err := config.NewHiddenStore()
+	if err != nil {
+		slog.Warn("failed to load hidden sessions store", "error", err)
+		hidden = nil
+	}
+	s := &Server{cfg: cfg, hidden: hidden}
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
@@ -47,6 +53,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/agents/{name}/sessions/{session}/messages", s.handleAgentMessages)
 	s.mux.HandleFunc("POST /api/agents/{name}/chat", s.handleAgentChat)
 	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}", s.handleDeleteSession)
+	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}/purge", s.handlePurgeSession)
+	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/hide", s.handleHideSession)
+	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/unhide", s.handleUnhideSession)
 
 	// Serve embedded frontend
 	distFS, err := fs.Sub(staticFS, "static")

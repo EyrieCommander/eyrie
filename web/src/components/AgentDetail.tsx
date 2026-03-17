@@ -5,12 +5,13 @@ import {
   Square,
   RotateCcw,
   Plus,
-  X,
 } from "lucide-react";
 import type {
   AgentInfo,
   LogEntry,
   ChatMessage,
+  ChatPart,
+  ChatEvent,
   Session,
 } from "../lib/types";
 import {
@@ -20,8 +21,10 @@ import {
   streamLogs,
   fetchSessions,
   fetchChatMessages,
-  sendMessage,
-  deleteSession,
+  streamMessage,
+  resetSession,
+  purgeSession,
+  hideSession,
 } from "../lib/api";
 
 function formatBytes(bytes: number): string {
@@ -36,7 +39,7 @@ interface AgentDetailProps {
   agent: AgentInfo;
 }
 
-const validTabs = ["overview", "activity", "logs", "config"] as const;
+const validTabs = ["overview", "chat", "logs", "config"] as const;
 type Tab = (typeof validTabs)[number];
 
 export default function AgentDetail({ agent }: AgentDetailProps) {
@@ -151,8 +154,8 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
       </div>
 
       {tab === "overview" && <OverviewTab agent={agent} />}
-      {tab === "activity" && (
-        <ActivityTab alive={agent.alive} framework={agent.framework} agentName={agent.name} />
+      {tab === "chat" && (
+        <ChatTab alive={agent.alive} framework={agent.framework} agentName={agent.name} />
       )}
       {tab === "logs" && <LogsTab logs={logs} alive={agent.alive} />}
       {tab === "config" && <ConfigTab config={config} error={configError} alive={agent.alive} />}
@@ -388,7 +391,49 @@ function sessionDisplayName(key: string): string {
   return parts[parts.length - 1] || key;
 }
 
-function ActivityTab({
+interface ToolCall {
+  tool: string;
+  toolId?: string;
+  args?: Record<string, unknown>;
+  output?: string;
+  success?: boolean;
+  done: boolean;
+}
+
+function sessionBaseName(s: Session): string {
+  if (s.readonly) {
+    const paren = s.title.indexOf(" (");
+    return paren > 0 ? s.title.slice(0, paren) : s.title;
+  }
+  return sessionDisplayName(s.key);
+}
+
+interface SessionGroup {
+  name: string;
+  current?: Session;
+  archived: Session[];
+}
+
+function groupSessions(sessions: Session[]): SessionGroup[] {
+  const map = new Map<string, SessionGroup>();
+  for (const s of sessions) {
+    const name = sessionBaseName(s);
+    let group = map.get(name);
+    if (!group) {
+      group = { name, archived: [] };
+      map.set(name, group);
+    }
+    if (s.readonly) group.archived.push(s);
+    else group.current = s;
+  }
+  return Array.from(map.values());
+}
+
+type FlatItem =
+  | { kind: "spacer"; label: string; archiveKey?: string; currentKey?: string }
+  | { kind: "message"; msg: ChatMessage; isCurrent: boolean; flatIdx: number };
+
+function ChatTab({
   alive,
   framework,
   agentName,
@@ -399,72 +444,166 @@ function ActivityTab({
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  const newSessionRef = useRef<HTMLInputElement>(null);
 
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [activeKey, setActiveKey] = useState("");
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [activeGroupName, setActiveGroupName] = useState("");
+  const [sessionMsgs, setSessionMsgs] = useState<Map<string, ChatMessage[]>>(new Map());
   const [loading, setLoading] = useState(true);
-  const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
+  const [toggledSet, setToggledSet] = useState<Set<number>>(new Set());
 
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [pendingMsgs, setPendingMsgs] = useState<ChatMessage[]>([]);
 
+  const [streamingContent, setStreamingContent] = useState("");
+  const [toolCalls, setToolCalls] = useState<ToolCall[]>([]);
+
   const [creatingSession, setCreatingSession] = useState(false);
   const [newSessionName, setNewSessionName] = useState("");
 
+  const abortRef = useRef<AbortController | null>(null);
+
   const defaultSessionKey = framework === "zeroclaw" ? "main" : "agent:main:main";
-  const activeSessionObj = sessions.find((s) => s.key === activeKey);
-  const isReadOnly = activeSessionObj?.readonly === true;
+  const groups = groupSessions(sessions);
+  const activeGroup = groups.find((g) => g.name === activeGroupName) ?? groups[0];
+  const currentSessionKey = activeGroup?.current?.key ?? defaultSessionKey;
 
   useEffect(() => {
     if (!alive) return;
     fetchSessions(agentName)
       .then((resp) => {
-        setSessions(resp.sessions ?? []);
-        const existing = resp.sessions?.find((s) => s.key === defaultSessionKey);
-        setActiveKey(existing?.key ?? resp.sessions?.[0]?.key ?? defaultSessionKey);
+        const all = resp.sessions ?? [];
+        setSessions(all);
+        const defaultName = sessionDisplayName(defaultSessionKey);
+        const gs = groupSessions(all);
+        const match = gs.find((g) => g.name === defaultName);
+        setActiveGroupName(match?.name ?? gs[0]?.name ?? defaultName);
       })
       .catch(() => {
-        setActiveKey(defaultSessionKey);
+        setActiveGroupName(sessionDisplayName(defaultSessionKey));
       });
   }, [agentName, alive, defaultSessionKey]);
 
-  const loadMessages = useCallback(
+  const loadGroup = useCallback(
+    (group: SessionGroup | undefined) => {
+      if (!group) return;
+      setLoading(true);
+      setSessionMsgs(new Map());
+      setToggledSet(new Set());
+      setPendingMsgs([]);
+      setStreamingContent("");
+      setToolCalls([]);
+
+      const keys = [
+        ...group.archived.map((s) => s.key),
+        ...(group.current ? [group.current.key] : []),
+      ];
+      if (keys.length === 0) {
+        setSessionMsgs(new Map());
+        setLoading(false);
+        return;
+      }
+
+      Promise.all(
+        keys.map((k) =>
+          fetchChatMessages(agentName, k, 100)
+            .then((msgs) => [k, msgs] as const)
+            .catch(() => [k, [] as ChatMessage[]] as const)
+        )
+      ).then((results) => {
+        const m = new Map<string, ChatMessage[]>();
+        for (const [k, msgs] of results) m.set(k, msgs);
+        setSessionMsgs(m);
+        setLoading(false);
+      });
+    },
+    [agentName],
+  );
+
+  const refreshCurrentSession = useCallback(
     (key: string) => {
       if (!key) return;
-      setLoading(true);
-      setExpandedIdx(null);
-      setPendingMsgs([]);
       fetchChatMessages(agentName, key, 100)
-        .then(setMessages)
-        .catch(() => setMessages([]))
-        .finally(() => setLoading(false));
+        .then((msgs) => {
+          setSessionMsgs((prev) => {
+            const next = new Map(prev);
+            next.set(key, msgs);
+            return next;
+          });
+          setPendingMsgs([]);
+        })
+        .catch(() => {});
     },
     [agentName],
   );
 
   useEffect(() => {
-    if (activeKey && alive) loadMessages(activeKey);
-  }, [activeKey, alive, loadMessages]);
+    const group = groups.find((g) => g.name === activeGroupName);
+    if (group && alive) loadGroup(group);
+  }, [activeGroupName, alive, loadGroup, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const allMessages = [...messages, ...pendingMsgs];
+  const isNoReply = (content: string) =>
+    /^(\[\[no_reply\]\]|NO_REPLY)$/i.test(content.trim());
+
+  const flatItems: FlatItem[] = [];
+  if (activeGroup) {
+    let flatIdx = 0;
+    const sortedArchived = [...activeGroup.archived].sort((a, b) => {
+      const ta = a.last_message ? new Date(a.last_message).getTime() : 0;
+      const tb = b.last_message ? new Date(b.last_message).getTime() : 0;
+      return ta - tb;
+    });
+
+    for (const arch of sortedArchived) {
+      flatItems.push({ kind: "spacer", label: arch.title, archiveKey: arch.key });
+      const msgs = sessionMsgs.get(arch.key) ?? [];
+      for (const msg of msgs) {
+        if (msg.role === "assistant" && isNoReply(msg.content)) continue;
+        flatItems.push({ kind: "message", msg, isCurrent: false, flatIdx });
+        flatIdx++;
+      }
+    }
+
+    if (activeGroup.current) {
+      if (sortedArchived.length > 0 || framework !== "zeroclaw") {
+        flatItems.push({
+          kind: "spacer",
+          label: "current session",
+          currentKey: framework !== "zeroclaw" ? activeGroup.current.key : undefined,
+        });
+      }
+      const msgs = sessionMsgs.get(activeGroup.current.key) ?? [];
+      for (const msg of msgs) {
+        if (msg.role === "assistant" && isNoReply(msg.content)) continue;
+        flatItems.push({ kind: "message", msg, isCurrent: true, flatIdx });
+        flatIdx++;
+      }
+    }
+
+    for (const msg of pendingMsgs) {
+      flatItems.push({ kind: "message", msg, isCurrent: true, flatIdx });
+      flatIdx++;
+    }
+  }
+
+  const totalMsgCount = flatItems.filter((it) => it.kind === "message").length;
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [allMessages.length, sending]);
+  }, [totalMsgCount, sending, streamingContent, toolCalls]);
 
-  const handleSend = useCallback(async () => {
+  const handleSend = useCallback(() => {
     const text = input.trim();
     if (!text || sending) return;
 
     setInput("");
     setChatError(null);
     setSending(true);
+    setStreamingContent("");
+    setToolCalls([]);
 
     const userMsg: ChatMessage = {
       role: "user",
@@ -473,110 +612,170 @@ function ActivityTab({
     };
     setPendingMsgs((prev) => [...prev, userMsg]);
 
-    try {
-      const reply = await sendMessage(agentName, text, activeKey);
+    const controller = streamMessage(agentName, text, currentSessionKey, (ev: ChatEvent) => {
+      switch (ev.type) {
+        case "delta":
+          setStreamingContent((prev) => prev + (ev.content ?? ""));
+          break;
+        case "tool_start":
+          setToolCalls((prev) => [
+            ...prev,
+            {
+              tool: ev.tool ?? "unknown",
+              toolId: ev.tool_id,
+              args: ev.args,
+              done: false,
+            },
+          ]);
+          break;
+        case "tool_result":
+          setToolCalls((prev) => {
+            const updated = [...prev];
+            let idx = -1;
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].tool === ev.tool && !updated[i].done) {
+                idx = i;
+                break;
+              }
+            }
+            if (idx >= 0) {
+              updated[idx] = { ...updated[idx], output: ev.output, success: ev.success, done: true };
+            }
+            return updated;
+          });
+          break;
+        case "done": {
+          const raw = ev.content ?? "";
+          const skip = /^(\[\[no_reply\]\]|NO_REPLY)$/i.test(raw.trim());
+          if (!skip) {
+            const reply: ChatMessage = {
+              role: "assistant",
+              content: raw,
+              timestamp: new Date().toISOString(),
+            };
       setPendingMsgs((prev) => [...prev, reply]);
-      // Re-fetch to get the authoritative transcript after a short delay
-      setTimeout(() => loadMessages(activeKey), 500);
-    } catch (e) {
-      setChatError(e instanceof Error ? e.message : "Failed to send message");
-    } finally {
+          }
+          setStreamingContent("");
+          setToolCalls([]);
       setSending(false);
       inputRef.current?.focus();
-    }
-  }, [input, sending, agentName, activeKey, loadMessages]);
+          setTimeout(() => refreshCurrentSession(currentSessionKey), 500);
+          break;
+        }
+        case "error":
+          setChatError(ev.error ?? "Unknown error");
+          setStreamingContent("");
+          setToolCalls([]);
+          setSending(false);
+          inputRef.current?.focus();
+          break;
+      }
+    });
+    abortRef.current = controller;
+  }, [input, sending, agentName, currentSessionKey, refreshCurrentSession]);
+
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
+
+  const refreshSessions = useCallback(() => {
+    fetchSessions(agentName)
+      .then((resp) => setSessions(resp.sessions ?? []))
+      .catch(() => {});
+  }, [agentName]);
+
+  const handleResetSession = useCallback(
+    async (key: string) => {
+      const name = sessionDisplayName(key);
+      if (!window.confirm(`Reset session "${name}"? The transcript will be archived.`)) return;
+      try {
+        await resetSession(agentName, key);
+        refreshSessions();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [agentName, refreshSessions],
+  );
+
+  const handlePurgeSession = useCallback(
+    async (archiveKey: string) => {
+      if (!window.confirm("Permanently delete this archived session? This cannot be undone.")) return;
+      try {
+        await purgeSession(agentName, archiveKey);
+        refreshSessions();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [agentName, refreshSessions],
+  );
+
+  const handleHideSession = useCallback(
+    async (archiveKey: string) => {
+      try {
+        await hideSession(agentName, archiveKey);
+        refreshSessions();
+      } catch (e) {
+        console.error(e);
+      }
+    },
+    [agentName, refreshSessions],
+  );
 
   const handleCreateSession = () => {
     const name = newSessionName.trim().toLowerCase().replace(/\s+/g, "-");
     if (!name) return;
-    const key =
-      framework === "zeroclaw" ? name : `agent:main:${name}`;
-    setSessions((prev) => [
-      ...prev,
-      { key, title: name, channel: "" },
-    ]);
-    setActiveKey(key);
+    const key = framework === "zeroclaw" ? name : `agent:main:${name}`;
+    setSessions((prev) => [...prev, { key, title: name, channel: "" }]);
+    setActiveGroupName(name);
     setCreatingSession(false);
     setNewSessionName("");
   };
 
-  const handleDeleteSession = useCallback(
-    async (key: string) => {
-      if (!confirm(`Delete session "${sessionDisplayName(key)}"? The transcript will be archived.`)) return;
-      try {
-        await deleteSession(agentName, key);
-        setSessions((prev) => prev.filter((s) => s.key !== key));
-        if (activeKey === key) {
-          const remaining = sessions.filter((s) => s.key !== key);
-          setActiveKey(remaining[0]?.key ?? defaultSessionKey);
-        }
-      } catch (e) {
-        setChatError(e instanceof Error ? e.message : "Failed to delete session");
-      }
-    },
-    [agentName, activeKey, sessions, defaultSessionKey],
-  );
-
   if (!alive) {
     return (
       <p className="text-xs text-text-muted">
-        Agent is not running. Start it to see activity.
+        Agent is not running. Start it to chat.
       </p>
     );
   }
 
+  const longMsgItems = flatItems.filter(
+    (it): it is Extract<FlatItem, { kind: "message" }> =>
+      it.kind === "message" && it.msg.content.length > 200,
+  );
+
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 320px)" }}>
-      {/* Session bar */}
+      {/* Session group bar */}
+      {(groups.length > 1 || framework !== "zeroclaw") && (
       <div className="flex items-center gap-1 overflow-x-auto rounded-t border border-b-0 border-border bg-bg-sidebar px-3 py-2">
-        {sessions.map((s) => (
-          <div key={s.key} className="group relative shrink-0 flex items-center">
+          {groups.map((g) => (
             <button
-              onClick={() => setActiveKey(s.key)}
-              className={`rounded px-3 py-1 text-[11px] font-medium transition-colors ${
-                activeKey === s.key
-                  ? s.readonly
-                    ? "bg-surface-hover text-text-muted"
-                    : "bg-surface-hover text-accent"
+              key={g.name}
+              onClick={() => setActiveGroupName(g.name)}
+              className={`shrink-0 rounded px-3 py-1 text-[11px] font-medium transition-colors ${
+                activeGroupName === g.name
+                  ? "bg-surface-hover text-accent"
                   : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-              } ${s.readonly ? "italic" : ""}`}
+              }`}
             >
-              {s.readonly ? s.title : sessionDisplayName(s.key)}
+              {g.name}
+              {g.archived.length > 0 && (
+                <span className="ml-1 text-[9px] text-text-muted">
+                  +{g.archived.length}
+                </span>
+              )}
             </button>
-            {s.key !== defaultSessionKey && framework !== "zeroclaw" && !s.readonly && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDeleteSession(s.key);
-                }}
-                className="absolute -top-1 -right-1 hidden group-hover:flex h-3.5 w-3.5 items-center justify-center rounded-full bg-surface-hover text-text-muted hover:text-red hover:bg-red/10 transition-colors"
-                title="Delete session"
-              >
-                <X className="h-2.5 w-2.5" />
-              </button>
-            )}
-          </div>
-        ))}
-
-        {!sessions.some((s) => s.key === activeKey) && activeKey && (
-          <button
-            className="shrink-0 rounded bg-surface-hover px-3 py-1 text-[11px] font-medium text-accent"
-          >
-            {sessionDisplayName(activeKey)}
-          </button>
-        )}
-
-        {framework === "zeroclaw" && sessions.length <= 1 && (
-          <span className="shrink-0 text-[10px] text-text-muted ml-2">
-            single session (zeroclaw)
-          </span>
-        )}
+          ))}
 
         {framework !== "zeroclaw" && (
           creatingSession ? (
             <div className="flex items-center gap-1 ml-1">
               <input
-                ref={newSessionRef}
                 type="text"
                 value={newSessionName}
                 onChange={(e) => setNewSessionName(e.target.value)}
@@ -610,35 +809,142 @@ function ActivityTab({
           )
         )}
       </div>
+      )}
 
       {/* Messages */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto border-x border-border bg-surface p-4 text-xs"
+        className={`flex-1 overflow-y-auto border-x border-border bg-surface text-xs ${groups.length <= 1 && framework === "zeroclaw" ? "rounded-t border-t" : ""}`}
       >
+        {longMsgItems.length > 0 && (
+          <div className="sticky top-0 z-10 float-right flex gap-0.5 pr-2 pt-2">
+            <button
+              onClick={() => {
+                setToggledSet(() => {
+                  const next = new Set<number>();
+                  for (const it of longMsgItems) {
+                    if (!it.isCurrent) next.add(it.flatIdx);
+                  }
+                  return next;
+                });
+              }}
+              className="text-green font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
+              title="Expand all"
+            >
+              +
+            </button>
+            <button
+              onClick={() => {
+                setToggledSet(() => {
+                  const next = new Set<number>();
+                  for (const it of longMsgItems) {
+                    if (it.isCurrent) next.add(it.flatIdx);
+                  }
+                  return next;
+                });
+              }}
+              className="text-purple font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
+              title="Compact all"
+            >
+              −
+            </button>
+          </div>
+        )}
+
+        <div className="px-4 pb-4 pt-2">
         {loading ? (
           <p className="text-text-muted animate-pulse">Loading messages...</p>
-        ) : allMessages.length === 0 && !sending ? (
+        ) : flatItems.length === 0 && !sending ? (
           <p className="text-text-muted">
             No messages yet. Type below to start a conversation.
           </p>
         ) : (
-          allMessages.map((msg, i) => (
+          flatItems.map((item, i) => {
+            if (item.kind === "spacer") {
+              return (
+                <div
+                  key={`spacer-${i}`}
+                  className="group/spacer my-3 flex items-center gap-3"
+                >
+                  <div className="flex-1 border-t border-green/40" />
+                  <span className="text-[10px] font-medium text-green">
+                    {item.label}
+                  </span>
+                  {item.archiveKey && (
+                    <span className="hidden group-hover/spacer:inline-flex items-center gap-1">
+                      <button
+                        onClick={() => handlePurgeSession(item.archiveKey!)}
+                        className="rounded px-1 py-0.5 text-[9px] text-text-muted hover:text-red hover:bg-red/10 transition-colors"
+                        title="Delete permanently"
+                      >
+                        delete
+                      </button>
+                      <button
+                        onClick={() => handleHideSession(item.archiveKey!)}
+                        className="rounded px-1 py-0.5 text-[9px] text-text-muted hover:text-purple hover:bg-purple/10 transition-colors"
+                        title="Hide from view"
+                      >
+                        hide
+                      </button>
+                    </span>
+                  )}
+                  {item.currentKey && (
+                    <span className="hidden group-hover/spacer:inline-flex items-center gap-1">
+                      <button
+                        onClick={() => handleResetSession(item.currentKey!)}
+                        className="rounded px-1 py-0.5 text-[9px] text-text-muted hover:text-red hover:bg-red/10 transition-colors"
+                        title="Reset session (archive transcript)"
+                      >
+                        reset
+                      </button>
+                    </span>
+                  )}
+                  <div className="flex-1 border-t border-green/40" />
+                </div>
+              );
+            }
+            const { msg, isCurrent, flatIdx } = item;
+            const expanded = isCurrent
+              ? !toggledSet.has(flatIdx)
+              : toggledSet.has(flatIdx);
+            return (
             <MessageRow
-              key={`${msg.timestamp}-${i}`}
+                key={`${msg.timestamp}-${flatIdx}`}
               msg={msg}
-              expanded={expandedIdx === i}
-              onToggle={() => setExpandedIdx(expandedIdx === i ? null : i)}
-            />
-          ))
+                expanded={expanded}
+                onToggle={() => {
+                  setToggledSet((prev) => {
+                    const next = new Set(prev);
+                    if (next.has(flatIdx)) next.delete(flatIdx);
+                    else next.add(flatIdx);
+                    return next;
+                  });
+                }}
+              />
+            );
+          })
         )}
 
         {sending && (
+          <div className="py-1">
+            {toolCalls.map((tc, i) => (
+              <ToolCallCard key={`tc-${i}`} tc={tc} />
+            ))}
+            {streamingContent ? (
+              <div className="py-1">
+                <span className="text-purple font-medium">assistant:</span>{" "}
+                <span className="text-text whitespace-pre-wrap">{streamingContent}</span>
+                <span className="inline-block w-1.5 h-3 bg-accent/60 animate-pulse ml-0.5 align-text-bottom" />
+              </div>
+            ) : toolCalls.length === 0 ? (
           <div className="py-1 text-text-muted animate-pulse">
             <span className="text-purple font-medium">assistant:</span>{" "}
             thinking...
+              </div>
+            ) : null}
           </div>
         )}
+        </div>
       </div>
 
       {chatError && (
@@ -648,11 +954,6 @@ function ActivityTab({
       )}
 
       {/* Chat input */}
-      {isReadOnly ? (
-        <div className="flex items-center justify-center rounded-b border border-border bg-surface-hover/50 px-4 py-2.5 text-[10px] text-text-muted italic">
-          archived session (read-only)
-        </div>
-      ) : (
         <div className="flex items-center gap-2 rounded-b border border-border bg-surface-hover p-3">
           <span className="text-accent text-xs">&gt;</span>
           <input
@@ -678,7 +979,6 @@ function ActivityTab({
             send
           </button>
         </div>
-      )}
     </div>
   );
 }
@@ -690,17 +990,26 @@ function MessageRow({
 }: {
   msg: ChatMessage;
   expanded: boolean;
-  onToggle: () => void;
+  onToggle?: () => void;
 }) {
-  const isLong = msg.content.length > 200;
+  const parts = msg.parts ?? [];
+  const toolCount = parts.filter((p) => p.type === "tool_call").length;
+  const hasParts = parts.length > 0;
+  const isLong = msg.content.length > 200 || toolCount > 0;
+  const canToggle = isLong && onToggle;
   const displayText = isLong && !expanded
-    ? msg.content.slice(0, 200) + "..."
+    ? (msg.content.length > 200 ? msg.content.slice(0, 200) + "..." : msg.content)
     : msg.content;
+  const toolSummary = !expanded && toolCount > 0
+    ? ` [${toolCount} tool${toolCount > 1 ? "s" : ""}]`
+    : "";
 
   return (
     <div
-      className={`py-1 ${isLong ? "cursor-pointer hover:bg-surface-hover/50 rounded px-1 -mx-1" : ""}`}
-      onClick={isLong ? onToggle : undefined}
+      className={`py-1 ${canToggle ? "cursor-pointer hover:bg-surface-hover/50 rounded px-1 -mx-1" : ""}`}
+      onClick={canToggle ? () => {
+        if (!window.getSelection()?.toString()) onToggle!();
+      } : undefined}
     >
       <span className="text-text-muted">
         {new Date(msg.timestamp).toLocaleTimeString()}
@@ -710,14 +1019,198 @@ function MessageRow({
       >
         {msg.role}:
       </span>{" "}
-      <span className={`text-text ${expanded ? "whitespace-pre-wrap" : ""}`}>
-        {displayText}
-      </span>
-      {isLong && !expanded && (
-        <span className="ml-1 text-text-muted">▸</span>
+      {!expanded && (
+        <>
+          <span className="text-text">{displayText}</span>
+          {toolSummary && (
+            <span className="ml-1 text-accent/60 text-[10px]">{toolSummary}</span>
+          )}
+        </>
       )}
-      {isLong && expanded && (
-        <span className="ml-1 text-text-muted">▾</span>
+      {canToggle && !expanded && (
+        <span className="ml-1 text-green">▸</span>
+      )}
+      {canToggle && expanded && (
+        <span className="ml-1 text-green">▾</span>
+      )}
+      {expanded && hasParts && (
+        <div className="mt-0.5" onClick={(e) => e.stopPropagation()}>
+          {groupPartsIntoRuns(parts).map((run, ri) =>
+            run.type === "text" ? (
+              <div key={`text-${ri}`} className="text-text whitespace-pre-wrap py-0.5">
+                {run.text}
+              </div>
+            ) : (
+              <ToolRunCard key={`run-${ri}`} tools={run.tools} />
+            ),
+          )}
+        </div>
+      )}
+      {expanded && !hasParts && msg.content && (
+        <span className="text-text whitespace-pre-wrap">{msg.content}</span>
+      )}
+    </div>
+  );
+}
+
+type PartRun =
+  | { type: "text"; text: string }
+  | { type: "tools"; tools: ChatPart[] };
+
+function groupPartsIntoRuns(parts: ChatPart[]): PartRun[] {
+  const runs: PartRun[] = [];
+  for (const p of parts) {
+    if (p.type === "text") {
+      runs.push({ type: "text", text: p.text ?? "" });
+    } else {
+      const last = runs[runs.length - 1];
+      if (last && last.type === "tools") {
+        last.tools.push(p);
+      } else {
+        runs.push({ type: "tools", tools: [p] });
+      }
+    }
+  }
+  return runs;
+}
+
+function ToolRunCard({ tools }: { tools: ChatPart[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const failCount = tools.filter((t) => t.error).length;
+  const names = tools.map((t) => t.name).filter(Boolean);
+  const uniqueNames = [...new Set(names)];
+  const summary =
+    tools.length === 1
+      ? tools[0].name ?? "tool"
+      : `${tools.length} tools` +
+        (uniqueNames.length <= 3 ? `: ${uniqueNames.join(", ")}` : "");
+
+  return (
+    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px]">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setExpanded(!expanded);
+        }}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+      >
+        <span className="font-mono text-text">{summary}</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {failCount > 0 ? (
+            <span className="text-red text-[10px]">{failCount} FAIL</span>
+          ) : (
+            <span className="text-green text-[10px]">OK</span>
+          )}
+          <span className="text-text-muted text-[10px]">
+            {expanded ? "▾" : "▸"}
+      </span>
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border">
+          {tools.map((part, i) => (
+            <PartToolCallCard key={part.id || `tc-${i}`} part={part} defaultExpanded />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PartToolCallCard({ part, defaultExpanded = false }: { part: ChatPart; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(defaultExpanded);
+
+  return (
+    <div className="border-b border-border/30 last:border-b-0 text-[11px]">
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          setExpanded(!expanded);
+        }}
+        className="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-surface-hover/30"
+      >
+        <span className="font-mono text-text-secondary">{part.name}</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {part.error ? (
+            <span className="text-red text-[10px]">FAIL</span>
+          ) : part.output != null ? (
+            <span className="text-green text-[10px]">OK</span>
+          ) : null}
+          <span className="text-text-muted text-[10px]">
+            {expanded ? "▾" : "▸"}
+          </span>
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/30 px-3 py-2 space-y-1.5 bg-surface/50">
+          {part.args && Object.keys(part.args).length > 0 && (
+            <div>
+              <span className="text-text-muted">args: </span>
+              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+                {JSON.stringify(part.args, null, 2)}
+              </pre>
+            </div>
+          )}
+          {part.output != null && (
+            <div>
+              <span className="text-text-muted">output: </span>
+              <pre className="mt-0.5 max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+                {part.output}
+              </pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ToolCallCard({ tc }: { tc: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div
+      className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px]"
+    >
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
+      >
+        <span className="font-mono text-text">{tc.tool}</span>
+        <span className="ml-auto flex items-center gap-1.5">
+          {!tc.done && (
+            <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
+          )}
+          {tc.done && tc.success !== false && (
+            <span className="text-green text-[10px]">OK</span>
+          )}
+          {tc.done && tc.success === false && (
+            <span className="text-red text-[10px]">FAIL</span>
+          )}
+          <span className="text-text-muted text-[10px]">
+            {expanded ? "▾" : "▸"}
+          </span>
+        </span>
+      </button>
+      {expanded && (
+        <div className="border-t border-border/50 px-3 py-2 space-y-1.5">
+          {tc.args && Object.keys(tc.args).length > 0 && (
+            <div>
+              <span className="text-text-muted">args: </span>
+              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+                {JSON.stringify(tc.args, null, 2)}
+              </pre>
+            </div>
+          )}
+          {tc.output != null && (
+            <div>
+              <span className="text-text-muted">output: </span>
+              <pre className="mt-0.5 max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+                {tc.output}
+              </pre>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

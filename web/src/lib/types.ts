@@ -59,9 +59,31 @@ export interface SessionsResponse {
   sessions: Session[];
 }
 
+export interface ChatPart {
+  type: "text" | "tool_call";
+  text?: string;
+  id?: string;
+  name?: string;
+  args?: Record<string, unknown>;
+  output?: string;
+  error?: boolean;
+}
+
 export interface ChatMessage {
   timestamp: string;
   role: "user" | "assistant";
   content: string;
   channel?: string;
+  parts?: ChatPart[];
+}
+
+export interface ChatEvent {
+  type: "delta" | "tool_start" | "tool_result" | "done" | "error";
+  content?: string;
+  tool?: string;
+  tool_id?: string;
+  args?: Record<string, unknown>;
+  output?: string;
+  success?: boolean;
+  error?: string;
 }
