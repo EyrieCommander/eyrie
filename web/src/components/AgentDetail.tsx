@@ -22,6 +22,7 @@ import {
   fetchSessions,
   fetchChatMessages,
   streamMessage,
+  createSession,
   resetSession,
   purgeSession,
   hideSession,
@@ -405,6 +406,7 @@ function sessionBaseName(s: Session): string {
     const paren = s.title.indexOf(" (");
     return paren > 0 ? s.title.slice(0, paren) : s.title;
   }
+  if (s.title) return s.title;
   return sessionDisplayName(s.key);
 }
 
@@ -464,7 +466,7 @@ function ChatTab({
 
   const abortRef = useRef<AbortController | null>(null);
 
-  const defaultSessionKey = framework === "zeroclaw" ? "main" : "agent:main:main";
+  const defaultSessionKey = framework === "openclaw" ? "agent:main:main" : "main";
   const groups = groupSessions(sessions);
   const activeGroup = groups.find((g) => g.name === activeGroupName) ?? groups[0];
   const currentSessionKey = activeGroup?.current?.key ?? defaultSessionKey;
@@ -566,11 +568,11 @@ function ChatTab({
     }
 
     if (activeGroup.current) {
-      if (sortedArchived.length > 0 || framework !== "zeroclaw") {
+      if (sortedArchived.length > 0) {
         flatItems.push({
           kind: "spacer",
           label: "current session",
-          currentKey: framework !== "zeroclaw" ? activeGroup.current.key : undefined,
+          currentKey: activeGroup.current.key,
         });
       }
       const msgs = sessionMsgs.get(activeGroup.current.key) ?? [];
@@ -725,14 +727,20 @@ function ChatTab({
     [agentName, refreshSessions],
   );
 
-  const handleCreateSession = () => {
+  const handleCreateSession = async () => {
     const name = newSessionName.trim().toLowerCase().replace(/\s+/g, "-");
     if (!name) return;
-    const key = framework === "zeroclaw" ? name : `agent:main:${name}`;
-    setSessions((prev) => [...prev, { key, title: name, channel: "" }]);
-    setActiveGroupName(name);
     setCreatingSession(false);
     setNewSessionName("");
+    try {
+      const sess = await createSession(agentName, name);
+      setSessions((prev) => [...prev, { key: sess.key, title: sess.title }]);
+      setActiveGroupName(name);
+    } catch {
+      const key = framework === "openclaw" ? `agent:main:${name}` : name;
+      setSessions((prev) => [...prev, { key, title: name }]);
+      setActiveGroupName(name);
+    }
   };
 
   if (!alive) {
@@ -751,7 +759,7 @@ function ChatTab({
   return (
     <div className="flex flex-col" style={{ height: "calc(100vh - 320px)" }}>
       {/* Session group bar */}
-      {(groups.length > 1 || framework !== "zeroclaw") && (
+      {groups.length > 0 && (
       <div className="flex items-center gap-1 overflow-x-auto rounded-t border border-b-0 border-border bg-bg-sidebar px-3 py-2">
           {groups.map((g) => (
             <button
@@ -772,8 +780,7 @@ function ChatTab({
             </button>
           ))}
 
-        {framework !== "zeroclaw" && (
-          creatingSession ? (
+        {creatingSession ? (
             <div className="flex items-center gap-1 ml-1">
               <input
                 type="text"
@@ -806,15 +813,14 @@ function ChatTab({
             >
               <Plus className="h-3.5 w-3.5" />
             </button>
-          )
-        )}
+          )}
       </div>
       )}
 
       {/* Messages */}
       <div
         ref={scrollRef}
-        className={`flex-1 overflow-y-auto border-x border-border bg-surface text-xs ${groups.length <= 1 && framework === "zeroclaw" ? "rounded-t border-t" : ""}`}
+        className={`flex-1 overflow-y-auto border-x border-border bg-surface text-xs ${groups.length === 0 ? "rounded-t border-t" : ""}`}
       >
         {longMsgItems.length > 0 && (
           <div className="sticky top-0 z-10 float-right flex gap-0.5 pr-2 pt-2">

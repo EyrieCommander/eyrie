@@ -449,6 +449,43 @@ func (z *ZeroClawAdapter) parseActivityEvent(eventType, data string) *ActivityEv
 // Sessions returns a single synthetic session representing the ZeroClaw
 // conversation memory (ZeroClaw stores flat memories, not discrete sessions).
 func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
+	body, err := z.getRaw(ctx, "/api/sessions")
+	if err != nil {
+		return z.sessionsLegacy(ctx)
+	}
+
+	var resp struct {
+		Sessions []struct {
+			ID           string  `json:"id"`
+			Name         string  `json:"name"`
+			CreatedAt    string  `json:"created_at"`
+			Active       bool    `json:"active"`
+			MessageCount int     `json:"message_count"`
+			LastMessage  *string `json:"last_message"`
+		} `json:"sessions"`
+	}
+	if json.Unmarshal([]byte(body), &resp) != nil {
+		return z.sessionsLegacy(ctx)
+	}
+
+	sessions := make([]Session, 0, len(resp.Sessions))
+	for _, s := range resp.Sessions {
+		sess := Session{
+			Key:      s.ID,
+			Title:    s.Name,
+			ReadOnly: !s.Active,
+		}
+		if s.LastMessage != nil {
+			if t, err := time.Parse(time.RFC3339Nano, *s.LastMessage); err == nil {
+				sess.LastMsg = &t
+			}
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, nil
+}
+
+func (z *ZeroClawAdapter) sessionsLegacy(ctx context.Context) ([]Session, error) {
 	entries, err := z.fetchMemoryEntries(ctx)
 	if err != nil {
 		return nil, err
@@ -456,14 +493,12 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
-
 	var newest time.Time
 	for _, e := range entries {
 		if e.Timestamp.After(newest) {
 			newest = e.Timestamp
 		}
 	}
-
 	return []Session{{
 		Key:     "memory",
 		Title:   fmt.Sprintf("Conversations (%d messages)", len(entries)),
@@ -472,10 +507,24 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 }
 
 // ChatHistory fetches conversation memories from the ZeroClaw REST API.
-func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, _ string, limit int) ([]ChatMessage, error) {
-	entries, err := z.fetchMemoryEntries(ctx)
+// Always fetches all conversation entries, then filters client-side.
+// The default (active) session claims legacy messages that have no session_id tag.
+func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
+	all, err := z.fetchMemoryEntriesFrom(ctx, "/api/memory?category=conversation")
 	if err != nil {
 		return nil, err
+	}
+
+	isDefault := z.isDefaultSession(ctx, sessionKey)
+	var entries []zcMemoryEntry
+	for _, e := range all {
+		if sessionKey == "" || sessionKey == "memory" {
+			entries = append(entries, e)
+		} else if e.SessionID == sessionKey {
+			entries = append(entries, e)
+		} else if e.SessionID == "" && isDefault {
+			entries = append(entries, e)
+		}
 	}
 
 	sort.Slice(entries, func(i, j int) bool {
@@ -501,6 +550,33 @@ func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, _ string, limit int) 
 	return messages, nil
 }
 
+// isDefaultSession returns true if the given sessionKey is the active session
+// in ZeroClaw's session store. Legacy untagged messages are attributed to it.
+func (z *ZeroClawAdapter) isDefaultSession(ctx context.Context, sessionKey string) bool {
+	body, err := z.getRaw(ctx, "/api/sessions")
+	if err != nil {
+		return true
+	}
+	var resp struct {
+		Sessions []struct {
+			ID     string `json:"id"`
+			Active bool   `json:"active"`
+		} `json:"sessions"`
+	}
+	if json.Unmarshal([]byte(body), &resp) != nil {
+		return true
+	}
+	for _, s := range resp.Sessions {
+		if s.Active && s.ID == sessionKey {
+			return true
+		}
+	}
+	if len(resp.Sessions) == 0 {
+		return true
+	}
+	return false
+}
+
 type zcMemoryEntry struct {
 	Content   string    `json:"content"`
 	Timestamp time.Time `json:"-"`
@@ -511,7 +587,11 @@ type zcMemoryEntry struct {
 }
 
 func (z *ZeroClawAdapter) fetchMemoryEntries(ctx context.Context) ([]zcMemoryEntry, error) {
-	body, err := z.getRaw(ctx, "/api/memory")
+	return z.fetchMemoryEntriesFrom(ctx, "/api/memory")
+}
+
+func (z *ZeroClawAdapter) fetchMemoryEntriesFrom(ctx context.Context, path string) ([]zcMemoryEntry, error) {
+	body, err := z.getRaw(ctx, path)
 	if err != nil {
 		return nil, fmt.Errorf("fetching memory: %w", err)
 	}
@@ -584,7 +664,7 @@ func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, _ string) (*
 	}, nil
 }
 
-func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, _ string) (<-chan ChatEvent, error) {
+func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error) {
 	wsURL := strings.Replace(z.baseURL, "http://", "ws://", 1)
 	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
 	wsURL += "/ws/chat"
@@ -598,10 +678,14 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, _ string) 
 	}
 	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB
 
-	outgoing, _ := json.Marshal(map[string]string{
+	msg := map[string]string{
 		"type":    "message",
 		"content": message,
-	})
+	}
+	if sessionKey != "" && sessionKey != "memory" {
+		msg["session_id"] = sessionKey
+	}
+	outgoing, _ := json.Marshal(msg)
 	if err := conn.Write(ctx, websocket.MessageText, outgoing); err != nil {
 		conn.CloseNow()
 		return nil, fmt.Errorf("sending WS message: %w", err)
@@ -673,12 +757,60 @@ func (z *ZeroClawAdapter) readStreamWS(ctx context.Context, conn *websocket.Conn
 	}
 }
 
-func (z *ZeroClawAdapter) DeleteSession(_ context.Context, _ string) error {
-	return fmt.Errorf("session deletion not supported for ZeroClaw")
+func (z *ZeroClawAdapter) CreateSession(ctx context.Context, name string) (*Session, error) {
+	payload := fmt.Sprintf(`{"name":%q}`, name)
+	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/api/sessions", strings.NewReader(payload))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if z.token != "" {
+		req.Header.Set("Authorization", "Bearer "+z.token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("creating session: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("create session returned %d: %s", resp.StatusCode, body)
+	}
+	var result struct {
+		ID        string `json:"id"`
+		Name      string `json:"name"`
+		CreatedAt string `json:"created_at"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decoding create session response: %w", err)
+	}
+	return &Session{Key: result.ID, Title: result.Name}, nil
 }
 
-func (z *ZeroClawAdapter) PurgeSession(_ context.Context, _ string) error {
-	return fmt.Errorf("session purge not supported for ZeroClaw")
+func (z *ZeroClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
+	if sessionKey == "" || sessionKey == "memory" {
+		return fmt.Errorf("cannot delete the legacy memory session")
+	}
+	req, err := http.NewRequestWithContext(ctx, "DELETE", z.baseURL+"/api/sessions/"+sessionKey, nil)
+	if err != nil {
+		return err
+	}
+	if z.token != "" {
+		req.Header.Set("Authorization", "Bearer "+z.token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("deleting session: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return fmt.Errorf("delete session returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+func (z *ZeroClawAdapter) PurgeSession(ctx context.Context, sessionKey string) error {
+	return z.DeleteSession(ctx, sessionKey)
 }
 
 func (z *ZeroClawAdapter) Personality(ctx context.Context) (*Personality, error) {

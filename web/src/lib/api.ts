@@ -169,6 +169,22 @@ export async function fetchChatMessages(
   return res.json();
 }
 
+export async function createSession(
+  agentName: string,
+  sessionName: string,
+): Promise<{ key: string; title: string }> {
+  const res = await fetch(`${BASE}/api/agents/${agentName}/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: sessionName }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to create session: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function resetSession(
   name: string,
   sessionKey: string,

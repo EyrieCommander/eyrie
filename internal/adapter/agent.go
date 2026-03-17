@@ -45,6 +45,9 @@ type Agent interface {
 	// The channel is closed when the response is complete (after a "done" or "error" event).
 	StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error)
 
+	// CreateSession creates a new conversation session with the given name. Returns the new session.
+	CreateSession(ctx context.Context, name string) (*Session, error)
+
 	// DeleteSession resets/removes a conversation session (archives the transcript).
 	DeleteSession(ctx context.Context, sessionKey string) error
 

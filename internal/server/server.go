@@ -50,6 +50,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/agents/{name}/logs", s.handleAgentLogs)
 	s.mux.HandleFunc("GET /api/agents/{name}/activity", s.handleAgentActivity)
 	s.mux.HandleFunc("GET /api/agents/{name}/sessions", s.handleAgentSessions)
+	s.mux.HandleFunc("POST /api/agents/{name}/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /api/agents/{name}/sessions/{session}/messages", s.handleAgentMessages)
 	s.mux.HandleFunc("POST /api/agents/{name}/chat", s.handleAgentChat)
 	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}", s.handleDeleteSession)

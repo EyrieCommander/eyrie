@@ -1130,6 +1130,11 @@ func (o *OpenClawAdapter) parseChatStreamEvent(frame map[string]any) *ChatEvent 
 	}
 }
 
+func (o *OpenClawAdapter) CreateSession(_ context.Context, name string) (*Session, error) {
+	key := "agent:main:" + name
+	return &Session{Key: key, Title: name}, nil
+}
+
 func (o *OpenClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
 	_, err := o.rpcCall(ctx, "sessions.reset", map[string]any{"key": sessionKey})
 	if err != nil {
