@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/natalie/eyrie/internal/adapter"
+	"github.com/natalie/eyrie/internal/config"
 	"github.com/natalie/eyrie/internal/discovery"
 	"github.com/natalie/eyrie/internal/manager"
+	"github.com/natalie/eyrie/internal/registry"
 )
 
 type agentJSON struct {
@@ -249,6 +252,160 @@ func (s *Server) handleUnhideSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleFrameworkDetail(w http.ResponseWriter, r *http.Request) {
+	frameworkID := r.PathValue("id")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	// Fetch registry (uses default URL from registry package)
+	client, err := registry.NewClient("")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create registry client"})
+		return
+	}
+
+	reg, err := client.Fetch(ctx, false)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to fetch registry"})
+		return
+	}
+
+	// Find framework
+	for _, fw := range reg.Frameworks {
+		if fw.ID == frameworkID {
+			writeJSON(w, http.StatusOK, fw)
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("framework %q not found", frameworkID)})
+}
+
+func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Find agent to get config path and format
+	result := s.runDiscovery(ctx)
+	var discoveredAgent *adapter.DiscoveredAgent
+	for _, ar := range result.Agents {
+		if ar.Agent.Name == name {
+			discoveredAgent = &ar.Agent
+			break
+		}
+	}
+
+	if discoveredAgent == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", name)})
+		return
+	}
+
+	// Parse request body (could be raw string or structured data)
+	var body struct {
+		Config interface{} `json:"config"` // Can be string (raw) or object (structured)
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if body.Config == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing 'config' field"})
+		return
+	}
+
+	// Get config format from discovered agent
+	configPath := config.ExpandHome(discoveredAgent.ConfigPath)
+
+	// Determine format from file extension if not provided
+	format := discoveredAgent.Framework
+	if discoveredAgent.Framework == "zeroclaw" {
+		format = "toml"
+	} else if discoveredAgent.Framework == "openclaw" {
+		format = "json"
+	} else if discoveredAgent.Framework == "hermes" {
+		format = "yaml"
+	}
+
+	// Write config atomically
+	if err := config.WriteConfigAtomic(configPath, format, body.Config); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to write config: %v", err)})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "configuration saved successfully"})
+}
+
+func (s *Server) handleAgentConfigValidate(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+
+	// Find agent
+	result := s.runDiscovery(ctx)
+	var discoveredAgent *adapter.DiscoveredAgent
+	for _, ar := range result.Agents {
+		if ar.Agent.Name == name {
+			discoveredAgent = &ar.Agent
+			break
+		}
+	}
+
+	if discoveredAgent == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", name)})
+		return
+	}
+
+	// Parse request body
+	var body struct {
+		Config interface{} `json:"config"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if body.Config == nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "missing 'config' field"})
+		return
+	}
+
+	// Determine format
+	format := "toml"
+	if discoveredAgent.Framework == "openclaw" {
+		format = "json"
+	} else if discoveredAgent.Framework == "hermes" {
+		format = "yaml"
+	}
+
+	// Create temp file for validation
+	tempFile, err := os.CreateTemp("", fmt.Sprintf("eyrie-validate-%s-*.%s", name, format))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create temp file"})
+		return
+	}
+	tempPath := tempFile.Name()
+	tempFile.Close()
+	defer os.Remove(tempPath)
+
+	// Write config to temp file
+	if err := config.WriteConfigAtomic(tempPath, format, body.Config); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]interface{}{
+			"valid": false,
+			"error": fmt.Sprintf("invalid config format: %v", err),
+		})
+		return
+	}
+
+	// For now, just return success if format is valid
+	// TODO: Actually test-start the agent with temp config
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"valid":   true,
+		"message": "configuration is valid",
+	})
 }
 
 func (s *Server) findAgent(ctx context.Context, name string) (adapter.Agent, error) {

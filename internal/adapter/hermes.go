@@ -3,6 +3,7 @@ package adapter
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -12,6 +13,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"gopkg.in/yaml.v3"
+	_ "modernc.org/sqlite" // SQLite driver
 )
 
 // HermesAdapter implements the Agent interface for Hermes (Python-based agent)
@@ -26,13 +30,25 @@ type HermesAdapter struct {
 
 // NewHermesAdapter creates a new Hermes adapter
 func NewHermesAdapter(id, name, configPath, binaryPath string) *HermesAdapter {
+	// Expand ~ in configPath
+	expandedPath := expandHome(configPath)
+
 	return &HermesAdapter{
 		id:         id,
 		name:       name,
-		configPath: configPath,
-		configDir:  filepath.Dir(configPath),
+		configPath: expandedPath,
+		configDir:  filepath.Dir(expandedPath),
 		binaryPath: binaryPath,
 	}
+}
+
+// expandHome expands ~ in paths
+func expandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		home, _ := os.UserHomeDir()
+		return filepath.Join(home, path[2:])
+	}
+	return path
 }
 
 // ID returns the unique identifier
@@ -60,14 +76,27 @@ func (h *HermesAdapter) Health(ctx context.Context) (*HealthStatus, error) {
 	pidFile := filepath.Join(h.configDir, "gateway.pid")
 	stateFile := filepath.Join(h.configDir, "gateway_state.json")
 
-	// Read PID file
+	// Read PID file (Hermes uses JSON format)
 	pidData, err := os.ReadFile(pidFile)
 	if err != nil {
 		return &HealthStatus{Alive: false}, nil
 	}
 
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil {
+	// Parse JSON to extract PID
+	var pidInfo struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(pidData, &pidInfo); err != nil {
+		// Try plain text format as fallback
+		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidData)))
+		if parseErr != nil {
+			return &HealthStatus{Alive: false}, nil
+		}
+		pidInfo.PID = pid
+	}
+
+	pid := pidInfo.PID
+	if pid <= 0 {
 		return &HealthStatus{Alive: false}, nil
 	}
 
@@ -134,12 +163,43 @@ func parseComponentHealth(data map[string]interface{}) ComponentHealth {
 
 // Status returns agent status by parsing config file
 func (h *HermesAdapter) Status(ctx context.Context) (*AgentStatus, error) {
-	// For now, return placeholder status
-	// TODO: Parse config.yaml to extract provider, model, channels
+	// Parse config.yaml to extract provider, model, channels
+	data, err := os.ReadFile(h.configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
+	}
+
+	var config struct {
+		Model struct {
+			Default  string `yaml:"default"`
+			Provider string `yaml:"provider"`
+		} `yaml:"model"`
+		Channels map[string]interface{} `yaml:"channels"`
+	}
+
+	if err := yaml.Unmarshal(data, &config); err != nil {
+		return nil, fmt.Errorf("failed to parse config: %w", err)
+	}
+
+	// Extract enabled channels
+	channels := make([]string, 0)
+	for name, settings := range config.Channels {
+		if settingsMap, ok := settings.(map[string]interface{}); ok {
+			if enabled, ok := settingsMap["enabled"].(bool); ok && enabled {
+				channels = append(channels, name)
+			}
+		}
+	}
+
+	provider := config.Model.Provider
+	if provider == "" || provider == "auto" {
+		provider = "openrouter" // Default inference provider
+	}
+
 	return &AgentStatus{
-		Provider:    "unknown",
-		Model:       "unknown",
-		Channels:    []string{},
+		Provider:    provider,
+		Model:       config.Model.Default,
+		Channels:    channels,
 		Skills:      0,
 		GatewayPort: 0, // Hermes doesn't have a single gateway port
 	}, nil
@@ -301,14 +361,129 @@ func (h *HermesAdapter) TailActivity(ctx context.Context) (<-chan ActivityEvent,
 
 // Sessions returns conversation sessions
 func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
-	// TODO: Implement by reading Hermes session storage
-	return nil, fmt.Errorf("sessions not implemented for Hermes")
+	// Open Hermes SQLite database
+	dbPath := filepath.Join(h.configDir, "state.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Query sessions ordered by most recent
+	rows, err := db.QueryContext(ctx, `
+		SELECT id, source, title, started_at, message_count
+		FROM sessions
+		ORDER BY started_at DESC
+		LIMIT 50
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sessions: %w", err)
+	}
+	defer rows.Close()
+
+	sessions := make([]Session, 0)
+	for rows.Next() {
+		var (
+			id           string
+			source       string
+			title        sql.NullString
+			startedAt    float64
+			messageCount int
+		)
+
+		if err := rows.Scan(&id, &source, &title, &startedAt, &messageCount); err != nil {
+			continue
+		}
+
+		// Convert Unix timestamp to time
+		lastMsg := time.Unix(int64(startedAt), 0)
+
+		sessionTitle := title.String
+		if sessionTitle == "" {
+			sessionTitle = fmt.Sprintf("Session %s", id[:8])
+		}
+
+		sessions = append(sessions, Session{
+			Key:      id,
+			Title:    sessionTitle,
+			LastMsg:  &lastMsg,
+			Channel:  source,
+			ReadOnly: false,
+		})
+	}
+
+	return sessions, nil
 }
 
 // ChatHistory returns chat messages for a session
 func (h *HermesAdapter) ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
-	// TODO: Implement by reading Hermes session files
-	return nil, fmt.Errorf("chat history not implemented for Hermes")
+	// Open Hermes SQLite database
+	dbPath := filepath.Join(h.configDir, "state.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
+	}
+	defer db.Close()
+
+	// Query messages for this session
+	query := `
+		SELECT role, content, tool_calls, timestamp
+		FROM messages
+		WHERE session_id = ?
+		ORDER BY timestamp ASC
+	`
+	if limit > 0 {
+		query = fmt.Sprintf("%s LIMIT %d", query, limit)
+	}
+
+	rows, err := db.QueryContext(ctx, query, sessionKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query messages: %w", err)
+	}
+	defer rows.Close()
+
+	var messages []ChatMessage
+	for rows.Next() {
+		var (
+			role      string
+			content   sql.NullString
+			toolCalls sql.NullString
+			timestamp float64
+		)
+
+		if err := rows.Scan(&role, &content, &toolCalls, &timestamp); err != nil {
+			continue
+		}
+
+		// Convert Unix timestamp
+		msgTime := time.Unix(int64(timestamp), 0)
+
+		msg := ChatMessage{
+			Timestamp: msgTime,
+			Role:      role,
+			Content:   content.String,
+			Channel:   "hermes",
+		}
+
+		// Parse tool calls if present
+		if toolCalls.Valid && toolCalls.String != "" {
+			var calls []map[string]interface{}
+			if err := json.Unmarshal([]byte(toolCalls.String), &calls); err == nil {
+				for _, call := range calls {
+					if name, ok := call["function"].(map[string]interface{})["name"].(string); ok {
+						msg.Parts = append(msg.Parts, ChatPart{
+							Type: "tool_call",
+							Name: name,
+						})
+					}
+				}
+			}
+		}
+
+		messages = append(messages, msg)
+	}
+
+	return messages, nil
 }
 
 // SendMessage sends a message and waits for the response

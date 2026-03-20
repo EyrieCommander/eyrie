@@ -5,6 +5,12 @@ import {
   Square,
   RotateCcw,
   Plus,
+  Edit3,
+  Save,
+  X,
+  CheckCircle,
+  Settings,
+  Terminal as TerminalIcon,
 } from "lucide-react";
 import type {
   AgentInfo,
@@ -13,6 +19,8 @@ import type {
   ChatPart,
   ChatEvent,
   Session,
+  Framework,
+  ConfigField,
 } from "../lib/types";
 import {
   agentAction,
@@ -26,7 +34,12 @@ import {
   resetSession,
   purgeSession,
   hideSession,
+  updateAgentConfig,
+  validateAgentConfig,
+  getFrameworkDetail,
 } from "../lib/api";
+import ConfigEditor from "./ConfigEditor";
+import Terminal from "./Terminal";
 
 function formatBytes(bytes: number): string {
   if (!bytes) return "-";
@@ -54,6 +67,8 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
   const [actionPending, setActionPending] = useState(false);
+  const [framework, setFramework] = useState<Framework | null>(null);
+  const [showTerminal, setShowTerminal] = useState(false);
 
   const handleAction = useCallback(
     async (action: "start" | "stop" | "restart") => {
@@ -89,6 +104,13 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
     }
   }, [tab, agent.name, agent.alive]);
 
+  useEffect(() => {
+    // Fetch framework detail with schema for inline editing
+    getFrameworkDetail(agent.framework)
+      .then(setFramework)
+      .catch((err) => console.error("Failed to load framework:", err));
+  }, [agent.framework]);
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
@@ -109,6 +131,12 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
             />
           ) : (
             <>
+              <ActionButton
+                icon={<TerminalIcon className="h-3.5 w-3.5" />}
+                label="terminal"
+                onClick={() => setShowTerminal(true)}
+                disabled={false}
+              />
               <ActionButton
                 icon={<RotateCcw className="h-3.5 w-3.5" />}
                 label="restart"
@@ -154,19 +182,45 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
         ))}
       </div>
 
-      {tab === "overview" && <OverviewTab agent={agent} />}
+      {tab === "overview" && <OverviewTab agent={agent} framework={framework} onConfigChange={() => {
+        // Refresh agent data after config change
+        window.location.reload();
+      }} />}
       {tab === "chat" && (
         <ChatTab alive={agent.alive} framework={agent.framework} agentName={agent.name} />
       )}
       {tab === "logs" && <LogsTab logs={logs} alive={agent.alive} />}
-      {tab === "config" && <ConfigTab config={config} error={configError} alive={agent.alive} />}
+      {tab === "config" && <ConfigTab config={config} error={configError} alive={agent.alive} agentName={agent.name} onConfigSaved={() => {
+        // Refresh config after save
+        fetchAgentConfig(agent.name)
+          .then(setConfig)
+          .catch((err) => setConfigError(err.message ?? "Failed to load config"));
+      }} />}
+
+      {/* Terminal Modal */}
+      {showTerminal && (
+        <Terminal agentName={agent.name} onClose={() => setShowTerminal(false)} />
+      )}
     </div>
   );
 }
 
-function OverviewTab({ agent }: { agent: AgentInfo }) {
+function OverviewTab({
+  agent,
+  framework,
+  onConfigChange
+}: {
+  agent: AgentInfo;
+  framework: Framework | null;
+  onConfigChange: () => void;
+}) {
   const health = agent.health;
   const status = agent.status;
+
+  // Find editable fields from framework schema
+  const getEditableField = (key: string) => {
+    return framework?.config_schema?.common_fields.find(f => f.key === key);
+  };
 
   return (
     <div className="space-y-4">
@@ -204,8 +258,20 @@ function OverviewTab({ agent }: { agent: AgentInfo }) {
               : "-"
           }
         />
-        <InfoCard label="PROVIDER" value={status?.provider ?? "-"} />
-        <InfoCard label="MODEL" value={status?.model ?? "-"} />
+        <EditableInfoCard
+          label="PROVIDER"
+          value={status?.provider ?? "-"}
+          field={getEditableField("provider")}
+          agentName={agent.name}
+          onSave={onConfigChange}
+        />
+        <EditableInfoCard
+          label="MODEL"
+          value={status?.model ?? "-"}
+          field={getEditableField("model")}
+          agentName={agent.name}
+          onSave={onConfigChange}
+        />
         <InfoCard
           label="CHANNELS"
           value={status?.channels?.join(", ") || "-"}
@@ -298,11 +364,53 @@ function ConfigTab({
   config,
   error,
   alive,
+  agentName,
+  onConfigSaved,
 }: {
   config: AgentConfig | null;
   error: string | null;
   alive: boolean;
+  agentName: string;
+  onConfigSaved: () => void;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [editedContent, setEditedContent] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (config) {
+      setEditedContent(config.content);
+    }
+  }, [config]);
+
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      setSaveError(null);
+
+      // Validate
+      const validation = await validateAgentConfig(agentName, editedContent);
+      if (!validation.valid) {
+        setSaveError(validation.error || "Configuration is invalid");
+        return;
+      }
+
+      // Save
+      await updateAgentConfig(agentName, editedContent);
+
+      setSaveSuccess(true);
+      setEditing(false);
+      setTimeout(() => setSaveSuccess(false), 3000);
+      onConfigSaved();
+    } catch (err) {
+      setSaveError(err instanceof Error ? err.message : "Failed to save configuration");
+    } finally {
+      setSaving(false);
+    }
+  };
+
   if (!alive) {
     return (
       <p className="text-xs text-text-muted">
@@ -325,21 +433,95 @@ function ConfigTab({
     );
   }
 
+  if (editing) {
+    return (
+      <div className="space-y-4">
+        {saveError && (
+          <div className="p-3 bg-red/10 border border-red/20 rounded text-sm text-red">
+            {saveError}
+          </div>
+        )}
+
+        <ConfigEditor
+          value={editedContent}
+          format={config.format}
+          onChange={setEditedContent}
+        />
+
+        <div className="flex items-center gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-accent hover:bg-accent-hover
+              text-white rounded text-sm font-medium transition-colors disabled:opacity-50"
+          >
+            {saving ? (
+              <>
+                <span className="animate-spin">⟳</span>
+                saving...
+              </>
+            ) : (
+              <>
+                <Save className="w-4 h-4" />
+                save changes
+              </>
+            )}
+          </button>
+          <button
+            onClick={() => {
+              setEditing(false);
+              setEditedContent(config.content);
+              setSaveError(null);
+            }}
+            disabled={saving}
+            className="flex items-center gap-2 px-4 py-2 bg-bg-subtle hover:bg-bg-muted
+              border border-border text-fg rounded text-sm font-medium transition-colors"
+          >
+            <X className="w-4 h-4" />
+            cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  let displayContent = config.content;
+  let isJson = false;
+
   if (config.format === "json") {
     try {
-      const pretty = JSON.stringify(JSON.parse(config.content), null, 2);
-      return (
-        <pre className="max-h-[calc(100vh-320px)] overflow-auto rounded border border-border bg-surface p-5 text-xs leading-relaxed">
-          {highlightJson(pretty)}
-        </pre>
-      );
+      displayContent = JSON.stringify(JSON.parse(config.content), null, 2);
+      isJson = true;
     } catch { /* fall through to raw */ }
   }
 
   return (
-    <pre className="max-h-[calc(100vh-320px)] overflow-auto rounded border border-border bg-surface p-5 text-xs leading-relaxed">
-      {highlightToml(config.content)}
-    </pre>
+    <div className="space-y-4">
+      {saveSuccess && (
+        <div className="p-3 bg-green/10 border border-green/20 rounded text-sm text-green flex items-center gap-2">
+          <CheckCircle className="w-4 h-4" />
+          configuration saved successfully
+        </div>
+      )}
+
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">
+          {config.format} configuration
+        </p>
+        <button
+          onClick={() => setEditing(true)}
+          className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-accent-hover
+            text-white rounded text-xs font-medium transition-colors"
+        >
+          <Edit3 className="w-3.5 h-3.5" />
+          edit config
+        </button>
+      </div>
+
+      <pre className="max-h-[calc(100vh-320px)] overflow-auto rounded border border-border bg-surface p-5 text-xs leading-relaxed">
+        {isJson ? highlightJson(displayContent) : highlightToml(displayContent)}
+      </pre>
+    </div>
   );
 }
 
@@ -542,8 +724,13 @@ function ChatTab({
 
   useEffect(() => {
     const group = groups.find((g) => g.name === activeGroupName);
-    if (group && alive) loadGroup(group);
-  }, [activeGroupName, alive, loadGroup, sessions]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (group && alive) {
+      loadGroup(group);
+    } else if (alive && groups.length === 0) {
+      // No sessions - clear loading state
+      setLoading(false);
+    }
+  }, [activeGroupName, alive, loadGroup, sessions, groups.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const isNoReply = (content: string) =>
     /^(\[\[no_reply\]\]|NO_REPLY)$/i.test(content.trim());
@@ -1243,6 +1430,233 @@ function InfoCard({
       </p>
     </div>
   );
+}
+
+function EditableInfoCard({
+  label,
+  value,
+  field,
+  agentName,
+  onSave,
+}: {
+  label: string;
+  value: string;
+  field: ConfigField | undefined;
+  agentName: string;
+  onSave: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [editValue, setEditValue] = useState(value);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setEditValue(value);
+  }, [value]);
+
+  const handleSave = async () => {
+    if (!field) return;
+
+    try {
+      setSaving(true);
+      setError(null);
+
+      // Fetch current config
+      const config = await fetchAgentConfig(agentName);
+      let parsed: any;
+
+      try {
+        if (config.format === "json") {
+          parsed = JSON.parse(config.content);
+        } else if (config.format === "toml") {
+          // For TOML, we need to parse it (using a simple approach for now)
+          // This is a simplified parser - real TOML parsing would be more complex
+          parsed = parseTOMLSimple(config.content);
+        } else {
+          throw new Error(`Unsupported config format: ${config.format}`);
+        }
+      } catch (err) {
+        throw new Error(`Failed to parse config: ${err instanceof Error ? err.message : "unknown error"}`);
+      }
+
+      // Update the field value
+      const parts = field.key.split(".");
+      let current = parsed;
+      for (let i = 0; i < parts.length - 1; i++) {
+        if (!current[parts[i]]) {
+          current[parts[i]] = {};
+        }
+        current = current[parts[i]];
+      }
+      current[parts[parts.length - 1]] = editValue;
+
+      // Save the updated config
+      await updateAgentConfig(agentName, parsed);
+
+      setEditing(false);
+      onSave();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleCancel = () => {
+    setEditValue(value);
+    setEditing(false);
+    setError(null);
+  };
+
+  if (!field) {
+    // Not editable, render as normal InfoCard
+    return <InfoCard label={label} value={value} />;
+  }
+
+  return (
+    <div className="rounded border border-border bg-surface p-4">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+        {label}
+      </p>
+
+      {editing ? (
+        <div className="mt-2 space-y-2">
+          {field.type === "select" ? (
+            <select
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              disabled={saving}
+              className="w-full px-3 py-1.5 bg-bg-subtle border border-border rounded text-sm text-fg
+                focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
+            >
+              {field.options?.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          ) : field.type === "number" ? (
+            <input
+              type="number"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              disabled={saving}
+              min={field.min}
+              max={field.max}
+              className="w-full px-3 py-1.5 bg-bg-subtle border border-border rounded text-sm text-fg
+                focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
+            />
+          ) : (
+            <input
+              type="text"
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              disabled={saving}
+              className="w-full px-3 py-1.5 bg-bg-subtle border border-border rounded text-sm text-fg
+                focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
+            />
+          )}
+
+          {error && (
+            <p className="text-xs text-red">{error}</p>
+          )}
+
+          <div className="flex gap-2">
+            <button
+              onClick={handleSave}
+              disabled={saving}
+              className="px-3 py-1 bg-accent hover:bg-accent-hover text-white rounded text-xs
+                font-medium transition-colors disabled:opacity-50"
+            >
+              {saving ? "saving..." : "save"}
+            </button>
+            <button
+              onClick={handleCancel}
+              disabled={saving}
+              className="px-3 py-1 bg-bg-subtle hover:bg-bg-muted border border-border text-fg
+                rounded text-xs font-medium transition-colors disabled:opacity-50"
+            >
+              cancel
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="mt-1.5 flex items-center justify-between group">
+          <p className="text-lg font-semibold text-text">
+            {value}
+          </p>
+          <button
+            onClick={() => setEditing(true)}
+            className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-bg-muted
+              rounded text-fg-muted hover:text-fg"
+            title="edit"
+          >
+            <Settings className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Simple TOML parser for reading config values
+function parseTOMLSimple(content: string): any {
+  const result: any = {};
+  let currentSection: any = result;
+  const sectionPath: string[] = [];
+
+  const lines = content.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // Skip comments and empty lines
+    if (!trimmed || trimmed.startsWith("#")) continue;
+
+    // Section headers [section] or [section.subsection]
+    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+      const section = trimmed.slice(1, -1);
+      const parts = section.split(".");
+
+      currentSection = result;
+      sectionPath.length = 0;
+
+      for (const part of parts) {
+        if (!currentSection[part]) {
+          currentSection[part] = {};
+        }
+        currentSection = currentSection[part];
+        sectionPath.push(part);
+      }
+      continue;
+    }
+
+    // Key-value pairs
+    const eqIndex = trimmed.indexOf("=");
+    if (eqIndex > 0) {
+      const key = trimmed.slice(0, eqIndex).trim();
+      let value = trimmed.slice(eqIndex + 1).trim();
+
+      // Remove quotes from strings
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1);
+      }
+
+      // Try to parse as number
+      const num = Number(value);
+      if (!isNaN(num) && value !== "") {
+        currentSection[key] = num;
+      } else if (value === "true") {
+        currentSection[key] = true;
+      } else if (value === "false") {
+        currentSection[key] = false;
+      } else {
+        currentSection[key] = value;
+      }
+    }
+  }
+
+  return result;
 }
 
 function ActionButton({

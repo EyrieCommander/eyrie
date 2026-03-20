@@ -230,7 +230,55 @@ export async function hideSession(
   }
 }
 
+// Config API
+
+export async function updateAgentConfig(
+  name: string,
+  config: unknown,
+): Promise<void> {
+  const res = await fetch(`${BASE}/api/agents/${name}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to update config: ${res.statusText}`);
+  }
+}
+
+export interface ConfigValidationResult {
+  valid: boolean;
+  error?: string;
+  message?: string;
+}
+
+export async function validateAgentConfig(
+  name: string,
+  config: unknown,
+): Promise<ConfigValidationResult> {
+  const res = await fetch(`${BASE}/api/agents/${name}/config/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ config }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(
+      body.error || `Failed to validate config: ${res.statusText}`,
+    );
+  }
+  return res.json();
+}
+
 // Registry and install API
+
+export async function getFrameworkDetail(id: string): Promise<Framework> {
+  const res = await fetch(`${BASE}/api/registry/frameworks/${id}`);
+  if (!res.ok)
+    throw new Error(`Failed to fetch framework detail: ${res.statusText}`);
+  return res.json();
+}
 
 export async function fetchFrameworks(): Promise<Framework[]> {
   const res = await fetch(`${BASE}/api/registry/frameworks`);

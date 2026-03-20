@@ -57,9 +57,13 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}/purge", s.handlePurgeSession)
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/hide", s.handleHideSession)
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/unhide", s.handleUnhideSession)
+	s.mux.HandleFunc("PUT /api/agents/{name}/config", s.handleAgentConfigUpdate)
+	s.mux.HandleFunc("POST /api/agents/{name}/config/validate", s.handleAgentConfigValidate)
+	s.mux.HandleFunc("GET /api/agents/{name}/terminal/ws", s.handleTerminal)
 
 	// Registry and install endpoints
 	s.mux.HandleFunc("GET /api/registry/frameworks", s.handleListFrameworks)
+	s.mux.HandleFunc("GET /api/registry/frameworks/{id}", s.handleFrameworkDetail)
 	s.mux.HandleFunc("POST /api/registry/install", s.handleInstallFramework)
 	s.mux.HandleFunc("GET /api/registry/install/status", s.handleInstallStatus)
 

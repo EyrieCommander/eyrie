@@ -25,9 +25,10 @@ type Framework struct {
 	Requirements  []string `json:"requirements"`   // ["python>=3.11", "node>=22"]
 
 	// Configuration
-	ConfigFormat string `json:"config_format"` // "toml", "json", "yaml"
-	ConfigPath   string `json:"config_path"`   // "~/.hermes/config.yaml"
-	ConfigDir    string `json:"config_dir"`    // "~/.hermes"
+	ConfigFormat string        `json:"config_format"` // "toml", "json", "yaml"
+	ConfigPath   string        `json:"config_path"`   // "~/.hermes/config.yaml"
+	ConfigDir    string        `json:"config_dir"`    // "~/.hermes"
+	ConfigSchema *ConfigSchema `json:"config_schema,omitempty"` // Optional config form schema
 
 	// Runtime
 	BinaryPath  string `json:"binary_path"`        // "~/.local/bin/hermes"
@@ -48,4 +49,23 @@ type Framework struct {
 	// Logs and activity
 	LogDir    string `json:"log_dir"`    // "~/.hermes/logs"
 	LogFormat string `json:"log_format"` // "text", "json"
+}
+
+// ConfigSchema defines editable configuration fields for a framework
+type ConfigSchema struct {
+	CommonFields []ConfigField `json:"common_fields"` // Editable fields for the config form
+	APIKeyHint   string        `json:"api_key_hint"`  // Instructions for setting API keys
+}
+
+// ConfigField represents a single editable configuration field
+type ConfigField struct {
+	Key         string   `json:"key"`         // Config key (dot notation for nested: "gateway.port")
+	Label       string   `json:"label"`       // Display label
+	Type        string   `json:"type"`        // "text", "number", "select", "checkbox", "multiselect"
+	Default     any      `json:"default,omitempty"` // Default value
+	Required    bool     `json:"required"`    // Whether field is required
+	Description string   `json:"description"` // Help text
+	Options     []string `json:"options,omitempty"` // For select/multiselect types
+	Min         *int     `json:"min,omitempty"` // For number types
+	Max         *int     `json:"max,omitempty"` // For number types
 }

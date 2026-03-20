@@ -88,6 +88,23 @@ export interface ChatEvent {
   error?: string;
 }
 
+export interface ConfigField {
+  key: string;
+  label: string;
+  type: "text" | "number" | "select" | "checkbox" | "multiselect";
+  default?: unknown;
+  required: boolean;
+  description: string;
+  options?: string[];
+  min?: number;
+  max?: number;
+}
+
+export interface ConfigSchema {
+  common_fields: ConfigField[];
+  api_key_hint: string;
+}
+
 export interface Framework {
   id: string;
   name: string;
@@ -113,6 +130,7 @@ export interface Framework {
   health_url?: string;
   log_dir: string;
   log_format: string;
+  config_schema?: ConfigSchema;
   installed?: boolean; // Added by backend
 }
 

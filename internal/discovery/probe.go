@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"os"
@@ -41,8 +42,21 @@ func probeHermesPID() bool {
 		return false
 	}
 
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil {
+	// Parse JSON format (Hermes uses {"pid": 12345, ...})
+	var pidInfo struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(pidData, &pidInfo); err != nil {
+		// Try plain text as fallback
+		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidData)))
+		if parseErr != nil {
+			return false
+		}
+		pidInfo.PID = pid
+	}
+
+	pid := pidInfo.PID
+	if pid <= 0 {
 		return false
 	}
 

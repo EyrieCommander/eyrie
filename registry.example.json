@@ -189,7 +189,66 @@
       "state_file": "~/.hermes/gateway_state.json",
       "health_url": "",
       "log_dir": "~/.hermes/logs",
-      "log_format": "text"
+      "log_format": "text",
+      "config_schema": {
+        "common_fields": [
+          {
+            "key": "provider",
+            "label": "LLM provider",
+            "type": "select",
+            "options": ["anthropic", "openrouter", "openai", "nous-portal", "z.ai"],
+            "default": "anthropic",
+            "required": true,
+            "description": "LLM provider to use for agent"
+          },
+          {
+            "key": "model",
+            "label": "model",
+            "type": "text",
+            "default": "claude-opus-4",
+            "required": true,
+            "description": "model identifier for the selected provider"
+          },
+          {
+            "key": "terminal.backend",
+            "label": "terminal backend",
+            "type": "select",
+            "options": ["local", "ssh", "docker", "modal"],
+            "default": "local",
+            "required": true,
+            "description": "execution environment for agent commands"
+          },
+          {
+            "key": "agent.max_turns",
+            "label": "max turns",
+            "type": "number",
+            "default": 50,
+            "required": false,
+            "description": "maximum conversation turns before reset",
+            "min": 1,
+            "max": 1000
+          },
+          {
+            "key": "agent.reasoning_effort",
+            "label": "reasoning effort",
+            "type": "select",
+            "options": ["low", "medium", "high"],
+            "default": "medium",
+            "required": false,
+            "description": "how much reasoning the agent should apply"
+          },
+          {
+            "key": "platforms",
+            "label": "enabled platforms",
+            "type": "multiselect",
+            "options": ["telegram", "discord", "slack", "whatsapp", "signal", "matrix"],
+            "default": ["telegram"],
+            "required": false,
+            "description": "messaging platforms to enable"
+          }
+        ],
+        "api_key_hint": "set API keys in ~/.hermes/.env file: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY"
+      }
     }
   ]
 }

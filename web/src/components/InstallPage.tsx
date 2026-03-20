@@ -1,10 +1,13 @@
 import { useEffect, useState, useRef } from "react";
-import { AlertCircle, RefreshCw, Package } from "lucide-react";
+import { useNavigate } from "react-router-dom";
+import { AlertCircle, RefreshCw, Package, Settings, Terminal as TerminalIcon } from "lucide-react";
 import FrameworkCard from "./FrameworkCard";
+import Terminal from "./Terminal";
 import type { Framework, InstallProgress } from "../lib/types";
 import { fetchFrameworks, fetchInstallStatus, streamInstall } from "../lib/api";
 
 export default function InstallPage() {
+  const navigate = useNavigate();
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -16,6 +19,7 @@ export default function InstallPage() {
     null,
   );
   const [showLogs, setShowLogs] = useState(false);
+  const [showTerminal, setShowTerminal] = useState(false);
 
   const abortControllers = useRef<Record<string, AbortController>>({});
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -64,9 +68,10 @@ export default function InstallPage() {
     setInstallLogs((prev) => ({ ...prev, [frameworkId]: [] }));
     setShowLogs(true);
 
-    // Check if we're restarting a failed/stale installation
+    // Only force-restart if the previous install failed (error status)
+    // For "running" status, just connect to the existing stream
     const existingProgress = installProgress[frameworkId];
-    const shouldForce = existingProgress && (existingProgress.status === "error" || existingProgress.status === "running");
+    const shouldForce = existingProgress && existingProgress.status === "error";
 
     const controller = streamInstall(
       frameworkId,
@@ -187,20 +192,45 @@ export default function InstallPage() {
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
                 <h3 className="text-sm font-semibold text-fg">
-                  Installing {selectedFramework}
+                  {currentProgress?.status === "success"
+                    ? `${selectedFramework} installed successfully`
+                    : `Installing ${selectedFramework}`}
                 </h3>
-                {currentProgress && (
+                {currentProgress && currentProgress.status === "running" && (
                   <span className="text-xs text-fg-muted">
                     {currentProgress.phase} ({currentProgress.progress}%)
                   </span>
                 )}
               </div>
-              <button
-                onClick={() => setShowLogs(false)}
-                className="text-xs text-fg-muted hover:text-fg transition-colors"
-              >
-                Close
-              </button>
+              <div className="flex items-center gap-2">
+                {currentProgress?.status === "success" && (
+                  <>
+                    <button
+                      onClick={() => {
+                        setShowTerminal(true);
+                        setShowLogs(false);
+                      }}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-green hover:bg-green/90 text-white rounded text-xs font-medium transition-colors"
+                    >
+                      <TerminalIcon className="w-3.5 h-3.5" />
+                      launch terminal
+                    </button>
+                    <button
+                      onClick={() => navigate(`/agents/${selectedFramework}/config`)}
+                      className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
+                    >
+                      <Settings className="w-3.5 h-3.5" />
+                      configure agent
+                    </button>
+                  </>
+                )}
+                <button
+                  onClick={() => setShowLogs(false)}
+                  className="text-xs text-fg-muted hover:text-fg transition-colors"
+                >
+                  close
+                </button>
+              </div>
             </div>
 
             <div className="bg-black/90 rounded border border-border p-3 max-h-48 overflow-y-auto font-mono text-xs">
@@ -217,6 +247,14 @@ export default function InstallPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* Terminal Modal */}
+      {showTerminal && selectedFramework && (
+        <Terminal
+          agentName={selectedFramework}
+          onClose={() => setShowTerminal(false)}
+        />
       )}
     </div>
   );

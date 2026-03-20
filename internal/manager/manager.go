@@ -3,7 +3,9 @@ package manager
 import (
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 )
 
@@ -53,16 +55,28 @@ func executeOpenClaw(ctx context.Context, action LifecycleAction) error {
 func executeHermes(ctx context.Context, action LifecycleAction) error {
 	switch action {
 	case ActionStart:
+		// Check if launchd service is installed, install if needed
+		if !hermesServiceInstalled(ctx) {
+			if err := run(ctx, "hermes", "gateway", "install"); err != nil {
+				return fmt.Errorf("failed to install hermes service: %w", err)
+			}
+		}
 		return run(ctx, "hermes", "gateway", "start")
 	case ActionStop:
-		// Hermes doesn't have a stop command, handled by adapter via PID
-		return fmt.Errorf("use adapter.Stop() for Hermes (PID-based shutdown)")
+		return run(ctx, "hermes", "gateway", "stop")
 	case ActionRestart:
-		// Hermes doesn't have a restart command
-		return fmt.Errorf("use adapter.Restart() for Hermes (stop + start)")
+		return run(ctx, "hermes", "gateway", "restart")
 	default:
 		return fmt.Errorf("unsupported action %q for Hermes", action)
 	}
+}
+
+// hermesServiceInstalled checks if the Hermes launchd service is installed
+func hermesServiceInstalled(ctx context.Context) bool {
+	home := os.Getenv("HOME")
+	plistPath := filepath.Join(home, "Library", "LaunchAgents", "ai.hermes.gateway.plist")
+	_, err := os.Stat(plistPath)
+	return err == nil
 }
 
 func serviceInstalled(ctx context.Context, framework string) bool {
