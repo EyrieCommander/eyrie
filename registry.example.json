@@ -1,0 +1,195 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2026-03-19T00:00:00Z",
+  "frameworks": [
+    {
+      "id": "zeroclaw",
+      "name": "ZeroClaw",
+      "description": "Rust-based agent runtime (lean, fast, embedded-friendly)",
+      "language": "rust",
+      "repository": "https://github.com/zeroclaw-labs/zeroclaw",
+      "website": "https://zeroclawlabs.ai",
+      "install_method": "cargo",
+      "install_cmd": "cargo install zeroclaw",
+      "requirements": ["rust>=1.70"],
+      "config_format": "toml",
+      "config_path": "~/.zeroclaw/config.toml",
+      "config_dir": "~/.zeroclaw",
+      "binary_path": "~/.cargo/bin/zeroclaw",
+      "adapter_type": "http",
+      "default_port": 42617,
+      "start_cmd": "zeroclaw service start",
+      "stop_cmd": "zeroclaw service stop",
+      "status_cmd": "zeroclaw service status",
+      "restart_cmd": "zeroclaw service restart",
+      "health_url": "http://localhost:42617/health",
+      "log_dir": "~/.zeroclaw/logs",
+      "log_format": "text",
+      "config_schema": {
+        "common_fields": [
+          {
+            "key": "gateway.port",
+            "label": "gateway port",
+            "type": "number",
+            "default": 42617,
+            "required": true,
+            "description": "port for gateway HTTP API",
+            "min": 1024,
+            "max": 65535
+          },
+          {
+            "key": "gateway.host",
+            "label": "gateway host",
+            "type": "text",
+            "default": "127.0.0.1",
+            "required": true,
+            "description": "host address for gateway to bind to"
+          },
+          {
+            "key": "provider",
+            "label": "LLM provider",
+            "type": "select",
+            "options": ["openrouter", "anthropic", "openai"],
+            "default": "openrouter",
+            "required": true,
+            "description": "which LLM provider to use"
+          },
+          {
+            "key": "model",
+            "label": "model",
+            "type": "text",
+            "default": "moonshotai/kimi-k2.5",
+            "required": true,
+            "description": "model identifier (provider-specific)"
+          },
+          {
+            "key": "workspace.path",
+            "label": "workspace path",
+            "type": "text",
+            "default": "~/.zeroclaw/workspace",
+            "required": false,
+            "description": "directory for agent workspace files"
+          },
+          {
+            "key": "memory.backend",
+            "label": "memory backend",
+            "type": "select",
+            "options": ["sqlite", "memory"],
+            "default": "sqlite",
+            "required": true,
+            "description": "storage backend for conversation memory"
+          }
+        ],
+        "api_key_hint": "set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable before starting zeroclaw"
+      }
+    },
+    {
+      "id": "openclaw",
+      "name": "OpenClaw",
+      "description": "TypeScript-based agent system (feature-rich, Node.js)",
+      "language": "typescript",
+      "repository": "https://github.com/openclaw/openclaw",
+      "website": "https://docs.openclaw.ai",
+      "install_method": "npm",
+      "install_cmd": "npm install -g openclaw",
+      "requirements": ["node>=22"],
+      "config_format": "json",
+      "config_path": "~/.openclaw/openclaw.json",
+      "config_dir": "~/.openclaw",
+      "binary_path": "/usr/local/bin/openclaw",
+      "adapter_type": "websocket",
+      "default_port": 18789,
+      "start_cmd": "openclaw gateway start",
+      "stop_cmd": "openclaw gateway stop",
+      "status_cmd": "openclaw gateway status",
+      "restart_cmd": "openclaw gateway restart",
+      "health_url": "ws://localhost:18789",
+      "log_dir": "~/.openclaw/logs",
+      "log_format": "text",
+      "config_schema": {
+        "common_fields": [
+          {
+            "key": "gateway.port",
+            "label": "gateway port",
+            "type": "number",
+            "default": 18789,
+            "required": true,
+            "description": "port for gateway WebSocket RPC",
+            "min": 1024,
+            "max": 65535
+          },
+          {
+            "key": "gateway.bind",
+            "label": "gateway bind address",
+            "type": "text",
+            "default": "127.0.0.1",
+            "required": true,
+            "description": "address for gateway to bind to"
+          },
+          {
+            "key": "provider",
+            "label": "primary LLM provider",
+            "type": "select",
+            "options": ["vercel-ai-gateway", "openrouter", "anthropic", "openai"],
+            "default": "vercel-ai-gateway",
+            "required": true,
+            "description": "primary LLM provider for agent"
+          },
+          {
+            "key": "model",
+            "label": "model",
+            "type": "text",
+            "default": "vercel-ai-gateway/perplexity/sonar-pro",
+            "required": true,
+            "description": "model identifier (provider-specific format)"
+          },
+          {
+            "key": "tools.profile",
+            "label": "tools profile",
+            "type": "select",
+            "options": ["coding", "research", "assistant", "custom"],
+            "default": "coding",
+            "required": false,
+            "description": "pre-configured toolset profile"
+          },
+          {
+            "key": "channels",
+            "label": "enabled channels",
+            "type": "multiselect",
+            "options": ["telegram", "discord", "slack", "whatsapp", "signal", "imessage"],
+            "default": ["telegram"],
+            "required": false,
+            "description": "messaging platforms to enable"
+          }
+        ],
+        "api_key_hint": "set provider-specific API keys (ANTHROPIC_API_KEY, OPENROUTER_API_KEY, etc.) as environment variables or in ~/.openclaw/.env"
+      }
+    },
+    {
+      "id": "hermes",
+      "name": "Hermes Agent",
+      "description": "Python-based AI agent with multi-platform messaging support",
+      "language": "python",
+      "repository": "https://github.com/NousResearch/hermes-agent",
+      "website": "https://hermes-agent.nousresearch.com/",
+      "install_method": "script",
+      "install_cmd": "curl -fsSL https://raw.githubusercontent.com/NousResearch/hermes-agent/main/scripts/install.sh | bash -s -- --skip-setup",
+      "requirements": ["python>=3.11", "node>=22", "git"],
+      "config_format": "yaml",
+      "config_path": "~/.hermes/config.yaml",
+      "config_dir": "~/.hermes",
+      "binary_path": "~/.local/bin/hermes",
+      "adapter_type": "cli",
+      "default_port": 0,
+      "start_cmd": "hermes gateway start",
+      "stop_cmd": "",
+      "status_cmd": "",
+      "restart_cmd": "",
+      "pid_file": "~/.hermes/gateway.pid",
+      "state_file": "~/.hermes/gateway_state.json",
+      "health_url": "",
+      "log_dir": "~/.hermes/logs",
+      "log_format": "text"
+    }
+  ]
+}

@@ -5,6 +5,9 @@ import type {
   SessionsResponse,
   ChatMessage,
   ChatEvent,
+  Framework,
+  InstallProgress,
+  InstallLogEvent,
 } from "./types";
 
 const BASE = "";
@@ -225,4 +228,124 @@ export async function hideSession(
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to hide session: ${res.statusText}`);
   }
+}
+
+// Registry and install API
+
+export async function fetchFrameworks(): Promise<Framework[]> {
+  const res = await fetch(`${BASE}/api/registry/frameworks`);
+  if (!res.ok)
+    throw new Error(`Failed to fetch frameworks: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchInstallStatus(): Promise<
+  Record<string, InstallProgress>
+> {
+  const res = await fetch(`${BASE}/api/registry/install/status`);
+  if (!res.ok)
+    throw new Error(`Failed to fetch install status: ${res.statusText}`);
+  return res.json();
+}
+
+export function streamInstall(
+  frameworkId: string,
+  copyFrom: string | undefined,
+  onProgress: (progress: InstallProgress) => void,
+  onLog: (log: string) => void,
+  force?: boolean,
+): AbortController {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/registry/install`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          framework_id: frameworkId,
+          copy_from: copyFrom,
+          skip_confirm: true,
+          force: force || false,
+        }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onProgress({
+          framework_id: frameworkId,
+          phase: "error",
+          status: "error",
+          progress: 0,
+          message: body.error || `Installation failed: ${res.statusText}`,
+          error: body.error || res.statusText,
+          started_at: new Date().toISOString(),
+        });
+        return;
+      }
+
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      for (;;) {
+        const { done, value } = await reader.read();
+
+        if (!done) {
+          buffer += decoder.decode(value, { stream: true });
+        } else {
+          buffer += decoder.decode();
+        }
+
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.type === "log") {
+                onLog((data as InstallLogEvent).message);
+              } else {
+                onProgress(data as InstallProgress);
+              }
+            } catch {
+              // skip malformed SSE lines
+            }
+          }
+        }
+
+        if (done) {
+          if (buffer.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(buffer.slice(6));
+              if (data.type === "log") {
+                onLog((data as InstallLogEvent).message);
+              } else {
+                onProgress(data as InstallProgress);
+              }
+            } catch {
+              /* skip */
+            }
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onProgress({
+          framework_id: frameworkId,
+          phase: "error",
+          status: "error",
+          progress: 0,
+          message: e instanceof Error ? e.message : "Installation failed",
+          error: e instanceof Error ? e.message : "Unknown error",
+          started_at: new Date().toISOString(),
+        });
+      }
+    }
+  })();
+
+  return controller;
 }

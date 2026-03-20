@@ -11,8 +11,11 @@ build: web embed
 # Run both Go (air) and Vite dev servers. Ctrl-C stops both.
 dev: dev-static
 	@trap 'kill 0' EXIT; \
+	$(HOME)/go/bin/air & \
+	echo "Waiting for backend to be ready..."; \
+	while ! lsof -i :7200 >/dev/null 2>&1; do sleep 0.5; done; \
+	echo "Backend ready, starting Vite..."; \
 	cd web && npm run dev & \
-	cd $(CURDIR) && $(HOME)/go/bin/air & \
 	wait
 
 # Run only the Go backend with auto-reload

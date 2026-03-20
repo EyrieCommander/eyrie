@@ -4,8 +4,13 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"os"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
+	"github.com/natalie/eyrie/internal/config"
 	"nhooyr.io/websocket"
 )
 
@@ -19,9 +24,40 @@ func probeHealth(ctx context.Context, framework, host string, port int) bool {
 		return probeHTTP(probeCtx, host, port)
 	case "openclaw":
 		return probeWebSocket(probeCtx, host, port)
+	case "hermes":
+		return probeHermesPID()
 	default:
 		return probeHTTP(probeCtx, host, port)
 	}
+}
+
+// probeHermesPID checks if Hermes is running by reading the PID file
+func probeHermesPID() bool {
+	// Check ~/.hermes/gateway.pid
+	pidFile := config.ExpandHome("~/.hermes/gateway.pid")
+
+	pidData, err := os.ReadFile(pidFile)
+	if err != nil {
+		return false
+	}
+
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
+	if err != nil {
+		return false
+	}
+
+	// Check if process exists
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+
+	// Send signal 0 to check existence
+	if err := process.Signal(syscall.Signal(0)); err != nil {
+		return false
+	}
+
+	return true
 }
 
 // probeHTTP does a quick GET /health against an HTTP gateway.

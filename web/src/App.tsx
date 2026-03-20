@@ -5,6 +5,7 @@ import type { AgentInfo } from "./lib/types";
 import { fetchAgents } from "./lib/api";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
+import InstallPage from "./components/InstallPage";
 
 export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -58,6 +59,7 @@ export default function App() {
               path="/agents/:name/:tab?"
               element={<AgentDetailRoute agents={agents} />}
             />
+            <Route path="/install" element={<InstallPage />} />
           </Routes>
         </div>
       </main>

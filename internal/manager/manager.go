@@ -23,6 +23,8 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 		return executeZeroClaw(ctx, action)
 	case "openclaw":
 		return executeOpenClaw(ctx, action)
+	case "hermes":
+		return executeHermes(ctx, action)
 	default:
 		return fmt.Errorf("unknown framework %q: cannot determine lifecycle command", framework)
 	}
@@ -46,6 +48,21 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 
 func executeOpenClaw(ctx context.Context, action LifecycleAction) error {
 	return run(ctx, "openclaw", "gateway", string(action))
+}
+
+func executeHermes(ctx context.Context, action LifecycleAction) error {
+	switch action {
+	case ActionStart:
+		return run(ctx, "hermes", "gateway", "start")
+	case ActionStop:
+		// Hermes doesn't have a stop command, handled by adapter via PID
+		return fmt.Errorf("use adapter.Stop() for Hermes (PID-based shutdown)")
+	case ActionRestart:
+		// Hermes doesn't have a restart command
+		return fmt.Errorf("use adapter.Restart() for Hermes (stop + start)")
+	default:
+		return fmt.Errorf("unsupported action %q for Hermes", action)
+	}
 }
 
 func serviceInstalled(ctx context.Context, framework string) bool {
@@ -79,6 +96,11 @@ func CommandString(framework string, action LifecycleAction) string {
 		return "zeroclaw service " + string(action)
 	case "openclaw":
 		return "openclaw gateway " + string(action)
+	case "hermes":
+		if action == ActionStart {
+			return "hermes gateway start"
+		}
+		return fmt.Sprintf("adapter.%s() (PID-based)", strings.Title(string(action)))
 	default:
 		return fmt.Sprintf("<unknown framework %q> %s", framework, action)
 	}

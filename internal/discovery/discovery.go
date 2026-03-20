@@ -76,6 +76,8 @@ func scanConfigFiles(paths []string) []adapter.DiscoveredAgent {
 			agent, err = scanZeroClawConfig(path)
 		} else if strings.HasSuffix(expanded, ".json") {
 			agent, err = scanOpenClawConfig(path)
+		} else if strings.HasSuffix(expanded, ".yaml") || strings.HasSuffix(expanded, ".yml") {
+			agent, err = scanYAMLConfig(path)
 		} else {
 			slog.Debug("skipping unknown config format", "path", path)
 			continue
@@ -129,6 +131,11 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 	case "openclaw":
 		return adapter.NewOpenClawAdapter(
 			d.Name, d.Name, d.Host, d.Port, d.Token, d.ConfigPath,
+		)
+	case "hermes":
+		binaryPath := config.ExpandHome("~/.local/bin/hermes")
+		return adapter.NewHermesAdapter(
+			d.Name, d.Name, d.ConfigPath, binaryPath,
 		)
 	default:
 		return adapter.NewZeroClawAdapter(

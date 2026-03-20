@@ -87,3 +87,47 @@ export interface ChatEvent {
   success?: boolean;
   error?: string;
 }
+
+export interface Framework {
+  id: string;
+  name: string;
+  description: string;
+  language: string;
+  repository: string;
+  website?: string;
+  install_method: string;
+  install_cmd: string;
+  requirements: string[];
+  config_format: string;
+  config_path: string;
+  config_dir: string;
+  binary_path: string;
+  adapter_type: string;
+  default_port?: number;
+  start_cmd: string;
+  stop_cmd: string;
+  status_cmd: string;
+  restart_cmd?: string;
+  pid_file?: string;
+  state_file?: string;
+  health_url?: string;
+  log_dir: string;
+  log_format: string;
+  installed?: boolean; // Added by backend
+}
+
+export interface InstallProgress {
+  framework_id: string;
+  phase: string;
+  status: "running" | "success" | "error";
+  progress: number;
+  message: string;
+  error?: string;
+  started_at: string;
+  completed_at?: string;
+}
+
+export interface InstallLogEvent {
+  type: "log";
+  message: string;
+}

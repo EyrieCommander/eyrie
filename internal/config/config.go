@@ -121,3 +121,45 @@ func ParseTOMLFile(path string, target any) error {
 	}
 	return toml.Unmarshal(data, target)
 }
+
+// Save writes the config to the config file.
+func Save(cfg Config) error {
+	path, err := ConfigPath()
+	if err != nil {
+		return fmt.Errorf("cannot determine config path: %w", err)
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("cannot create config directory: %w", err)
+	}
+
+	// Create temporary file in the same directory
+	tmpFile, err := os.CreateTemp(dir, ".config.toml.tmp.*")
+	if err != nil {
+		return fmt.Errorf("cannot create temporary file: %w", err)
+	}
+	tmpPath := tmpFile.Name()
+
+	// Encode to temporary file
+	encoder := toml.NewEncoder(tmpFile)
+	if err := encoder.Encode(&cfg); err != nil {
+		tmpFile.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("cannot encode config: %w", err)
+	}
+
+	if err := tmpFile.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("cannot close temporary file: %w", err)
+	}
+
+	// Atomically rename temporary file to config file
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("cannot save config: %w", err)
+	}
+
+	return nil
+}
