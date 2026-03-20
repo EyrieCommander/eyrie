@@ -710,12 +710,17 @@ function ChatTab({
       if (!key) return;
       fetchChatMessages(agentName, key, 100)
         .then((msgs) => {
+          // Update session messages first
           setSessionMsgs((prev) => {
             const next = new Map(prev);
             next.set(key, msgs);
             return next;
           });
-          setPendingMsgs([]);
+          // Clear pending messages only if we got messages back from the server
+          // This ensures the new messages are displayed before pending ones are removed
+          if (msgs.length > 0) {
+            setPendingMsgs([]);
+          }
         })
         .catch(() => {});
     },

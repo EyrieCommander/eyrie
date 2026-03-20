@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -235,9 +236,22 @@ func (h *HermesAdapter) Stop(ctx context.Context) error {
 		return fmt.Errorf("failed to read PID file: %w", err)
 	}
 
-	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
-	if err != nil {
-		return fmt.Errorf("invalid PID: %w", err)
+	// Parse JSON to extract PID (same logic as Health method)
+	var pidInfo struct {
+		PID int `json:"pid"`
+	}
+	if err := json.Unmarshal(pidData, &pidInfo); err != nil {
+		// Try plain text format as fallback
+		pid, parseErr := strconv.Atoi(strings.TrimSpace(string(pidData)))
+		if parseErr != nil {
+			return fmt.Errorf("invalid PID format: %w", parseErr)
+		}
+		pidInfo.PID = pid
+	}
+
+	pid := pidInfo.PID
+	if pid <= 0 {
+		return fmt.Errorf("invalid PID value: %d", pid)
 	}
 
 	process, err := os.FindProcess(pid)
@@ -327,11 +341,11 @@ func (h *HermesAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error) {
 }
 
 // parseHermesLogLine parses a Hermes log line
-// Expected format: "2026-03-19T12:34:56.789+00:00 [INFO] message"
+// Expected format: "2026-03-20 22:33:02,232 INFO gateway.run: message"
 func parseHermesLogLine(raw string) *LogEntry {
-	// Simple parsing - TODO: improve with actual Hermes log format
-	parts := strings.SplitN(raw, " ", 3)
-	if len(parts) < 3 {
+	// Parse Hermes Python log format: "YYYY-MM-DD HH:MM:SS,mmm LEVEL module.function: message"
+	parts := strings.SplitN(raw, " ", 4)
+	if len(parts) < 4 {
 		return &LogEntry{
 			Timestamp: time.Now(),
 			Level:     "INFO",
@@ -339,13 +353,18 @@ func parseHermesLogLine(raw string) *LogEntry {
 		}
 	}
 
-	timestamp, err := time.Parse(time.RFC3339, parts[0])
+	// Combine date and time parts: "2026-03-20 22:33:02,232"
+	timestampStr := parts[0] + " " + parts[1]
+	// Replace comma with dot for milliseconds
+	timestampStr = strings.Replace(timestampStr, ",", ".", 1)
+
+	timestamp, err := time.Parse("2006-01-02 15:04:05.000", timestampStr)
 	if err != nil {
 		timestamp = time.Now()
 	}
 
-	level := strings.Trim(parts[1], "[]")
-	message := parts[2]
+	level := strings.ToUpper(parts[2])
+	message := parts[3]
 
 	return &LogEntry{
 		Timestamp: timestamp,
@@ -354,9 +373,184 @@ func parseHermesLogLine(raw string) *LogEntry {
 	}
 }
 
-// TailActivity is not implemented for Hermes yet
+// TailActivity tails the Hermes log file and extracts activity events
 func (h *HermesAdapter) TailActivity(ctx context.Context) (<-chan ActivityEvent, error) {
-	return nil, fmt.Errorf("activity streaming not implemented for Hermes")
+	logDir := filepath.Join(h.configDir, "logs")
+	logFile := filepath.Join(logDir, "gateway.log")
+
+	ch := make(chan ActivityEvent, 100)
+
+	go func() {
+		defer close(ch)
+
+		// Read last 50 lines of existing log for recent activity
+		if entries := readHistoricalLogs(logFile, 50, parseHermesLogLine); len(entries) > 0 {
+			for _, entry := range entries {
+				if event := logEntryToActivity(&entry); event != nil {
+					select {
+					case ch <- *event:
+					case <-ctx.Done():
+						return
+					}
+				}
+			}
+		}
+
+		// Tail the log file for new activity
+		cmd := exec.CommandContext(ctx, "tail", "-f", "-n", "0", logFile)
+		stdout, err := cmd.StdoutPipe()
+		if err != nil {
+			return
+		}
+
+		if err := cmd.Start(); err != nil {
+			return
+		}
+
+		scanner := bufio.NewScanner(stdout)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if entry := parseHermesLogLine(line); entry != nil {
+				if event := logEntryToActivity(entry); event != nil {
+					select {
+					case ch <- *event:
+					case <-ctx.Done():
+						cmd.Process.Kill()
+						return
+					}
+				}
+			}
+		}
+
+		cmd.Wait()
+	}()
+
+	return ch, nil
+}
+
+// logEntryToActivity converts a Hermes log entry to an ActivityEvent
+func logEntryToActivity(entry *LogEntry) *ActivityEvent {
+	msg := entry.Message
+
+	// Tool execution events
+	if strings.Contains(msg, "tool:") || strings.Contains(msg, "executing") {
+		if strings.Contains(msg, "result") {
+			return &ActivityEvent{
+				Timestamp:   entry.Timestamp,
+				Type:        "tool_call",
+				Summary:     extractToolSummary(msg),
+				FullContent: msg,
+			}
+		}
+		return &ActivityEvent{
+			Timestamp:   entry.Timestamp,
+			Type:        "tool_call_start",
+			Summary:     extractToolSummary(msg),
+			FullContent: msg,
+		}
+	}
+
+	// LLM request/response events
+	if strings.Contains(msg, "LLM") || strings.Contains(msg, "model") || strings.Contains(msg, "completion") {
+		return &ActivityEvent{
+			Timestamp:   entry.Timestamp,
+			Type:        "llm_request",
+			Summary:     extractLLMSummary(msg),
+			FullContent: msg,
+		}
+	}
+
+	// Session events
+	if strings.Contains(msg, "session") {
+		if strings.Contains(msg, "start") || strings.Contains(msg, "creat") {
+			return &ActivityEvent{
+				Timestamp:   entry.Timestamp,
+				Type:        "agent_start",
+				Summary:     "Session started",
+				FullContent: msg,
+			}
+		}
+		if strings.Contains(msg, "end") || strings.Contains(msg, "clos") {
+			return &ActivityEvent{
+				Timestamp:   entry.Timestamp,
+				Type:        "agent_end",
+				Summary:     "Session ended",
+				FullContent: msg,
+			}
+		}
+	}
+
+	// Chat/message events
+	if strings.Contains(msg, "message") || strings.Contains(msg, "received") || strings.Contains(msg, "sent") {
+		return &ActivityEvent{
+			Timestamp:   entry.Timestamp,
+			Type:        "chat",
+			Summary:     extractMessageSummary(msg),
+			FullContent: msg,
+		}
+	}
+
+	// Error events
+	if entry.Level == "ERROR" || entry.Level == "CRITICAL" {
+		return &ActivityEvent{
+			Timestamp:   entry.Timestamp,
+			Type:        "error",
+			Summary:     extractErrorSummary(msg),
+			FullContent: msg,
+		}
+	}
+
+	// Skip debug/info logs that don't match activity patterns
+	return nil
+}
+
+// extractToolSummary extracts a summary from tool-related log messages
+func extractToolSummary(msg string) string {
+	// Try to extract tool name from patterns like "tool: name" or "executing: name"
+	if idx := strings.Index(msg, "tool:"); idx != -1 {
+		rest := strings.TrimSpace(msg[idx+5:])
+		if parts := strings.Fields(rest); len(parts) > 0 {
+			return "Tool: " + parts[0]
+		}
+	}
+	if idx := strings.Index(msg, "executing"); idx != -1 {
+		rest := strings.TrimSpace(msg[idx+9:])
+		if parts := strings.Fields(rest); len(parts) > 0 {
+			return "Executing: " + parts[0]
+		}
+	}
+	return "Tool execution"
+}
+
+// extractLLMSummary extracts a summary from LLM-related log messages
+func extractLLMSummary(msg string) string {
+	if strings.Contains(msg, "request") {
+		return "LLM request sent"
+	}
+	if strings.Contains(msg, "response") || strings.Contains(msg, "completion") {
+		return "LLM response received"
+	}
+	return "LLM activity"
+}
+
+// extractMessageSummary extracts a summary from message-related log messages
+func extractMessageSummary(msg string) string {
+	if strings.Contains(msg, "received") {
+		return "Message received"
+	}
+	if strings.Contains(msg, "sent") {
+		return "Message sent"
+	}
+	return "Message activity"
+}
+
+// extractErrorSummary extracts a summary from error log messages
+func extractErrorSummary(msg string) string {
+	// Take first 100 chars as summary
+	if len(msg) > 100 {
+		return msg[:100] + "..."
+	}
+	return msg
 }
 
 // Sessions returns conversation sessions
@@ -488,38 +682,200 @@ func (h *HermesAdapter) ChatHistory(ctx context.Context, sessionKey string, limi
 
 // SendMessage sends a message and waits for the response
 func (h *HermesAdapter) SendMessage(ctx context.Context, message, sessionKey string) (*ChatMessage, error) {
-	// TODO: Implement via CLI invocation
-	return nil, fmt.Errorf("send message not implemented for Hermes")
+	args := []string{"chat", "-q", message}
+
+	// If a session key is provided, use --resume to continue that session
+	if sessionKey != "" && sessionKey != "new" {
+		args = []string{"chat", "--resume", sessionKey, "-q", message}
+	}
+
+	cmd := exec.CommandContext(ctx, h.binaryPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("hermes chat failed: %w\nOutput: %s", err, string(output))
+	}
+
+	// Parse the output - hermes chat returns the assistant's response
+	response := strings.TrimSpace(string(output))
+	if response == "" {
+		return nil, fmt.Errorf("empty response from hermes")
+	}
+
+	return &ChatMessage{
+		Timestamp: time.Now(),
+		Role:      "assistant",
+		Content:   response,
+	}, nil
 }
 
 // StreamMessage sends a message and streams the response
 func (h *HermesAdapter) StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error) {
-	// TODO: Implement via CLI invocation with streaming
-	return nil, fmt.Errorf("stream message not implemented for Hermes")
+	args := []string{"chat"}
+
+	// If a session key is provided, use --resume to continue that session
+	if sessionKey != "" && sessionKey != "new" {
+		args = append(args, "--resume", sessionKey)
+	}
+
+	cmd := exec.CommandContext(ctx, h.binaryPath, args...)
+
+	// Create pipes for stdin/stdout
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create stdin pipe: %w", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		stdin.Close()
+		return nil, fmt.Errorf("failed to create stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("failed to start hermes chat: %w", err)
+	}
+
+	// Send the message to stdin
+	if _, err := stdin.Write([]byte(message + "\n")); err != nil {
+		cmd.Process.Kill()
+		return nil, fmt.Errorf("failed to write message: %w", err)
+	}
+	stdin.Close()
+
+	ch := make(chan ChatEvent, 64)
+	go h.readChatStream(ctx, cmd, stdout, ch)
+	return ch, nil
+}
+
+// readChatStream reads from hermes chat stdout and emits chat events
+func (h *HermesAdapter) readChatStream(ctx context.Context, cmd *exec.Cmd, stdout io.ReadCloser, ch chan<- ChatEvent) {
+	defer close(ch)
+	defer stdout.Close()
+	defer cmd.Wait()
+
+	scanner := bufio.NewScanner(stdout)
+	var fullResponse strings.Builder
+
+	for scanner.Scan() {
+		select {
+		case <-ctx.Done():
+			cmd.Process.Kill()
+			return
+		default:
+		}
+
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Hermes CLI outputs the response line by line
+		// Treat each line as a delta
+		fullResponse.WriteString(line)
+		fullResponse.WriteString("\n")
+
+		select {
+		case ch <- ChatEvent{Type: "delta", Content: line + "\n"}:
+		case <-ctx.Done():
+			cmd.Process.Kill()
+			return
+		}
+	}
+
+	// Send final done event with full response
+	select {
+	case ch <- ChatEvent{Type: "done", Content: strings.TrimSpace(fullResponse.String())}:
+	case <-ctx.Done():
+	}
 }
 
 // CreateSession creates a new conversation session
 func (h *HermesAdapter) CreateSession(ctx context.Context, name string) (*Session, error) {
-	// TODO: Implement via CLI invocation
-	return nil, fmt.Errorf("create session not implemented for Hermes")
+	// Hermes creates sessions automatically when chatting begins.
+	// Sessions are created implicitly when:
+	// 1. A message arrives from a messaging platform (Telegram, Discord, etc.)
+	// 2. The user runs: hermes chat (starts a new session)
+	// 3. The user runs: hermes chat --resume <session_id> (resumes existing session)
+	// There is no standalone command to create an empty session.
+	return nil, fmt.Errorf("create session not supported for Hermes (sessions are created automatically when chatting; use 'hermes chat' to start a new session)")
 }
 
 // DeleteSession deletes a conversation session
 func (h *HermesAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
-	// TODO: Implement via CLI invocation
-	return fmt.Errorf("delete session not implemented for Hermes")
+	cmd := exec.CommandContext(ctx, h.binaryPath, "sessions", "delete", sessionKey)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to delete session: %w (output: %s)", err, string(output))
+	}
+	return nil
 }
 
 // PurgeSession permanently removes a session
 func (h *HermesAdapter) PurgeSession(ctx context.Context, sessionKey string) error {
-	// TODO: Implement via CLI invocation
-	return fmt.Errorf("purge session not implemented for Hermes")
+	// Hermes doesn't distinguish between delete and purge - both permanently remove
+	return h.DeleteSession(ctx, sessionKey)
 }
 
 // Personality returns the agent's personality
 func (h *HermesAdapter) Personality(ctx context.Context) (*Personality, error) {
-	// TODO: Extract from Hermes config
-	return &Personality{
+	personality := &Personality{
 		Name: h.name,
-	}, nil
+	}
+
+	// Try to extract personality from SOUL.md
+	soulPath := filepath.Join(h.configDir, "SOUL.md")
+	if data, err := os.ReadFile(soulPath); err == nil {
+		// Parse SOUL.md (skip comments and empty lines)
+		lines := strings.Split(string(data), "\n")
+		var soulContent []string
+		inComment := false
+		for _, line := range lines {
+			trimmed := strings.TrimSpace(line)
+
+			// Track comment blocks
+			if strings.HasPrefix(trimmed, "<!--") {
+				inComment = true
+			}
+			if strings.HasSuffix(trimmed, "-->") {
+				inComment = false
+				continue
+			}
+
+			// Skip comments, empty lines, and markdown headers
+			if inComment || trimmed == "" || strings.HasPrefix(trimmed, "#") {
+				continue
+			}
+
+			soulContent = append(soulContent, trimmed)
+		}
+		if len(soulContent) > 0 {
+			personality.SystemPrompt = strings.Join(soulContent, " ")
+		}
+	}
+
+	// If no SOUL.md personality found, try to get default from config
+	if personality.SystemPrompt == "" {
+		if data, err := os.ReadFile(h.configPath); err == nil {
+			var config struct {
+				Model struct {
+					Personalities map[string]string `yaml:"personalities"`
+				} `yaml:"model"`
+			}
+			if err := yaml.Unmarshal(data, &config); err == nil {
+				// Use "helpful" as default personality
+				if helpful, ok := config.Model.Personalities["helpful"]; ok {
+					personality.SystemPrompt = helpful
+				}
+			}
+		}
+	}
+
+	// Store the raw SOUL.md file
+	if soulData, err := os.ReadFile(soulPath); err == nil {
+		personality.IdentityFiles = map[string]string{
+			"SOUL.md": string(soulData),
+		}
+	}
+
+	return personality, nil
 }
