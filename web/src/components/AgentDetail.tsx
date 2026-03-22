@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import { useParams, Link } from "react-router-dom";
+import { useParams, useSearchParams, Link } from "react-router-dom";
 import {
   Play,
   Square,
@@ -33,10 +33,12 @@ import {
   createSession,
   resetSession,
   purgeSession,
+  destroySession,
   hideSession,
   updateAgentConfig,
   validateAgentConfig,
   getFrameworkDetail,
+  streamCommanderBriefing,
 } from "../lib/api";
 import ConfigEditor from "./ConfigEditor";
 import Terminal from "./Terminal";
@@ -588,7 +590,6 @@ function sessionBaseName(s: Session): string {
     const paren = s.title.indexOf(" (");
     return paren > 0 ? s.title.slice(0, paren) : s.title;
   }
-  if (s.title) return s.title;
   return sessionDisplayName(s.key);
 }
 
@@ -648,6 +649,10 @@ function ChatTab({
 
   const abortRef = useRef<AbortController | null>(null);
 
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedSession = searchParams.get("session");
+  const briefMode = searchParams.get("brief");
+
   const defaultSessionKey = framework === "openclaw" ? "agent:main:main" : "main";
   const groups = groupSessions(sessions);
   const activeGroup = groups.find((g) => g.name === activeGroupName) ?? groups[0];
@@ -659,15 +664,23 @@ function ChatTab({
       .then((resp) => {
         const all = resp.sessions ?? [];
         setSessions(all);
-        const defaultName = sessionDisplayName(defaultSessionKey);
         const gs = groupSessions(all);
+        // If a specific session was requested (e.g., from commander briefing), use it
+        if (requestedSession) {
+          const match = gs.find((g) => g.name === requestedSession);
+          if (match) {
+            setActiveGroupName(match.name);
+            return;
+          }
+        }
+        const defaultName = sessionDisplayName(defaultSessionKey);
         const match = gs.find((g) => g.name === defaultName);
         setActiveGroupName(match?.name ?? gs[0]?.name ?? defaultName);
       })
       .catch(() => {
-        setActiveGroupName(sessionDisplayName(defaultSessionKey));
+        setActiveGroupName(requestedSession || sessionDisplayName(defaultSessionKey));
       });
-  }, [agentName, alive, defaultSessionKey]);
+  }, [agentName, alive, defaultSessionKey, requestedSession]);
 
   const loadGroup = useCallback(
     (group: SessionGroup | undefined) => {
@@ -782,12 +795,85 @@ function ChatTab({
   }
 
   const totalMsgCount = flatItems.filter((it) => it.kind === "message").length;
+  const briefTriggered = useRef(false);
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [totalMsgCount, sending, streamingContent, toolCalls]);
+
+  // Auto-trigger commander briefing when navigated with ?brief=commander
+  useEffect(() => {
+    if (briefMode !== "commander" || briefTriggered.current || !alive) return;
+    briefTriggered.current = true;
+    // Clear the query param so refreshing doesn't re-brief
+    setSearchParams({}, { replace: true });
+
+    setSending(true);
+    setStreamingContent("");
+    setToolCalls([]);
+
+    streamCommanderBriefing((ev) => {
+      const evType = ev.type as string;
+      switch (evType) {
+        case "session":
+          // Session created — refresh sessions so the tab appears
+          fetchSessions(agentName).then((resp) => {
+            const all = resp.sessions ?? [];
+            setSessions(all);
+            const gs = groupSessions(all);
+            const match = gs.find((g) => g.name === "eyrie-commander-briefing");
+            if (match) setActiveGroupName(match.name);
+          }).catch(() => {});
+          break;
+        case "delta":
+          setStreamingContent((prev) => prev + (ev.content ?? ""));
+          break;
+        case "tool_start":
+          setToolCalls((prev) => [
+            ...prev,
+            { tool: ev.tool ?? "unknown", toolId: ev.tool_id, args: ev.args, done: false },
+          ]);
+          break;
+        case "tool_result":
+          setToolCalls((prev) => {
+            const updated = [...prev];
+            let idx = -1;
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if (updated[i].tool === ev.tool && !updated[i].done) { idx = i; break; }
+            }
+            if (idx >= 0) {
+              updated[idx] = { ...updated[idx], output: ev.output, success: ev.success, done: true };
+            }
+            return updated;
+          });
+          break;
+        case "done": {
+          const raw = ev.content ?? "";
+          if (!/^(\[\[no_reply\]\]|NO_REPLY)$/i.test(raw.trim())) {
+            setPendingMsgs((prev) => [...prev, { role: "assistant", content: raw, timestamp: new Date().toISOString() }]);
+          }
+          setStreamingContent("");
+          setToolCalls([]);
+          setSending(false);
+          // Refresh to load the persisted messages
+          fetchSessions(agentName).then((resp) => {
+            const all = resp.sessions ?? [];
+            setSessions(all);
+            const gs = groupSessions(all);
+            const match = gs.find((g) => g.name === "eyrie-commander-briefing");
+            if (match) setActiveGroupName(match.name);
+          }).catch(() => {});
+          break;
+        }
+        case "error":
+          setChatError(ev.error || "Briefing failed");
+          setSending(false);
+          break;
+      }
+    });
+  }, [briefMode, alive, agentName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -919,6 +1005,28 @@ function ChatTab({
     [agentName, refreshSessions],
   );
 
+  const handleDeleteGroup = useCallback(
+    async (group: SessionGroup) => {
+      if (!window.confirm(`Delete session "${group.name}" and all its history?`)) return;
+      try {
+        // Destroy archived sessions
+        for (const s of group.archived) {
+          await destroySession(agentName, s.key);
+        }
+        // Destroy active session
+        if (group.current) {
+          await destroySession(agentName, group.current.key);
+        }
+        setActiveGroupName("main");
+        refreshSessions();
+      } catch (e) {
+        console.error(e);
+        refreshSessions();
+      }
+    },
+    [agentName, refreshSessions],
+  );
+
   const handleCreateSession = async () => {
     const name = newSessionName.trim().toLowerCase().replace(/\s+/g, "-");
     if (!name) return;
@@ -949,27 +1057,35 @@ function ChatTab({
   );
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 320px)" }}>
+    <div className="flex flex-col resize-y overflow-hidden" style={{ height: "calc(100vh - 240px)", minHeight: "300px", maxHeight: "calc(100vh - 120px)" }}>
       {/* Session group bar */}
       {groups.length > 0 && (
       <div className="flex items-center gap-1 overflow-x-auto rounded-t border border-b-0 border-border bg-bg-sidebar px-3 py-2">
           {groups.map((g) => (
-            <button
-              key={g.name}
-              onClick={() => setActiveGroupName(g.name)}
-              className={`shrink-0 rounded px-3 py-1 text-[11px] font-medium transition-colors ${
-                activeGroupName === g.name
-                  ? "bg-surface-hover text-accent"
-                  : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-              }`}
-            >
-              {g.name}
-              {g.archived.length > 0 && (
-                <span className="ml-1 text-[9px] text-text-muted">
-                  +{g.archived.length}
-                </span>
-              )}
-            </button>
+            <div key={g.name} className="group/tab relative shrink-0">
+              <button
+                onClick={() => setActiveGroupName(g.name)}
+                className={`shrink-0 rounded px-3 py-1 text-[11px] font-medium transition-colors ${
+                  activeGroupName === g.name
+                    ? "bg-surface-hover text-accent"
+                    : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+                }`}
+              >
+                {g.name}
+                {g.archived.length > 0 && (
+                  <span className="ml-1 text-[9px] text-text-muted">
+                    +{g.archived.length}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={(e) => { e.stopPropagation(); handleDeleteGroup(g); }}
+                className="absolute -top-1.5 -right-1.5 hidden group-hover/tab:flex h-4 w-4 items-center justify-center rounded-full bg-surface border border-border text-text-muted transition-colors hover:text-red hover:border-red/50"
+                title={`Delete session "${g.name}"`}
+              >
+                <X className="h-2 w-2" />
+              </button>
+            </div>
           ))}
 
         {creatingSession ? (

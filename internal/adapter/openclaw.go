@@ -1143,6 +1143,74 @@ func (o *OpenClawAdapter) DeleteSession(ctx context.Context, sessionKey string) 
 	return nil
 }
 
+// DestroySession completely removes a session — deletes the JSONL transcript
+// and removes the entry from sessions.json. Works for both active and archived sessions.
+func (o *OpenClawAdapter) DestroySession(_ context.Context, sessionKey string) error {
+	// For archived sessions, just delete the file
+	if strings.HasPrefix(sessionKey, "archive:") {
+		return o.PurgeSession(context.Background(), sessionKey)
+	}
+
+	agentsDir := o.agentsDir()
+	if agentsDir == "" {
+		return fmt.Errorf("cannot determine agents directory")
+	}
+
+	entries, err := os.ReadDir(agentsDir)
+	if err != nil {
+		return fmt.Errorf("reading agents dir: %w", err)
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		sessJSONPath := filepath.Join(agentsDir, entry.Name(), "sessions", "sessions.json")
+		data, err := os.ReadFile(sessJSONPath)
+		if err != nil {
+			continue
+		}
+
+		var store map[string]json.RawMessage
+		if json.Unmarshal(data, &store) != nil {
+			continue
+		}
+
+		raw, ok := store[sessionKey]
+		if !ok {
+			continue
+		}
+
+		// Parse to get the session file path
+		var meta struct {
+			SessionID   string `json:"sessionId"`
+			SessionFile string `json:"sessionFile"`
+		}
+		json.Unmarshal(raw, &meta)
+
+		// Delete the JSONL transcript file
+		if meta.SessionFile != "" {
+			os.Remove(meta.SessionFile)
+		} else if meta.SessionID != "" {
+			jsonlPath := filepath.Join(agentsDir, entry.Name(), "sessions", meta.SessionID+".jsonl")
+			os.Remove(jsonlPath)
+		}
+
+		// Remove from sessions.json
+		delete(store, sessionKey)
+		updated, err := json.MarshalIndent(store, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling sessions.json: %w", err)
+		}
+		if err := os.WriteFile(sessJSONPath, updated, 0o644); err != nil {
+			return fmt.Errorf("writing sessions.json: %w", err)
+		}
+		return nil
+	}
+
+	return fmt.Errorf("session %q not found", sessionKey)
+}
+
 func (o *OpenClawAdapter) PurgeSession(_ context.Context, sessionKey string) error {
 	if !strings.HasPrefix(sessionKey, "archive:") {
 		return fmt.Errorf("only archived sessions can be purged")

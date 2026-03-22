@@ -3,10 +3,13 @@ package discovery
 import (
 	"context"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/natalie/eyrie/internal/adapter"
 	"github.com/natalie/eyrie/internal/config"
+	"github.com/natalie/eyrie/internal/instance"
 )
 
 // Result holds the outcome of a discovery run.
@@ -25,8 +28,11 @@ type AgentResult struct {
 func Run(ctx context.Context, cfg config.Config) Result {
 	var result Result
 
-	// Stage 1: Scan config files
+	// Stage 1: Scan config files (legacy agents from standard paths)
 	discovered := scanConfigFiles(cfg.Discovery.ConfigPaths)
+
+	// Stage 1b: Scan provisioned instances from ~/.eyrie/instances/
+	discovered = append(discovered, scanInstances()...)
 
 	// Include manually configured agents
 	for _, m := range cfg.Agents {
@@ -61,6 +67,56 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	}
 
 	return result
+}
+
+// scanInstances reads all provisioned instances from ~/.eyrie/instances/
+// and returns them as discovered agents, using the instance name instead of
+// the hardcoded framework name.
+func scanInstances() []adapter.DiscoveredAgent {
+	store, err := instance.NewStore()
+	if err != nil {
+		slog.Debug("failed to open instance store", "error", err)
+		return nil
+	}
+
+	instances, err := store.List()
+	if err != nil {
+		slog.Debug("failed to list instances", "error", err)
+		return nil
+	}
+
+	var agents []adapter.DiscoveredAgent
+	for _, inst := range instances {
+		// Determine framework from config file extension
+		expanded := config.ExpandHome(inst.ConfigPath)
+		if _, err := os.Stat(expanded); err != nil {
+			continue
+		}
+
+		ext := filepath.Ext(expanded)
+		var agent *adapter.DiscoveredAgent
+
+		switch ext {
+		case ".toml":
+			agent, err = scanZeroClawConfig(inst.ConfigPath)
+		case ".json":
+			agent, err = scanOpenClawConfig(inst.ConfigPath)
+		case ".yaml", ".yml":
+			agent, err = scanYAMLConfig(inst.ConfigPath)
+		default:
+			continue
+		}
+
+		if err != nil {
+			slog.Debug("failed to scan instance config", "instance", inst.Name, "error", err)
+			continue
+		}
+
+		// Override the hardcoded name with the instance name
+		agent.Name = inst.Name
+		agents = append(agents, *agent)
+	}
+	return agents
 }
 
 func scanConfigFiles(paths []string) []adapter.DiscoveredAgent {

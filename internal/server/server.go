@@ -55,6 +55,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/agents/{name}/chat", s.handleAgentChat)
 	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}", s.handleDeleteSession)
 	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}/purge", s.handlePurgeSession)
+	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}/destroy", s.handleDestroySession)
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/hide", s.handleHideSession)
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/unhide", s.handleUnhideSession)
 	s.mux.HandleFunc("PUT /api/agents/{name}/config", s.handleAgentConfigUpdate)
@@ -66,6 +67,40 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/registry/frameworks/{id}", s.handleFrameworkDetail)
 	s.mux.HandleFunc("POST /api/registry/install", s.handleInstallFramework)
 	s.mux.HandleFunc("GET /api/registry/install/status", s.handleInstallStatus)
+
+	// API reference (self-documenting, consumed by agents)
+	s.mux.HandleFunc("GET /api/reference", s.handleAPIReference)
+
+	// Instance endpoints
+	s.mux.HandleFunc("GET /api/instances", s.handleListInstances)
+	s.mux.HandleFunc("POST /api/instances", s.handleCreateInstance)
+	s.mux.HandleFunc("GET /api/instances/{id}", s.handleGetInstance)
+	s.mux.HandleFunc("PUT /api/instances/{id}", s.handleUpdateInstance)
+	s.mux.HandleFunc("DELETE /api/instances/{id}", s.handleDeleteInstance)
+	s.mux.HandleFunc("POST /api/instances/{id}/{action}", s.handleInstanceAction)
+
+	// Project endpoints
+	s.mux.HandleFunc("GET /api/projects", s.handleListProjects)
+	s.mux.HandleFunc("POST /api/projects", s.handleCreateProject)
+	s.mux.HandleFunc("GET /api/projects/{id}", s.handleGetProject)
+	s.mux.HandleFunc("PUT /api/projects/{id}", s.handleUpdateProject)
+	s.mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
+	s.mux.HandleFunc("POST /api/projects/{id}/agents", s.handleAddProjectAgent)
+	s.mux.HandleFunc("DELETE /api/projects/{id}/agents/{instanceId}", s.handleRemoveProjectAgent)
+
+	// Hierarchy endpoints
+	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
+	s.mux.HandleFunc("POST /api/hierarchy/commander", s.handleSetCommander)
+	s.mux.HandleFunc("POST /api/hierarchy/commander/brief", s.handleBriefCommander)
+
+	// Persona endpoints (also aliased under /api/registry/ for consistency)
+	s.mux.HandleFunc("GET /api/registry/personas", s.handleListPersonas)
+	s.mux.HandleFunc("GET /api/personas", s.handleListPersonas)
+	s.mux.HandleFunc("GET /api/personas/categories", s.handleListCategories)
+	s.mux.HandleFunc("GET /api/personas/{id}", s.handleGetPersona)
+	s.mux.HandleFunc("POST /api/personas/install", s.handleInstallPersona)
+	s.mux.HandleFunc("PUT /api/personas/{id}", s.handleUpdatePersona)
+	s.mux.HandleFunc("DELETE /api/personas/{id}", s.handleDeletePersona)
 
 	// Serve embedded frontend
 	distFS, err := fs.Sub(staticFS, "static")

@@ -1,0 +1,190 @@
+package server
+
+import (
+	"encoding/json"
+	"log/slog"
+	"net/http"
+
+	"github.com/natalie/eyrie/internal/instance"
+	"github.com/natalie/eyrie/internal/manager"
+	"github.com/natalie/eyrie/internal/persona"
+)
+
+func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
+	store, err := instance.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	instances, err := store.List()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if instances == nil {
+		instances = []instance.Instance{}
+	}
+	writeJSON(w, http.StatusOK, instances)
+}
+
+func (s *Server) handleGetInstance(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	store, err := instance.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	inst, err := store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, inst)
+}
+
+func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
+	var req instance.CreateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	store, err := instance.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Look up persona if specified
+	var pers *persona.Persona
+	if req.PersonaID != "" {
+		ps, err := persona.NewStore()
+		if err == nil {
+			pers, _ = ps.Get(req.PersonaID)
+		}
+	}
+
+	provisioner := instance.NewProvisioner(store)
+	inst, err := provisioner.Provision(req, pers)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Auto-start if requested
+	if req.AutoStart {
+		if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); err != nil {
+			slog.Warn("auto-start failed", "instance", inst.Name, "error", err)
+			// Don't fail the creation — just note the error
+			inst.Status = "error"
+		} else {
+			inst.Status = "running"
+		}
+		store.UpdateStatus(inst.ID, inst.Status)
+	}
+
+	writeJSON(w, http.StatusCreated, inst)
+}
+
+func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	store, err := instance.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	inst, err := store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var update struct {
+		Name        string `json:"name,omitempty"`
+		DisplayName string `json:"display_name,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if update.Name != "" {
+		inst.Name = update.Name
+	}
+	if update.DisplayName != "" {
+		inst.DisplayName = update.DisplayName
+	}
+
+	if err := store.Save(*inst); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, inst)
+}
+
+func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	store, err := instance.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	inst, err := store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Try to stop first
+	_ = manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStop)
+
+	if err := store.Delete(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	action := r.PathValue("action")
+
+	store, err := instance.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	inst, err := store.Get(id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var mgrAction manager.LifecycleAction
+	switch action {
+	case "start":
+		mgrAction = manager.ActionStart
+	case "stop":
+		mgrAction = manager.ActionStop
+	case "restart":
+		mgrAction = manager.ActionRestart
+	default:
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action: " + action})
+		return
+	}
+
+	if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, mgrAction); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Update status
+	newStatus := "running"
+	if action == "stop" {
+		newStatus = "stopped"
+	}
+	store.UpdateStatus(id, newStatus)
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": newStatus})
+}

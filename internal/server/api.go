@@ -220,6 +220,38 @@ func (s *Server) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
+// SessionDestroyer is optionally implemented by adapters that support
+// fully removing a session (transcript + registry entry).
+type SessionDestroyer interface {
+	DestroySession(ctx context.Context, sessionKey string) error
+}
+
+func (s *Server) handleDestroySession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionKey := r.PathValue("session")
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	agent, err := s.findAgent(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	destroyer, ok := agent.(SessionDestroyer)
+	if !ok {
+		writeJSON(w, http.StatusNotImplemented, map[string]string{"error": "this agent does not support session destruction"})
+		return
+	}
+
+	if err := destroyer.DestroySession(ctx, sessionKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleHideSession(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	sessionKey := r.PathValue("session")

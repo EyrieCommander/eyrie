@@ -1,0 +1,392 @@
+import { useState, useEffect, useCallback } from "react";
+import { useParams, useNavigate } from "react-router-dom";
+import { ArrowLeft, Plus, Trash2, Briefcase, ChevronRight, Crown } from "lucide-react";
+import type { Project, AgentInstance, AgentInfo, Persona } from "../lib/types";
+import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject } from "../lib/api";
+
+function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: () => void }) {
+  const statusColor = instance.status === "running" ? "bg-green" : instance.status === "error" ? "bg-red" : "bg-text-muted";
+  return (
+    <button
+      onClick={onClick}
+      className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-accent/50 hover:bg-surface-hover/50"
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
+      <div className="flex-1 min-w-0">
+        <span className="font-medium text-text">{instance.display_name}</span>
+        <span className="ml-2 text-text-muted">{instance.framework} · :{instance.port}</span>
+        {instance.hierarchy_role && (
+          <span className="ml-2 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
+            {instance.hierarchy_role}
+          </span>
+        )}
+      </div>
+      <ChevronRight className="h-3.5 w-3.5 text-text-muted" />
+    </button>
+  );
+}
+
+function SetCaptainDialog({
+  projectId,
+  agents,
+  onDone,
+  onClose,
+}: {
+  projectId: string;
+  agents: AgentInfo[];
+  onDone: () => void;
+  onClose: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSelect = async (agentName: string) => {
+    setSaving(true);
+    setError("");
+    try {
+      await updateProject(projectId, { orchestrator_id: agentName });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to set captain");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-sm font-bold text-text">assign captain</h2>
+        <p className="text-xs text-text-muted">choose an agent to orchestrate this project</p>
+
+        {error && (
+          <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{error}</div>
+        )}
+
+        <div className="space-y-1.5 max-h-64 overflow-y-auto">
+          {agents.map((agent) => (
+            <button
+              key={agent.name}
+              onClick={() => handleSelect(agent.name)}
+              disabled={saving}
+              className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
+            >
+              <span className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`} />
+              <div className="flex-1">
+                <span className="font-medium text-text">{agent.name}</span>
+                <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
+              </div>
+              {agent.alive && (
+                <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
+              )}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex justify-end">
+          <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
+            cancel
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddAgentDialog({
+  projectId,
+  onCreated,
+  onClose,
+}: {
+  projectId: string;
+  onCreated: () => void;
+  onClose: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [framework, setFramework] = useState("openclaw");
+  const [personaId, setPersonaId] = useState("");
+  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [creating, setCreating] = useState(false);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    fetchPersonas().then(setPersonas).catch(() => {});
+  }, []);
+
+  const handleCreate = async () => {
+    setCreating(true);
+    setError("");
+    try {
+      await createInstance({
+        name,
+        framework,
+        persona_id: personaId || undefined,
+        hierarchy_role: "talon",
+        project_id: projectId,
+        auto_start: true,
+      });
+      onCreated();
+      onClose();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create agent");
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+        <h2 className="text-sm font-bold text-text">add agent to project</h2>
+
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-1">name</label>
+          <input
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+            placeholder="researcher-riley"
+            autoFocus
+          />
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-1">framework</label>
+          <select
+            value={framework}
+            onChange={(e) => setFramework(e.target.value)}
+            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+          >
+            <option value="zeroclaw">ZeroClaw</option>
+            <option value="openclaw">OpenClaw</option>
+            <option value="hermes">Hermes</option>
+          </select>
+        </div>
+
+        <div>
+          <label className="block text-xs font-medium text-text-secondary mb-1">persona (optional)</label>
+          <select
+            value={personaId}
+            onChange={(e) => setPersonaId(e.target.value)}
+            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+          >
+            <option value="">none</option>
+            {personas.map((p) => (
+              <option key={p.id} value={p.id}>{p.icon} {p.name} — {p.role}</option>
+            ))}
+          </select>
+        </div>
+
+        {error && (
+          <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{error}</div>
+        )}
+
+        <div className="flex justify-end gap-2">
+          <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
+            cancel
+          </button>
+          <button
+            onClick={handleCreate}
+            disabled={creating || !name}
+            className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+          >
+            {creating ? "creating..." : "create agent"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export default function ProjectDetail() {
+  const { id } = useParams<{ id: string }>();
+  const navigate = useNavigate();
+  const [project, setProject] = useState<Project | null>(null);
+  const [instances, setInstances] = useState<AgentInstance[]>([]);
+  const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [showAddAgent, setShowAddAgent] = useState(false);
+  const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(async () => {
+    if (!id) return;
+    try {
+      setLoading(true);
+      const [projects, allInstances, allAgents] = await Promise.all([
+        fetchProjects(),
+        fetchInstances(),
+        fetchAgents(),
+      ]);
+      const p = projects.find((p) => p.id === id);
+      setProject(p ?? null);
+      setAgents(allAgents);
+      if (p) {
+        const projectInstances = allInstances.filter(
+          (inst) =>
+            inst.project_id === id ||
+            p.orchestrator_id === inst.id ||
+            p.role_agent_ids?.includes(inst.id),
+        );
+        setInstances(projectInstances);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    refresh();
+  }, [refresh]);
+
+  if (loading && !project) {
+    return <div className="py-20 text-center text-xs text-text-muted">loading project...</div>;
+  }
+
+  if (!project) {
+    return (
+      <div className="py-20 text-center text-xs text-text-muted">
+        project not found
+      </div>
+    );
+  }
+
+  // Orchestrator can be a provisioned instance or a legacy agent name
+  const captainInstance = instances.find((i) => i.id === project.orchestrator_id);
+  const captainAgent = !captainInstance
+    ? agents.find((a) => a.name === project.orchestrator_id)
+    : null;
+  const hasCaptain = captainInstance || captainAgent;
+  const roleAgents = instances.filter((i) => i.hierarchy_role === "talon");
+
+  return (
+    <div className="space-y-6">
+      <div className="text-xs text-text-muted">~/projects/{project.name}</div>
+
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => navigate("/projects")}
+          className="rounded p-1 text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <div className="flex-1">
+          <div className="flex items-center gap-2">
+            <Briefcase className="h-4 w-4 text-green" />
+            <h1 className="text-xl font-bold text-text">{project.name}</h1>
+            <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
+              {project.status}
+            </span>
+          </div>
+          {project.description && (
+            <p className="mt-1 text-xs text-text-muted">{project.description}</p>
+          )}
+          {project.goal && (
+            <p className="mt-0.5 text-xs text-text-secondary">goal: {project.goal}</p>
+          )}
+        </div>
+        <button
+          onClick={async () => {
+            if (confirm("delete this project?")) {
+              await deleteProject(project.id);
+              navigate("/projects");
+            }
+          }}
+          className="rounded p-2 text-text-muted transition-colors hover:bg-red/10 hover:text-red"
+          title="delete project"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      {/* Orchestrator */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+            captain
+          </span>
+          {!hasCaptain && (
+            <button
+              onClick={() => setShowSetOrchestrator(true)}
+              className="flex items-center gap-1 text-xs text-accent transition-colors hover:text-accent/80"
+            >
+              <Crown className="h-3 w-3" /> assign captain
+            </button>
+          )}
+        </div>
+        {captainInstance ? (
+          <InstanceRow
+            instance={captainInstance}
+            onClick={() => navigate(`/agents/${captainInstance.name}`)}
+          />
+        ) : captainAgent ? (
+          <button
+            onClick={() => navigate(`/agents/${captainAgent.name}`)}
+            className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-accent/50 hover:bg-surface-hover/50"
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${captainAgent.alive ? "bg-green" : "bg-red"}`} />
+            <div className="flex-1">
+              <span className="font-medium text-text">{captainAgent.name}</span>
+              <span className="ml-2 text-text-muted">{captainAgent.framework} · :{captainAgent.port}</span>
+              <span className="ml-2 rounded bg-text-muted/10 px-1.5 py-0.5 text-[10px] text-text-muted">existing agent</span>
+            </div>
+            <ChevronRight className="h-3.5 w-3.5 text-text-muted" />
+          </button>
+        ) : (
+          <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
+            no captain assigned
+          </div>
+        )}
+      </div>
+
+      {showSetOrchestrator && (
+        <SetCaptainDialog
+          projectId={project.id}
+          agents={agents}
+          onDone={() => { setShowSetOrchestrator(false); refresh(); }}
+          onClose={() => setShowSetOrchestrator(false)}
+        />
+      )}
+
+      {/* Role Agents */}
+      <div>
+        <div className="mb-2 flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+            role agents ({roleAgents.length})
+          </span>
+          <button
+            onClick={() => setShowAddAgent(true)}
+            className="flex items-center gap-1 text-xs text-accent transition-colors hover:text-accent/80"
+          >
+            <Plus className="h-3 w-3" /> add agent
+          </button>
+        </div>
+        {roleAgents.length === 0 ? (
+          <div className="rounded border border-border bg-surface p-6 text-center text-xs text-text-muted">
+            no role agents yet — add one to start building your team
+          </div>
+        ) : (
+          <div className="space-y-1.5">
+            {roleAgents.map((agent) => (
+              <InstanceRow
+                key={agent.id}
+                instance={agent}
+                onClick={() => navigate(`/agents/${agent.name}`)}
+              />
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showAddAgent && (
+        <AddAgentDialog
+          projectId={project.id}
+          onCreated={refresh}
+          onClose={() => setShowAddAgent(false)}
+        />
+      )}
+    </div>
+  );
+}

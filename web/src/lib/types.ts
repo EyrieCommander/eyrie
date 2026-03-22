@@ -149,3 +149,105 @@ export interface InstallLogEvent {
   type: "log";
   message: string;
 }
+
+export interface Persona {
+  id: string;
+  name: string;
+  role: string;
+  description: string;
+  icon: string;
+  category: string;
+  preferred_model: string;
+  temperature?: number;
+  max_tokens?: number;
+  reasoning_level?: string;
+  system_prompt: string;
+  tools: string[];
+  traits: string[];
+  preferred_framework?: string;
+  installed?: boolean;
+  agent_name?: string;
+  agent_alive?: boolean;
+}
+
+export interface PersonaCategory {
+  id: string;
+  name: string;
+  description: string;
+}
+
+// --- Instance types ---
+
+export interface AgentInstance {
+  id: string;
+  name: string;
+  display_name: string;
+  framework: string;
+  persona_id?: string;
+  hierarchy_role?: "commander" | "captain" | "talon" | "";
+  project_id?: string;
+  parent_id?: string;
+  port: number;
+  config_path: string;
+  workspace_path: string;
+  status: string;
+  created_at: string;
+  created_by: string;
+}
+
+export interface CreateInstanceRequest {
+  name: string;
+  framework: string;
+  persona_id?: string;
+  hierarchy_role?: string;
+  project_id?: string;
+  parent_id?: string;
+  model?: string;
+  auto_start?: boolean;
+  created_by?: string;
+}
+
+// --- Project types ---
+
+export interface Project {
+  id: string;
+  name: string;
+  description: string;
+  goal?: string;
+  orchestrator_id?: string;
+  role_agent_ids?: string[];
+  status: string;
+  created_at: string;
+  updated_at: string;
+  created_by: string;
+}
+
+export interface CreateProjectRequest {
+  name: string;
+  description: string;
+  goal?: string;
+}
+
+// --- Hierarchy types ---
+
+export interface CommanderInfo {
+  id: string;
+  name: string;
+  display_name: string;
+  framework: string;
+  port: number;
+  status: string;
+  hierarchy_role: string;
+  legacy: boolean;
+}
+
+export interface HierarchyTree {
+  commander?: CommanderInfo;
+  projects: ProjectTree[];
+}
+
+export interface ProjectTree {
+  project: Project;
+  captain?: AgentInstance;
+  talons: AgentInstance[];
+}

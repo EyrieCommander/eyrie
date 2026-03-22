@@ -1,0 +1,310 @@
+# Eyrie: Project Orchestrator with Agent Hierarchy
+
+## Vision
+
+Transform Eyrie from a framework manager into a **project orchestrator** with a three-tier agent hierarchy. Agents are persistent entities with real identity (IDENTITY.md, SOUL.md, MEMORY.md), not disposable LLM sessions.
+
+## Three-Tier Agent Hierarchy
+
+### 1. Master Coordinator (one per user)
+- Has its own identity, memory, and workspace
+- Knows about ALL the user's projects
+- Can create project orchestrators via Eyrie's API
+- Relays project progress to the user
+- User picks which framework it runs on
+
+### 2. Project Orchestrators (one per project)
+- Created by the coordinator (or user via UI)
+- Knows project goals, tracks progress
+- Can create role agents via Eyrie's API
+- Has its own identity and memory
+- Responsible for its project's progress
+
+### 3. Role Agents / Implementers (many per project)
+- Created by orchestrators (or user via UI)
+- Specific roles: researcher, dev-lead, marketer, etc.
+- Use persona templates as starting point for identity
+- Develop their own memory over time
+- Responsible for their own role
+
+## Key Concept: Personas Are Identity Templates
+
+A persona is NOT just a system prompt. It's a **workspace template** that includes:
+
+```
+persona-template/
+  IDENTITY.md.tmpl    # Name, personality, vibe
+  SOUL.md.tmpl        # Core behavioral philosophy
+  USER.md.tmpl        # Human context
+  BOOTSTRAP.md.tmpl   # First-run initialization
+  MEMORY.md.tmpl      # Seed memories
+  TOOLS.md.tmpl       # Available tools + Eyrie API access
+```
+
+When instantiated, template variables ({{.Name}}, {{.Role}}, {{.ProjectName}}, etc.) are rendered and written to the new agent's workspace. The agent then develops its own memories from there.
+
+### Persona Schema Extension
+
+```go
+type Persona struct {
+    // ... existing fields (ID, Name, Role, Description, etc.) ...
+
+    // NEW: Identity template files (key=filename, value=Go template string)
+    IdentityTemplate map[string]string `json:"identity_template,omitempty"`
+
+    // NEW: Seed memories for MEMORY.md
+    MemorySeeds []string `json:"memory_seeds,omitempty"`
+
+    // NEW: Hierarchy role this persona is designed for
+    HierarchyRole string `json:"hierarchy_role,omitempty"` // "coordinator", "orchestrator", "implementer"
+}
+```
+
+## Agent Instances
+
+Each instance is a **real agent deployment** with its own config, workspace, port, and process.
+
+### Instance Schema
+
+```go
+type Instance struct {
+    ID            string    `json:"id"`
+    Name          string    `json:"name"`           // "strategist-sarah"
+    DisplayName   string    `json:"display_name"`   // "Strategist Sarah"
+    Framework     string    `json:"framework"`      // "zeroclaw", "openclaw", "hermes"
+    PersonaID     string    `json:"persona_id"`
+    HierarchyRole string    `json:"hierarchy_role"` // "coordinator", "orchestrator", "implementer"
+    ProjectID     string    `json:"project_id,omitempty"`
+    ParentID      string    `json:"parent_id,omitempty"` // Instance that created this one
+    Port          int       `json:"port"`           // Auto-allocated 43000-43999
+    ConfigPath    string    `json:"config_path"`
+    WorkspacePath string    `json:"workspace_path"`
+    Status        string    `json:"status"`         // "created", "running", "stopped", "error"
+    CreatedAt     time.Time `json:"created_at"`
+    CreatedBy     string    `json:"created_by"`     // "user" or parent instance ID
+}
+```
+
+### Instance Directory Structure
+
+```
+~/.eyrie/instances/<instance-id>/
+    instance.json           # Eyrie metadata
+    config.toml             # (or .json/.yaml per framework)
+    workspace/
+        IDENTITY.md         # Rendered from persona template
+        SOUL.md
+        MEMORY.md
+        USER.md
+        BOOTSTRAP.md        # Deleted by agent after first session
+        TOOLS.md            # Includes Eyrie API instructions
+        memory/
+            brain.db        # (ZeroClaw) or daily .md files
+        sessions/
+```
+
+## Projects
+
+```go
+type Project struct {
+    ID             string            `json:"id"`
+    Name           string            `json:"name"`
+    Description    string            `json:"description"`
+    Goal           string            `json:"goal"`
+    OrchestratorID string            `json:"orchestrator_id"` // Instance ID
+    RoleAgentIDs   []string          `json:"role_agent_ids"`  // Instance IDs
+    Status         string            `json:"status"`          // "active", "paused", "completed"
+    CreatedAt      time.Time         `json:"created_at"`
+    CreatedBy      string            `json:"created_by"`      // "user" or coordinator ID
+}
+```
+
+Storage: `~/.eyrie/projects/<project-id>.json`
+
+## Agents Creating Agents: HTTP REST API
+
+Agents call Eyrie's REST API to create other agents. This works because:
+- All frameworks support HTTP tool calls (ZeroClaw: `http_fetch`, OpenClaw: `web-fetch`)
+- No new SDK dependencies needed
+- Framework-agnostic
+
+The coordinator's TOOLS.md includes:
+```markdown
+## Eyrie API (Agent Management)
+URL: http://127.0.0.1:7200
+
+### Create an agent
+POST /api/instances
+Body: {"name": "researcher", "framework": "openclaw", "persona_id": "research-analyst", "project_id": "...", "auto_start": true}
+
+### List agents
+GET /api/instances
+
+### Start/stop an agent
+POST /api/instances/<id>/start
+POST /api/instances/<id>/stop
+
+### Create a project
+POST /api/projects
+Body: {"name": "launch my SaaS", "goal": "..."}
+```
+
+## New API Endpoints
+
+### Instance Endpoints (`internal/server/instances.go`)
+```
+GET    /api/instances                    # List all instances
+POST   /api/instances                    # Create (provision) new instance
+GET    /api/instances/{id}               # Get instance detail
+PUT    /api/instances/{id}               # Update (rename, change persona)
+DELETE /api/instances/{id}               # Deprovision (stop + remove config)
+POST   /api/instances/{id}/{action}      # start / stop / restart
+```
+
+### Project Endpoints (`internal/server/projects.go`)
+```
+GET    /api/projects                     # List projects
+POST   /api/projects                     # Create project
+GET    /api/projects/{id}                # Get project detail
+PUT    /api/projects/{id}                # Update project
+DELETE /api/projects/{id}                # Archive project
+```
+
+### Hierarchy Endpoint (`internal/server/hierarchy.go`)
+```
+GET    /api/hierarchy                    # Full tree: coordinator -> projects -> agents
+```
+
+## Storage Layout
+
+```
+~/.eyrie/
+├── config.toml               # Existing
+├── coordinator.json           # Which instance is THE coordinator
+├── projects/
+│   └── <project-id>.json
+├── instances/
+│   └── <instance-id>/
+│       ├── instance.json
+│       ├── config.toml        # (or .json/.yaml)
+│       └── workspace/
+│           ├── IDENTITY.md
+│           ├── SOUL.md
+│           ├── MEMORY.md
+│           ├── USER.md
+│           ├── BOOTSTRAP.md
+│           ├── TOOLS.md
+│           └── memory/
+├── personas/                  # Existing
+├── cache/                     # Existing
+└── tokens.json                # Existing
+```
+
+## Frontend Flow
+
+### Sidebar Evolution
+```
+eyrie
+├── hierarchy          # NEW: tree view (coordinator > projects > agents)
+├── projects           # NEW: project list
+├── {legacy agents}    # Existing agents (backward compatible)
+├── personas
+├── install
+└── settings
+```
+
+### User Journey
+
+1. **Setup Coordinator** — Choose framework, pick/customize persona, name it, create
+2. **Create Project** — Describe goals; coordinator (or user) creates project + orchestrator
+3. **Populate Agents** — Orchestrator recommends role agents; user approves or creates manually
+4. **Monitor** — Hierarchy tree shows coordinator > projects > orchestrators > role agents
+
+### New Pages
+- `HierarchyPage.tsx` — Tree visualization
+- `CoordinatorSetup.tsx` — First-time setup wizard
+- `ProjectListPage.tsx` — Grid of project cards
+- `ProjectDetail.tsx` — Project detail with orchestrator + role agents
+
+## Discovery Integration
+
+Modify `internal/discovery/discovery.go` to scan instances:
+
+```go
+// After scanning cfg.Discovery.ConfigPaths, also scan instances
+instanceDir := filepath.Join(home, ".eyrie", "instances")
+entries, _ := os.ReadDir(instanceDir)
+for _, entry := range entries {
+    if !entry.IsDir() { continue }
+    // Read instance.json to get framework, name, port
+    // Scan the framework config file within the instance dir
+    // Use instance.Name instead of hardcoded "zeroclaw"/"openclaw"
+}
+```
+
+## Manager Integration
+
+Add to `internal/manager/manager.go`:
+
+```go
+func ExecuteInstance(ctx context.Context, inst Instance, action LifecycleAction) error {
+    switch inst.Framework {
+    case "zeroclaw":
+        // zeroclaw daemon --config <inst.ConfigPath>
+    case "openclaw":
+        // openclaw gateway start --config <inst.ConfigPath>
+    case "hermes":
+        // hermes gateway start --config <inst.ConfigPath>
+    }
+}
+```
+
+## Files to Create
+
+| File | Purpose |
+|------|---------|
+| `internal/instance/instance.go` | Instance struct |
+| `internal/instance/store.go` | Instance CRUD (JSON, mutex-protected) |
+| `internal/instance/ports.go` | Port allocation (43000-43999) |
+| `internal/instance/provisioner.go` | Config gen, workspace scaffolding, identity rendering |
+| `internal/project/project.go` | Project struct |
+| `internal/project/store.go` | Project CRUD |
+| `internal/server/instances.go` | Instance API handlers |
+| `internal/server/projects.go` | Project API handlers |
+| `internal/server/hierarchy.go` | Hierarchy tree endpoint |
+| `web/src/components/HierarchyPage.tsx` | Tree visualization |
+| `web/src/components/ProjectListPage.tsx` | Project grid |
+| `web/src/components/ProjectDetail.tsx` | Project detail |
+| `web/src/components/CoordinatorSetup.tsx` | Setup wizard |
+
+## Files to Modify
+
+| File | Change |
+|------|--------|
+| `internal/persona/schema.go` | Add IdentityTemplate, MemorySeeds, HierarchyRole fields |
+| `internal/discovery/discovery.go` | Scan ~/.eyrie/instances/ for instance configs |
+| `internal/discovery/config.go` | Accept name override for instance configs |
+| `internal/manager/manager.go` | Add ExecuteInstance() with --config flag |
+| `internal/server/server.go` | Register instance, project, hierarchy routes |
+| `web/src/lib/types.ts` | Add Instance, Project, HierarchyTree types |
+| `web/src/lib/api.ts` | Add instance + project API functions |
+| `web/src/components/Sidebar.tsx` | Add hierarchy + projects nav |
+| `web/src/App.tsx` | Add new routes |
+
+## Backward Compatibility
+
+- Existing "legacy" agents (discovered from ~/.zeroclaw/, ~/.openclaw/) work unchanged
+- All existing API endpoints unchanged
+- Projects, instances, and hierarchy are opt-in additions
+- No migration required
+
+## Build Order
+
+1. Instance system (store, provisioner, config gen, port allocation)
+2. Discovery + manager integration (instances appear as agents)
+3. Instance API endpoints
+4. Project system (store + API)
+5. Hierarchy endpoint (tree query)
+6. Frontend: hierarchy page + coordinator setup
+7. Frontend: project pages
+8. Frontend: sidebar + routing updates

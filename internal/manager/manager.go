@@ -103,6 +103,26 @@ func run(ctx context.Context, command string, args ...string) error {
 	return nil
 }
 
+// ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
+// This is used for provisioned instances that have their own config files.
+func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
+	switch framework {
+	case "zeroclaw":
+		if action == ActionStop {
+			// For instances, we need to find the PID and kill it
+			return run(ctx, "zeroclaw", "service", string(action))
+		}
+		// Start with explicit config
+		return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+	case "openclaw":
+		return run(ctx, "openclaw", "gateway", string(action), "--config", configPath)
+	case "hermes":
+		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	default:
+		return fmt.Errorf("unknown framework %q", framework)
+	}
+}
+
 // CommandString returns a human-readable version of the command that would run.
 func CommandString(framework string, action LifecycleAction) string {
 	switch framework {

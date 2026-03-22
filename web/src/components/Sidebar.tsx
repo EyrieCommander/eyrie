@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Bird, ChevronDown, ChevronRight, Download, Settings } from "lucide-react";
+import { Bird, Briefcase, ChevronDown, ChevronRight, Download, GitBranch, Settings, Users } from "lucide-react";
 import type { AgentInfo } from "../lib/types";
 
 const subPages = ["overview", "chat", "logs", "config"] as const;
@@ -43,6 +43,32 @@ export default function Sidebar({ agents }: { agents: AgentInfo[] }) {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 space-y-0.5">
+        <Link
+          to="/hierarchy"
+          className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
+            pathname === "/hierarchy"
+              ? "bg-surface-hover text-accent"
+              : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+          }`}
+        >
+          <GitBranch className="h-3.5 w-3.5" />
+          <span className="font-medium">hierarchy</span>
+        </Link>
+
+        <Link
+          to="/projects"
+          className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
+            pathname.startsWith("/projects")
+              ? "bg-surface-hover text-accent"
+              : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+          }`}
+        >
+          <Briefcase className="h-3.5 w-3.5" />
+          <span className="font-medium">projects</span>
+        </Link>
+
+        <div className="pt-2 border-t border-border mt-2" />
+
         {agents.map((agent) => {
           const isExpanded = expanded[agent.name] ?? false;
           const isActive = activeName === agent.name;
@@ -95,6 +121,18 @@ export default function Sidebar({ agents }: { agents: AgentInfo[] }) {
         })}
 
         <div className="pt-4 border-t border-border mt-4 space-y-px">
+          <Link
+            to="/personas"
+            className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
+              pathname === "/personas"
+                ? "bg-surface-hover text-accent"
+                : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+            }`}
+          >
+            <Users className="h-3.5 w-3.5" />
+            <span className="font-medium">personas</span>
+          </Link>
+
           <Link
             to="/install"
             className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${

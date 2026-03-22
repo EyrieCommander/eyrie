@@ -6,6 +6,10 @@ import { fetchAgents } from "./lib/api";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
 import InstallPage from "./components/InstallPage";
+import PersonasPage from "./components/PersonasPage";
+import HierarchyPage from "./components/HierarchyPage";
+import ProjectListPage from "./components/ProjectListPage";
+import ProjectDetail from "./components/ProjectDetail";
 
 export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -44,7 +48,10 @@ export default function App() {
           )}
 
           <Routes>
-            <Route path="/" element={<Navigate to="/agents/overview" replace />} />
+            <Route path="/" element={<Navigate to="/hierarchy" replace />} />
+            <Route path="/hierarchy" element={<HierarchyPage />} />
+            <Route path="/projects" element={<ProjectListPage />} />
+            <Route path="/projects/:id" element={<ProjectDetail />} />
             <Route
               path="/agents/overview"
               element={
@@ -60,6 +67,7 @@ export default function App() {
               element={<AgentDetailRoute agents={agents} />}
             />
             <Route path="/install" element={<InstallPage />} />
+            <Route path="/personas" element={<PersonasPage />} />
           </Routes>
         </div>
       </main>

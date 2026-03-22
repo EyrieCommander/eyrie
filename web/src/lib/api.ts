@@ -1,5 +1,7 @@
 import type {
   AgentInfo,
+  AgentInstance,
+  CreateInstanceRequest,
   LogEntry,
   ActivityEvent,
   SessionsResponse,
@@ -8,6 +10,11 @@ import type {
   Framework,
   InstallProgress,
   InstallLogEvent,
+  Persona,
+  PersonaCategory,
+  Project,
+  CreateProjectRequest,
+  HierarchyTree,
 } from "./types";
 
 const BASE = "";
@@ -216,6 +223,20 @@ export async function purgeSession(
   }
 }
 
+export async function destroySession(
+  name: string,
+  sessionKey: string,
+): Promise<void> {
+  const res = await fetch(
+    `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/destroy`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to destroy session: ${res.statusText}`);
+  }
+}
+
 export async function hideSession(
   name: string,
   sessionKey: string,
@@ -396,4 +417,220 @@ export function streamInstall(
   })();
 
   return controller;
+}
+
+// Persona API
+
+export async function fetchPersonas(): Promise<Persona[]> {
+  const res = await fetch(`${BASE}/api/personas`);
+  if (!res.ok) throw new Error(`Failed to fetch personas: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchPersonaCategories(): Promise<PersonaCategory[]> {
+  const res = await fetch(`${BASE}/api/personas/categories`);
+  if (!res.ok)
+    throw new Error(`Failed to fetch categories: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchPersona(id: string): Promise<Persona> {
+  const res = await fetch(`${BASE}/api/personas/${id}`);
+  if (!res.ok) throw new Error(`Failed to fetch persona: ${res.statusText}`);
+  return res.json();
+}
+
+export async function installPersona(personaId: string): Promise<Persona> {
+  const res = await fetch(`${BASE}/api/personas/install`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ persona_id: personaId }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to install persona: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updatePersona(
+  id: string,
+  persona: Persona,
+): Promise<Persona> {
+  const res = await fetch(`${BASE}/api/personas/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(persona),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to update persona: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deletePersona(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/personas/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to delete persona: ${res.statusText}`);
+  }
+}
+
+// Instance API
+
+export async function fetchInstances(): Promise<AgentInstance[]> {
+  const res = await fetch(`${BASE}/api/instances`);
+  if (!res.ok) throw new Error(`Failed to fetch instances: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchInstance(id: string): Promise<AgentInstance> {
+  const res = await fetch(`${BASE}/api/instances/${id}`);
+  if (!res.ok) throw new Error(`Failed to fetch instance: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createInstance(req: CreateInstanceRequest): Promise<AgentInstance> {
+  const res = await fetch(`${BASE}/api/instances`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to create instance: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteInstance(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/instances/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to delete instance: ${res.statusText}`);
+  }
+}
+
+export async function instanceAction(id: string, action: "start" | "stop" | "restart"): Promise<void> {
+  const res = await fetch(`${BASE}/api/instances/${id}/${action}`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to ${action} instance: ${res.statusText}`);
+  }
+}
+
+// Project API
+
+export async function fetchProjects(): Promise<Project[]> {
+  const res = await fetch(`${BASE}/api/projects`);
+  if (!res.ok) throw new Error(`Failed to fetch projects: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createProject(req: CreateProjectRequest): Promise<Project> {
+  const res = await fetch(`${BASE}/api/projects`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to create project: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateProject(id: string, updates: Partial<Pick<Project, "name" | "description" | "goal" | "status" | "orchestrator_id">>): Promise<Project> {
+  const res = await fetch(`${BASE}/api/projects/${id}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(updates),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to update project: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteProject(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/projects/${id}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to delete project: ${res.statusText}`);
+  }
+}
+
+// Hierarchy API
+
+export async function fetchHierarchy(): Promise<HierarchyTree> {
+  const res = await fetch(`${BASE}/api/hierarchy`);
+  if (!res.ok) throw new Error(`Failed to fetch hierarchy: ${res.statusText}`);
+  return res.json();
+}
+
+export function streamCommanderBriefing(
+  onEvent: (event: ChatEvent & { session_key?: string }) => void,
+): { controller: AbortController; sessionReady: Promise<string> } {
+  const controller = new AbortController();
+  let resolveSession: (key: string) => void;
+  const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/hierarchy/commander/brief`, {
+        method: "POST",
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: body.error || res.statusText });
+        resolveSession!("");
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          buffer += decoder.decode(value, { stream: true });
+        } else {
+          buffer += decoder.decode();
+        }
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === "session" && ev.session_key) {
+                resolveSession!(ev.session_key);
+              }
+              onEvent(ev);
+            } catch { /* skip */ }
+          }
+        }
+        if (done) break;
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({ type: "error", error: e instanceof Error ? e.message : "Briefing failed" });
+      }
+      resolveSession!("");
+    }
+  })();
+  return { controller, sessionReady };
+}
+
+export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {
+  const res = await fetch(`${BASE}/api/hierarchy/commander`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ instance_id: opts.instanceId, agent_name: opts.agentName }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to set coordinator: ${res.statusText}`);
+  }
 }
