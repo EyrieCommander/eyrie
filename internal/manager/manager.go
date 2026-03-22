@@ -45,14 +45,11 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 		}
 		return run(ctx, "zeroclaw", "service", string(action))
 	}
-	// stop: try service stop, fall back to pkill
-	err := run(ctx, "zeroclaw", "service", string(action))
-	if err != nil {
-		// Service stop failed — kill all non-instance zeroclaw daemons
-		killCmd := exec.Command("pkill", "-f", "zeroclaw daemon$")
-		_ = killCmd.Run()
-	}
-	return err
+	// Stop: try service stop first, then always pkill to catch manually started daemons
+	_ = run(ctx, "zeroclaw", "service", string(action))
+	killCmd := exec.Command("pkill", "-f", "zeroclaw daemon$")
+	_ = killCmd.Run()
+	return nil
 }
 
 func executeOpenClaw(ctx context.Context, action LifecycleAction) error {
