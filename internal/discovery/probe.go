@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/natalie/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/config"
 	"nhooyr.io/websocket"
 )
 

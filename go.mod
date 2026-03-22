@@ -1,4 +1,4 @@
-module github.com/natalie/eyrie
+module github.com/Audacity88/eyrie
 
 go 1.26.1
 

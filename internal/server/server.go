@@ -10,8 +10,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
 )
 
 //go:embed all:static
@@ -87,11 +87,14 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE /api/projects/{id}", s.handleDeleteProject)
 	s.mux.HandleFunc("POST /api/projects/{id}/agents", s.handleAddProjectAgent)
 	s.mux.HandleFunc("DELETE /api/projects/{id}/agents/{instanceId}", s.handleRemoveProjectAgent)
+	s.mux.HandleFunc("GET /api/projects/{id}/chat", s.handleProjectChatMessages)
+	s.mux.HandleFunc("POST /api/projects/{id}/chat", s.handleProjectChatSend)
 
 	// Hierarchy endpoints
 	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
 	s.mux.HandleFunc("POST /api/hierarchy/commander", s.handleSetCommander)
 	s.mux.HandleFunc("POST /api/hierarchy/commander/brief", s.handleBriefCommander)
+	s.mux.HandleFunc("POST /api/projects/{id}/captain/brief", s.handleBriefCaptain)
 
 	// Persona endpoints (also aliased under /api/registry/ for consistency)
 	s.mux.HandleFunc("GET /api/registry/personas", s.handleListPersonas)

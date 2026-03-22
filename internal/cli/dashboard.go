@@ -13,8 +13,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/server"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/server"
 	"github.com/spf13/cobra"
 )
 

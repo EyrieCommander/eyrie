@@ -7,8 +7,8 @@ import (
 	"os/signal"
 	"time"
 
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/spf13/cobra"
 )
 

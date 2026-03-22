@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/natalie/eyrie/internal/adapter"
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/spf13/cobra"
 )
 

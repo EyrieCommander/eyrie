@@ -6,9 +6,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/natalie/eyrie/internal/instance"
-	"github.com/natalie/eyrie/internal/manager"
-	"github.com/natalie/eyrie/internal/persona"
+	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/manager"
+	"github.com/Audacity88/eyrie/internal/persona"
 )
 
 func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {

@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/discovery"
-	"github.com/natalie/eyrie/internal/manager"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/spf13/cobra"
 )
 

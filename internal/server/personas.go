@@ -7,7 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/natalie/eyrie/internal/persona"
+	"github.com/Audacity88/eyrie/internal/persona"
 )
 
 func (s *Server) handleListPersonas(w http.ResponseWriter, r *http.Request) {

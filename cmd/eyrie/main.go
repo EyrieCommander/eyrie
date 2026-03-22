@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/natalie/eyrie/internal/cli"
+	"github.com/Audacity88/eyrie/internal/cli"
 )
 
 func main() {

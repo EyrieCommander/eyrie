@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/natalie/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/discovery"
 	"nhooyr.io/websocket"
 )
 

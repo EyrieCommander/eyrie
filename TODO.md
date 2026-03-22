@@ -26,8 +26,15 @@
 - [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept).
 - [ ] **Session management**: The session group delete button needs testing across all frameworks (currently only OpenClaw supports DestroySession).
 
+## Integrations
+
+- [ ] **Telegram bridge for project chat**: Mirror Eyrie project conversations into Telegram groups for mobile access. Each project maps to a Telegram group; agents respond via their existing Telegram channel support (`mention_only` mode). Eyrie remains the source of truth.
+- [ ] **Discord bridge for project chat**: Same as Telegram bridge but for Discord servers/channels. Leverage ZeroClaw's existing Discord channel support with per-channel-ID sessions.
+- [ ] **Slack bridge**: Optional integration for teams already using Slack for coordination.
+
 ## Architecture
 
+- [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/Hermes (like Telegram or Discord). Agents would see project messages via their `Channel` trait with native group behavior (`mention_only`, per-chat sessions, `ChannelMessage` struct). Builds on top of the current WebSocket-based project chat — not a replacement, but a deeper integration.
 - [ ] **PicoClaw support**: Add as a fourth framework option — even lighter than ZeroClaw for simple Talon roles.
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev Talon + marketing Talon + research Talon).
 - [ ] **Agent-to-agent protocol**: Define how agents in a project coordinate (shared context, task handoffs, status updates).

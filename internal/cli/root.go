@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"github.com/natalie/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/spf13/cobra"
 )
 

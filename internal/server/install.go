@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/registry"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/registry"
 )
 
 // installState tracks ongoing installations

@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/discovery"
-	"github.com/natalie/eyrie/internal/instance"
-	"github.com/natalie/eyrie/internal/project"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/project"
 )
 
 // CommanderInfo represents the commander, which can be either a
@@ -284,6 +284,147 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprintf(w, "data: %s\n\n", data)
 		flusher.Flush()
 	}
+}
+
+// handleBriefCaptain sends a project-scoped briefing to a captain agent.
+// POST /api/projects/{id}/captain/brief
+func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	// Load project
+	store, err := project.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open project store"})
+		return
+	}
+	proj, err := store.Get(projectID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+	if proj.OrchestratorID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project has no captain assigned"})
+		return
+	}
+
+	// Find the captain agent
+	disc := s.runDiscovery(r.Context())
+	var found *discovery.AgentResult
+	for i := range disc.Agents {
+		a := disc.Agents[i].Agent
+		if a.Name == proj.OrchestratorID || a.InstanceID == proj.OrchestratorID {
+			found = &disc.Agents[i]
+			break
+		}
+	}
+	if found == nil || !found.Alive {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "captain agent not found or not running"})
+		return
+	}
+
+	agent := discovery.NewAgent(found.Agent)
+
+	// Compose captain briefing with project context
+	briefing := composeCaptainBriefing(proj)
+
+	// Create a dedicated briefing session
+	sessionName := fmt.Sprintf("project-%s-briefing", proj.Name)
+	var sessionKey string
+
+	// Clean up existing briefing session
+	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
+		for _, sess := range sessions {
+			if sess.Title == sessionName {
+				_ = agent.ResetSession(r.Context(), sess.Key)
+			}
+		}
+	}
+	sess, cErr := agent.CreateSession(r.Context(), sessionName)
+	if cErr != nil {
+		fmt.Fprintf(os.Stderr, "eyrie: failed to create captain briefing session: %v\n", cErr)
+	} else {
+		sessionKey = sess.Key
+		type sessionActivator interface {
+			ActivateSession(ctx context.Context, key string) error
+		}
+		if activator, ok := agent.(sessionActivator); ok {
+			_ = activator.ActivateSession(r.Context(), sessionKey)
+		}
+	}
+
+	// Stream the briefing as SSE
+	flusher, ok := startSSE(w)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+		return
+	}
+
+	eventCh, err := agent.StreamMessage(r.Context(), briefing, sessionKey)
+	if err != nil {
+		errData, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", errData)
+		flusher.Flush()
+		return
+	}
+
+	if sessionKey != "" {
+		sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
+		data, _ := json.Marshal(sessionEvent)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+
+	for ev := range eventCh {
+		data, _ := json.Marshal(ev)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
+}
+
+func composeCaptainBriefing(proj *project.Project) string {
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf(`You are the Captain of the "%s" project.
+
+`, proj.Name))
+
+	if proj.Goal != "" {
+		b.WriteString(fmt.Sprintf("**Project goal:** %s\n\n", proj.Goal))
+	}
+	if proj.Description != "" {
+		b.WriteString(fmt.Sprintf("**Description:** %s\n\n", proj.Description))
+	}
+
+	b.WriteString(`As Captain, your responsibilities are:
+
+1. Talk with your user to understand the project requirements in detail
+2. Break the project goal into concrete tasks and milestones
+3. Propose a team of Talons (specialist agents) — describe what roles you need and why
+4. Coordinate your Talons once they're assigned to you
+5. Track progress and report status to your user
+
+**Important:** You do NOT create agents yourself. When you've determined what Talons you need, present your proposed team to your user. The Commander will review and provision the agents, then assign them to your project. You'll be notified when they're ready.
+
+## Getting started
+
+Use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1:7200. Do NOT use web_fetch — it blocks localhost.
+
+1. Fetch the API reference and save it to your TOOLS.md:
+   exec: curl -s http://127.0.0.1:7200/api/reference
+
+2. Check your project details and any assigned agents:
+   exec: curl -s http://127.0.0.1:7200/api/projects/` + proj.ID + `
+
+3. Review available personas (these are the kinds of Talons you can request):
+   exec: curl -s http://127.0.0.1:7200/api/registry/personas
+
+Save the API reference to your TOOLS.md under an "## Eyrie API" heading.
+
+Then introduce yourself to your user, summarize the project goal, and discuss what they need. Based on that conversation, propose:
+- An initial plan with milestones
+- What Talon agents would be useful (roles, personas, frameworks)
+- What to focus on first`)
+
+	return b.String()
 }
 
 // readWorkspaceField reads a workspace file and extracts a value after a label like "**Name:**"

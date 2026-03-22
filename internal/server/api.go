@@ -8,11 +8,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/natalie/eyrie/internal/adapter"
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/discovery"
-	"github.com/natalie/eyrie/internal/manager"
-	"github.com/natalie/eyrie/internal/registry"
+	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/manager"
+	"github.com/Audacity88/eyrie/internal/registry"
 )
 
 type agentJSON struct {

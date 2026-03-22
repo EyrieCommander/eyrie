@@ -638,6 +638,73 @@ export function streamCommanderBriefing(
   return { controller, sessionReady };
 }
 
+export function streamCaptainBriefing(
+  projectId: string,
+  onEvent: (event: ChatEvent & { session_key?: string }) => void,
+): { controller: AbortController; sessionReady: Promise<string> } {
+  const controller = new AbortController();
+  let resolveSession: (key: string) => void;
+  let sessionResolved = false;
+  const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/projects/${projectId}/captain/brief`, {
+        method: "POST",
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: body.error || res.statusText });
+        resolveSession!("");
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          buffer += decoder.decode(value, { stream: true });
+        } else {
+          buffer += decoder.decode();
+        }
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const ev = JSON.parse(line.slice(6));
+              if (ev.type === "session" && ev.session_key) {
+                resolveSession!(ev.session_key); sessionResolved = true;
+              }
+              onEvent(ev);
+            } catch { /* skip */ }
+          }
+        }
+        if (done) {
+          if (buffer.startsWith("data: ")) {
+            try {
+              const ev = JSON.parse(buffer.slice(6));
+              if (ev.type === "session" && ev.session_key) {
+                resolveSession!(ev.session_key); sessionResolved = true;
+              }
+              onEvent(ev);
+            } catch { /* skip */ }
+          }
+          break;
+        }
+      }
+      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({ type: "error", error: e instanceof Error ? e.message : "Briefing failed" });
+      }
+      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
+    }
+  })();
+  return { controller, sessionReady };
+}
+
 export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {
   const res = await fetch(`${BASE}/api/hierarchy/commander`, {
     method: "POST",

@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/natalie/eyrie/internal/adapter"
-	"github.com/natalie/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/config"
 	"gopkg.in/yaml.v3"
 )
 

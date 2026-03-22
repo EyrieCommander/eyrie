@@ -7,9 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/natalie/eyrie/internal/adapter"
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/instance"
 )
 
 // Result holds the outcome of a discovery run.

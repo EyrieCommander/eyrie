@@ -5,8 +5,8 @@ import (
 	"os"
 
 	"github.com/BurntSushi/toml"
-	"github.com/natalie/eyrie/internal/adapter"
-	"github.com/natalie/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/config"
 )
 
 // scanZeroClawConfig reads a ZeroClaw config.toml and extracts the gateway address.

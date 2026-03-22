@@ -1517,6 +1517,16 @@ function ToolRunCard({ tools }: { tools: ChatPart[] }) {
   );
 }
 
+function toolCallSummary(_tool: string, args: Record<string, any>): string {
+  // Show the most relevant arg as a preview
+  const cmd = args.command || args.cmd || args.query || args.path || args.url || args.description;
+  if (typeof cmd === "string") {
+    const trimmed = cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
+    return trimmed;
+  }
+  return "";
+}
+
 function PartToolCallCard({ part, defaultExpanded = false }: { part: ChatPart; defaultExpanded?: boolean }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
@@ -1530,6 +1540,11 @@ function PartToolCallCard({ part, defaultExpanded = false }: { part: ChatPart; d
         className="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-surface-hover/30"
       >
         <span className="font-mono text-text-secondary">{part.name}</span>
+        {part.args && (
+          <span className="font-mono text-text-muted truncate max-w-[300px]">
+            {toolCallSummary(part.name || "", part.args)}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-1.5">
           {part.error ? (
             <span className="text-red text-[10px]">FAIL</span>
@@ -1577,6 +1592,11 @@ function ToolCallCard({ tc }: { tc: ToolCall }) {
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
       >
         <span className="font-mono text-text">{tc.tool}</span>
+        {tc.args && (
+          <span className="font-mono text-text-muted truncate max-w-[300px]">
+            {toolCallSummary(tc.tool, tc.args)}
+          </span>
+        )}
         <span className="ml-auto flex items-center gap-1.5">
           {!tc.done && (
             <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />

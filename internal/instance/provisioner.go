@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/natalie/eyrie/internal/config"
-	"github.com/natalie/eyrie/internal/persona"
+	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/persona"
 )
 
 // TemplateContext is passed to identity file templates when rendering.

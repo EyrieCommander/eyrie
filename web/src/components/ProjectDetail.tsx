@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Trash2, Briefcase, ChevronRight, Crown } from "lucide-react";
 import type { Project, AgentInstance, AgentInfo, Persona } from "../lib/types";
-import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject } from "../lib/api";
+import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject, streamCaptainBriefing } from "../lib/api";
 
 function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: () => void }) {
   const isProvisioning = instance.status === "created" || instance.status === "provisioning" || instance.status === "starting";
@@ -456,10 +456,23 @@ export default function ProjectDetail() {
           )}
         </div>
         {captainInstance ? (
-          <InstanceRow
-            instance={captainInstance}
-            onClick={() => navigate(`/agents/${captainInstance.name}`)}
-          />
+          <div className="space-y-1.5">
+            <InstanceRow
+              instance={captainInstance}
+              onClick={() => navigate(`/agents/${captainInstance.name}/chat`)}
+            />
+            <button
+              onClick={() => {
+                const { sessionReady } = streamCaptainBriefing(project.id, () => {});
+                sessionReady.then(() => {
+                  navigate(`/agents/${captainInstance.name}/chat?brief=captain`);
+                });
+              }}
+              className="ml-4 text-xs text-green hover:text-green/80 transition-colors"
+            >
+              brief captain on project
+            </button>
+          </div>
         ) : captainAgent ? (
           <button
             onClick={() => navigate(`/agents/${captainAgent.name}`)}
