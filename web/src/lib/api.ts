@@ -15,6 +15,7 @@ import type {
   Project,
   CreateProjectRequest,
   HierarchyTree,
+  ProjectChatMessage,
 } from "./types";
 
 const BASE = "";
@@ -703,6 +704,70 @@ export function streamCaptainBriefing(
     }
   })();
   return { controller, sessionReady };
+}
+
+// --- Project Chat ---
+
+export async function fetchProjectChat(projectId: string): Promise<ProjectChatMessage[]> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/chat`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
+export interface ProjectChatEvent {
+  type: "message" | "agent_event" | "done" | "error";
+  message?: ProjectChatMessage;
+  sender?: string;
+  role?: string;
+  event?: ChatEvent;
+  error?: string;
+}
+
+export function streamProjectChat(
+  projectId: string,
+  message: string,
+  onEvent: (event: ProjectChatEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/projects/${projectId}/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: body.error || res.statusText });
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          buffer += decoder.decode(value, { stream: true });
+        } else {
+          buffer += decoder.decode();
+        }
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
+          }
+        }
+        if (done) break;
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({ type: "error", error: e instanceof Error ? e.message : "Chat failed" });
+      }
+    }
+  })();
+  return controller;
 }
 
 export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {

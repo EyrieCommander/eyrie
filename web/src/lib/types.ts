@@ -254,3 +254,12 @@ export interface ProjectTree {
   captain?: AgentInstance;
   talons: AgentInstance[];
 }
+
+export interface ProjectChatMessage {
+  id: string;
+  sender: string;
+  role: string; // "user", "commander", "captain", "talon"
+  content: string;
+  timestamp: string;
+  mention?: string;
+}

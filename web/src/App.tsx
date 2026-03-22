@@ -31,7 +31,7 @@ export default function App() {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 10000);
+    const interval = setInterval(refresh, 30000);
     return () => clearInterval(interval);
   }, [refresh]);
 

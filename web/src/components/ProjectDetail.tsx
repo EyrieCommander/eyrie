@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Trash2, Briefcase, ChevronRight, Crown } from "lucide-react";
-import type { Project, AgentInstance, AgentInfo, Persona } from "../lib/types";
-import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject, streamCaptainBriefing } from "../lib/api";
+import { MessageSquare, Send } from "lucide-react";
+import type { Project, AgentInstance, AgentInfo, Persona, ProjectChatMessage } from "../lib/types";
+import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject, streamCaptainBriefing, fetchProjectChat, streamProjectChat } from "../lib/api";
 
 function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: () => void }) {
   const isProvisioning = instance.status === "created" || instance.status === "provisioning" || instance.status === "starting";
@@ -319,6 +320,167 @@ function AddAgentDialog({
   );
 }
 
+const ROLE_COLORS: Record<string, string> = {
+  user: "text-green",
+  commander: "text-accent",
+  captain: "text-yellow-400",
+  talon: "text-blue-400",
+};
+
+function ProjectChat({ projectId, participants }: { projectId: string; participants: { name: string; role: string }[] }) {
+  const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
+  const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [streamingSender, setStreamingSender] = useState<string | null>(null);
+  const [streamingContent, setStreamingContent] = useState("");
+  const [showMentions, setShowMentions] = useState(false);
+  const [mentionFilter, setMentionFilter] = useState("");
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  // Load chat history
+  useEffect(() => {
+    fetchProjectChat(projectId).then(setMessages).catch(() => {});
+  }, [projectId]);
+
+  // Auto-scroll
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [messages, streamingContent]);
+
+  const handleSend = useCallback(() => {
+    const msg = input.trim();
+    if (!msg || sending) return;
+    setInput("");
+    setSending(true);
+    setStreamingContent("");
+    setStreamingSender(null);
+
+    const controller = streamProjectChat(projectId, msg, (event) => {
+      if (event.type === "message" && event.message) {
+        setMessages((prev) => [...prev, event.message!]);
+        setStreamingContent("");
+        setStreamingSender(null);
+      } else if (event.type === "agent_event" && event.event) {
+        if (event.event.type === "delta") {
+          setStreamingSender(event.sender || null);
+          setStreamingContent((prev) => prev + (event.event!.content || ""));
+        }
+      } else if (event.type === "done") {
+        setSending(false);
+        setStreamingContent("");
+        setStreamingSender(null);
+      } else if (event.type === "error") {
+        setSending(false);
+      }
+    });
+
+    // Cleanup on unmount
+    return () => controller.abort();
+  }, [input, sending, projectId]);
+
+  return (
+    <div className="flex flex-col h-[500px]">
+      {/* Messages */}
+      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
+        {messages.length === 0 && !sending && (
+          <div className="text-center text-xs text-text-muted py-10">
+            no messages yet. start a conversation with your project team.
+          </div>
+        )}
+        {messages.map((msg) => (
+          <div key={msg.id} className="text-xs">
+            <div className="flex items-baseline gap-2">
+              <span className={`font-bold ${ROLE_COLORS[msg.role] || "text-text"}`}>
+                {msg.role === "user" ? "you" : msg.role}
+              </span>
+              {msg.role !== "user" && msg.sender !== msg.role && (
+                <span className="text-[10px] text-text-muted">({msg.sender})</span>
+              )}
+              <span className="text-[10px] text-text-muted">
+                {new Date(msg.timestamp).toLocaleTimeString()}
+              </span>
+            </div>
+            <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
+          </div>
+        ))}
+        {streamingSender && streamingContent && (
+          <div className="text-xs">
+            <div className="flex items-baseline gap-2">
+              <span className={`font-bold ${ROLE_COLORS["captain"] || "text-text"}`}>
+                {streamingSender}
+              </span>
+              <span className="text-[10px] text-text-muted">typing...</span>
+            </div>
+            <div className="mt-0.5 text-text whitespace-pre-wrap">{streamingContent}</div>
+          </div>
+        )}
+      </div>
+
+      {/* Input */}
+      <div className="relative border-t border-border p-3 flex gap-2">
+        {showMentions && (
+          <div className="absolute bottom-full left-3 mb-1 rounded border border-border bg-bg shadow-lg py-1 min-w-[160px]">
+            {participants
+              .filter((p) => !mentionFilter || p.role.includes(mentionFilter) || p.name.includes(mentionFilter))
+              .map((p) => (
+                <button
+                  key={p.name}
+                  onClick={() => {
+                    // Replace the @partial with @role
+                    const atIdx = input.lastIndexOf("@");
+                    const before = atIdx >= 0 ? input.slice(0, atIdx) : input;
+                    setInput(before + "@" + p.role + " ");
+                    setShowMentions(false);
+                    inputRef.current?.focus();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-surface-hover"
+                >
+                  <span className={`font-bold ${ROLE_COLORS[p.role] || "text-text"}`}>{p.role}</span>
+                  <span className="text-text-muted">{p.name}</span>
+                </button>
+              ))}
+          </div>
+        )}
+        <input
+          ref={inputRef}
+          type="text"
+          value={input}
+          onChange={(e) => {
+            const val = e.target.value;
+            setInput(val);
+            // Detect @mention trigger
+            const atIdx = val.lastIndexOf("@");
+            if (atIdx >= 0 && (atIdx === 0 || val[atIdx - 1] === " ")) {
+              const partial = val.slice(atIdx + 1).toLowerCase();
+              setMentionFilter(partial);
+              setShowMentions(true);
+            } else {
+              setShowMentions(false);
+            }
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") { setShowMentions(false); return; }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); setShowMentions(false); handleSend(); }
+          }}
+          className="flex-1 rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+          placeholder="type a message... (@ to mention)"
+          disabled={sending}
+        />
+        <button
+          onClick={handleSend}
+          disabled={sending || !input.trim()}
+          className="rounded bg-accent px-3 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+        >
+          <Send className="h-3.5 w-3.5" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -329,6 +491,7 @@ export default function ProjectDetail() {
   const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
+  const [tab, setTab] = useState<"team" | "chat">("chat");
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -440,6 +603,44 @@ export default function ProjectDetail() {
         </button>
       </div>
 
+      {/* Tabs */}
+      <div className="flex gap-4 border-b border-border">
+        <button
+          onClick={() => setTab("chat")}
+          className={`flex items-center gap-1.5 pb-2 text-xs font-medium transition-colors ${
+            tab === "chat" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"
+          }`}
+        >
+          <MessageSquare className="h-3.5 w-3.5" /> chat
+        </button>
+        <button
+          onClick={() => setTab("team")}
+          className={`flex items-center gap-1.5 pb-2 text-xs font-medium transition-colors ${
+            tab === "team" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"
+          }`}
+        >
+          <Crown className="h-3.5 w-3.5" /> team
+        </button>
+      </div>
+
+      {/* Chat tab */}
+      {tab === "chat" && (
+        <ProjectChat
+          projectId={project.id}
+          participants={[
+            ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
+            ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
+            ...agents.filter((a) => a.name !== captainInstance?.name && a.name !== captainAgent?.name)
+              .slice(0, 1) // commander (first non-captain agent — rough heuristic)
+              .map((a) => ({ name: a.name, role: "commander" })),
+            ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
+          ]}
+        />
+      )}
+
+      {/* Team tab */}
+      {tab !== "chat" && <>
+
       {/* Orchestrator */}
       <div>
         <div className="mb-2 flex items-center justify-between">
@@ -539,6 +740,8 @@ export default function ProjectDetail() {
           onClose={() => setShowAddAgent(false)}
         />
       )}
+
+      </>}
     </div>
   );
 }

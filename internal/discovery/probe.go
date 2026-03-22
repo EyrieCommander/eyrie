@@ -24,7 +24,7 @@ func probeHealth(ctx context.Context, framework, host string, port int) bool {
 	case "zeroclaw":
 		return probeHTTP(probeCtx, host, port)
 	case "openclaw":
-		return probeWebSocket(probeCtx, host, port)
+		return probeHTTP(probeCtx, host, port)
 	case "hermes":
 		return probeHermesPID()
 	default:
