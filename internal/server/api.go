@@ -102,8 +102,15 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 
-			if err := manager.Execute(ctx, ar.Agent.Framework, la); err != nil {
-				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			// Use instance-specific config if this is a provisioned instance
+			var execErr error
+			if ar.Agent.ConfigPath != "" && ar.Agent.InstanceID != "" {
+				execErr = manager.ExecuteWithConfig(ctx, ar.Agent.Framework, ar.Agent.ConfigPath, la)
+			} else {
+				execErr = manager.Execute(ctx, ar.Agent.Framework, la)
+			}
+			if execErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": execErr.Error()})
 				return
 			}
 

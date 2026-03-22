@@ -8,6 +8,8 @@
   - Agent-specific API tokens with scoped permissions
   - mTLS between agents and Eyrie
   - A dedicated Eyrie CLI tool that agents invoke instead of web_fetch
+- [ ] **Auto-pairing for provisioned instances**: Currently provisioned ZeroClaw instances disable pairing (`require_pairing = false`) for simplicity. For production, Eyrie should auto-pair: start the daemon, capture the pairing code from stdout, call `POST /pair`, and save the auth token. This keeps the security model intact while automating the handshake.
+- [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. This can lead to dozens of stale daemons accumulating. Before starting a new daemon, check for and kill any existing process on the target port.
 
 ## Functionality
 

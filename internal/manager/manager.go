@@ -45,8 +45,14 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 		}
 		return run(ctx, "zeroclaw", "service", string(action))
 	}
-	// stop: try service stop, fall back gracefully
-	return run(ctx, "zeroclaw", "service", string(action))
+	// stop: try service stop, fall back to pkill
+	err := run(ctx, "zeroclaw", "service", string(action))
+	if err != nil {
+		// Service stop failed — kill all non-instance zeroclaw daemons
+		killCmd := exec.Command("pkill", "-f", "zeroclaw daemon$")
+		_ = killCmd.Run()
+	}
+	return err
 }
 
 func executeOpenClaw(ctx context.Context, action LifecycleAction) error {
@@ -111,28 +117,42 @@ func runDetached(_ context.Context, logDir string, command string, args ...strin
 	cmd := exec.Command(command, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	var logFile *os.File
 	if logDir != "" {
 		if err := os.MkdirAll(logDir, 0o755); err == nil {
 			logPath := filepath.Join(logDir, "daemon.stdout.log")
 			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 				cmd.Stdout = f
 				cmd.Stderr = f
-				// Close the file after the process exits
-				go func() {
-					_ = cmd.Wait()
-					f.Close()
-				}()
+				logFile = f
 			}
 		}
 	}
 
 	if err := cmd.Start(); err != nil {
+		if logFile != nil {
+			logFile.Close()
+		}
 		return fmt.Errorf("%s %s: %w", command, strings.Join(args, " "), err)
 	}
-	// If we didn't set up the goroutine above (no logDir), still reap the process
-	if logDir == "" {
-		go func() { _ = cmd.Wait() }()
-	}
+
+	// Reap the process in the background and close the log file when done
+	go func() {
+		_ = cmd.Wait()
+		if logFile != nil {
+			logFile.Close()
+		}
+	}()
+	return nil
+}
+
+// killByConfigDir finds and kills all processes that were started with --config-dir pointing
+// to the given directory. This is more reliable than "zeroclaw service stop" for processes
+// started via runDetached (which don't register with launchd/systemd).
+func killByConfigDir(configDir string) error {
+	// Use pkill to find processes with the config-dir argument
+	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s", configDir))
+	_ = cmd.Run() // pkill returns non-zero if no processes found, which is fine
 	return nil
 }
 
@@ -147,12 +167,13 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 		logDir := filepath.Join(configDir, "logs")
 		switch action {
 		case ActionStart:
+			_ = killByConfigDir(configDir) // Clean up any stale process first
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		case ActionStop:
-			return run(ctx, "zeroclaw", "service", "stop", "--config-dir", configDir)
+			return killByConfigDir(configDir)
 		case ActionRestart:
-			if stopErr := run(ctx, "zeroclaw", "service", "stop", "--config-dir", configDir); stopErr != nil {
-				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw service stop (config-dir %s): %v\n", configDir, stopErr)
+			if stopErr := killByConfigDir(configDir); stopErr != nil {
+				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw stop (config-dir %s): %v\n", configDir, stopErr)
 			}
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		default:

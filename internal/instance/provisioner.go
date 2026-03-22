@@ -214,6 +214,7 @@ func (p *Provisioner) generateZeroClawConfig(inst Instance, provider, model stri
 			"port":                inst.Port,
 			"host":                "127.0.0.1",
 			"session_persistence": true,
+			"require_pairing":     false,
 		},
 		"autonomy": map[string]any{
 			"level":            "supervised",

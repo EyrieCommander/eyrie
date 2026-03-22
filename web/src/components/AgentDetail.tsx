@@ -53,12 +53,13 @@ function formatBytes(bytes: number): string {
 
 interface AgentDetailProps {
   agent: AgentInfo;
+  onRefresh?: () => Promise<void> | void;
 }
 
 const validTabs = ["overview", "chat", "logs", "config"] as const;
 type Tab = (typeof validTabs)[number];
 
-export default function AgentDetail({ agent }: AgentDetailProps) {
+export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const { tab: tabParam } = useParams<{ tab?: string }>();
 
   const tab: Tab = validTabs.includes(tabParam as Tab)
@@ -68,22 +69,40 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<AgentConfig | null>(null);
   const [configError, setConfigError] = useState<string | null>(null);
-  const [actionPending, setActionPending] = useState(false);
+  const [actionPending, setActionPending] = useState<string | false>(false);
   const [framework, setFramework] = useState<Framework | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
 
   const handleAction = useCallback(
     async (action: "start" | "stop" | "restart") => {
-      setActionPending(true);
+      setActionPending(action);
       try {
         await agentAction(agent.name, action);
+        if (onRefresh) {
+          if (action === "start" || action === "restart") {
+            // Poll until alive or timeout (daemon takes a moment to start)
+            for (let i = 0; i < 10; i++) {
+              await new Promise((r) => setTimeout(r, 1000));
+              await onRefresh();
+              // agent prop updates on next render, but we can't read it here.
+              // Break early by checking the API directly.
+              try {
+                const agents = await (await fetch("/api/agents")).json();
+                const a = agents.find((x: any) => x.name === agent.name);
+                if (a?.alive) break;
+              } catch { /* ignore */ }
+            }
+          } else {
+            await onRefresh();
+          }
+        }
       } catch (e) {
         console.error(e);
       } finally {
         setActionPending(false);
       }
     },
-    [agent.name],
+    [agent.name, onRefresh],
   );
 
   useEffect(() => {
@@ -127,9 +146,9 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
           {!agent.alive ? (
             <ActionButton
               icon={<Play className="h-3.5 w-3.5" />}
-              label="start"
+              label={actionPending === "start" ? "starting..." : "start"}
               onClick={() => handleAction("start")}
-              disabled={actionPending}
+              disabled={!!actionPending}
             />
           ) : (
             <>
@@ -140,17 +159,17 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
                 disabled={false}
               />
               <ActionButton
-                icon={<RotateCcw className="h-3.5 w-3.5" />}
-                label="restart"
+                icon={actionPending === "restart" ? <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-yellow-400/30 border-t-yellow-400" /> : <RotateCcw className="h-3.5 w-3.5" />}
+                label={actionPending === "restart" ? "restarting..." : "restart"}
                 onClick={() => handleAction("restart")}
-                disabled={actionPending}
+                disabled={!!actionPending}
               />
               <ActionButton
                 icon={<Square className="h-3.5 w-3.5" />}
-                label="stop"
+                label={actionPending === "stop" ? "stopping..." : "stop"}
                 onClick={() => handleAction("stop")}
-                disabled={actionPending}
-                variant="danger"
+                disabled={!!actionPending}
+                variant={actionPending === "stop" ? undefined : "danger"}
               />
             </>
           )}
@@ -160,7 +179,7 @@ export default function AgentDetail({ agent }: AgentDetailProps) {
       <div>
         <div className="flex items-center gap-3">
           <span
-            className={`h-3 w-3 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
+            className={`h-3 w-3 rounded-full ${actionPending ? "bg-yellow-400 animate-pulse" : agent.alive ? "bg-green" : "bg-red"}`}
           />
           <h2 className="text-xl font-bold">{agent.name}</h2>
           <span className="rounded border border-border-strong bg-surface-hover px-2 py-0.5 text-[11px] text-text-secondary">

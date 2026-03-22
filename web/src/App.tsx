@@ -31,7 +31,7 @@ export default function App() {
 
   useEffect(() => {
     refresh();
-    const interval = setInterval(refresh, 30000);
+    const interval = setInterval(refresh, 10000);
     return () => clearInterval(interval);
   }, [refresh]);
 
@@ -64,7 +64,7 @@ export default function App() {
             />
             <Route
               path="/agents/:name/:tab?"
-              element={<AgentDetailRoute agents={agents} />}
+              element={<AgentDetailRoute agents={agents} onRefresh={refresh} />}
             />
             <Route path="/install" element={<InstallPage />} />
             <Route path="/personas" element={<PersonasPage />} />
@@ -233,7 +233,7 @@ function StatCard({
   );
 }
 
-function AgentDetailRoute({ agents }: { agents: AgentInfo[] }) {
+function AgentDetailRoute({ agents, onRefresh }: { agents: AgentInfo[]; onRefresh: () => Promise<void> }) {
   const { name } = useParams<{ name: string }>();
   const agent = agents.find((a) => a.name === name);
 
@@ -247,5 +247,5 @@ function AgentDetailRoute({ agents }: { agents: AgentInfo[] }) {
     );
   }
 
-  return <AgentDetail agent={agent} />;
+  return <AgentDetail agent={agent} onRefresh={onRefresh} />;
 }
