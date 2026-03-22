@@ -879,3 +879,7 @@ func (h *HermesAdapter) Personality(ctx context.Context) (*Personality, error) {
 
 	return personality, nil
 }
+
+func (h *HermesAdapter) Capabilities() AgentCapabilities {
+	return AgentCapabilities{CommanderCapable: true}
+}

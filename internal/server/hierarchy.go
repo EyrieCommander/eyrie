@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -14,7 +15,7 @@ import (
 	"github.com/natalie/eyrie/internal/project"
 )
 
-// CommanderInfo represents the coordinator, which can be either a
+// CommanderInfo represents the commander, which can be either a
 // provisioned instance or an existing legacy agent.
 type CommanderInfo struct {
 	// If it's a provisioned instance, these come from instance.Instance
@@ -29,7 +30,7 @@ type CommanderInfo struct {
 	Legacy bool `json:"legacy"`
 }
 
-// HierarchyTree is the full tree response: coordinator → projects → agents.
+// HierarchyTree is the full tree response: commander → projects → agents.
 type HierarchyTree struct {
 	Commander *CommanderInfo `json:"commander,omitempty"`
 	Projects    []ProjectTree    `json:"projects"`
@@ -70,12 +71,12 @@ func (s *Server) handleGetHierarchy(w http.ResponseWriter, r *http.Request) {
 		instByID[inst.ID] = inst
 	}
 
-	// Find coordinator — can be an instance ID or a legacy agent name
-	var coordinator *CommanderInfo
+	// Find commander — can be an instance ID or a legacy agent name
+	var commander *CommanderInfo
 	coordRef := loadCommanderRef()
 	if coordRef.InstanceID != "" {
 		if c, ok := instByID[coordRef.InstanceID]; ok {
-			coordinator = &CommanderInfo{
+			commander = &CommanderInfo{
 				ID: c.ID, Name: c.Name, DisplayName: c.DisplayName,
 				Framework: c.Framework, Port: c.Port, Status: c.Status,
 				HierarchyRole: string(c.HierarchyRole),
@@ -94,7 +95,7 @@ func (s *Server) handleGetHierarchy(w http.ResponseWriter, r *http.Request) {
 				if displayName == "" {
 					displayName = coordRef.AgentName
 				}
-				coordinator = &CommanderInfo{
+				commander = &CommanderInfo{
 					ID: coordRef.AgentName, Name: coordRef.AgentName,
 					DisplayName: displayName,
 					Framework: ar.Agent.Framework, Port: ar.Agent.Port,
@@ -129,7 +130,7 @@ func (s *Server) handleGetHierarchy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, HierarchyTree{
-		Commander: coordinator,
+		Commander: commander,
 		Projects:    trees,
 	})
 }
@@ -180,7 +181,7 @@ func (s *Server) handleSetCommander(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	ref := coordinatorRef{InstanceID: body.InstanceID, AgentName: body.AgentName}
+	ref := commanderRef{InstanceID: body.InstanceID, AgentName: body.AgentName}
 	if err := saveCommanderRef(ref); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -220,8 +221,13 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	// Gather context for the briefing: installed frameworks, available personas
 	briefing := composeBriefing()
 
-	// Reset any existing briefing session, then create a fresh one
+	// Create a dedicated briefing session and activate it so the agent
+	// uses it for the conversation (important for CLI-based frameworks like
+	// ZeroClaw where the CLI always uses the active session).
 	const briefingSessionName = "eyrie-commander-briefing"
+	var sessionKey string
+
+	// Clean up any existing briefing session first
 	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
 		for _, s := range sessions {
 			if s.Title == briefingSessionName {
@@ -229,11 +235,21 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	session, err := agent.CreateSession(r.Context(), briefingSessionName)
+	sess, err := agent.CreateSession(r.Context(), briefingSessionName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "eyrie: failed to create briefing session on %s: %v\n", agentName, err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to create briefing session: %v", err)})
-		return
+		// Fall back to default session
+	} else {
+		sessionKey = sess.Key
+		// For ZeroClaw, activate the session so the CLI uses it
+		type sessionActivator interface {
+			ActivateSession(ctx context.Context, key string) error
+		}
+		if activator, ok := agent.(sessionActivator); ok {
+			if aErr := activator.ActivateSession(r.Context(), sessionKey); aErr != nil {
+				fmt.Fprintf(os.Stderr, "eyrie: failed to activate briefing session: %v\n", aErr)
+			}
+		}
 	}
 
 	// Stream the briefing as SSE so the frontend can show the response
@@ -243,7 +259,7 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eventCh, err := agent.StreamMessage(r.Context(), briefing, session.Key)
+	eventCh, err := agent.StreamMessage(r.Context(), briefing, sessionKey)
 	if err != nil {
 		// SSE headers already sent — emit error as SSE event
 		errData, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
@@ -253,7 +269,7 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// First, send the session key so frontend knows where to navigate
-	sessionEvent := map[string]string{"type": "session", "session_key": session.Key}
+	sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
 	data, _ := json.Marshal(sessionEvent)
 	fmt.Fprintf(w, "data: %s\n\n", data)
 	flusher.Flush()
@@ -284,64 +300,62 @@ func readWorkspaceField(configPath, filename, label string) string {
 }
 
 func composeBriefing() string {
-	return `You are now the Commander of my Eyrie — a system for managing AI agent teams.
+	return `Your user has promoted you to Commander of their Eyrie — a system for managing AI agent teams.
 
-Eyrie organizes agents into a hierarchy to help users accomplish their goals:
+As Commander, you oversee all of your user's projects. Eyrie organizes agents into a hierarchy:
 
-- **Commander** (you): oversees all projects. Creates Captains and Talons, tracks progress across everything.
-- **Captain**: leads a single project. Coordinates its Talons, tracks project progress, reports back to you.
+- **Commander** (you): oversees all projects, creates Captains and Talons, tracks progress across everything.
+- **Captain**: leads a single project, coordinates its Talons, tracks project progress, reports back to you.
 - **Talon**: a specialist agent focused on a specific role (researcher, developer, writer, etc.).
 
-You create both Captains and Talons. Captains manage their Talons day-to-day and can create new ones if needed. When creating agents, consider the user's needs and the framework size/resource usage: heavier frameworks are best for Commanders who need rich tool access; lighter frameworks are ideal for Talons that need to run efficiently in parallel.
+You create both Captains and Talons. Captains manage their Talons day-to-day but don't create new ones. When creating agents, consider your user's needs and the framework characteristics: heavier frameworks (like OpenClaw) are best for Commanders and Captains who need rich tool access; lighter frameworks (like ZeroClaw) are ideal for Talons that need to run efficiently in parallel.
 
 ## Getting started
 
 Use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1:7200. Do NOT use web_fetch — it blocks localhost. Use curl instead:
 
-1. Fetch the full API reference (save the important parts to your TOOLS.md):
+1. Fetch the full API reference:
    exec: curl -s http://127.0.0.1:7200/api/reference
 
-2. Review available frameworks:
-   exec: curl -s http://127.0.0.1:7200/api/registry/frameworks
+2. Save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
 
-3. Review available personas:
+3. Review available frameworks and personas (no need to save these — query them fresh each time):
+   exec: curl -s http://127.0.0.1:7200/api/registry/frameworks
    exec: curl -s http://127.0.0.1:7200/api/registry/personas
 
 4. Check for existing projects:
    exec: curl -s http://127.0.0.1:7200/api/projects
 
-Save what you learn to your TOOLS.md so you remember it across sessions.
-
-Then check: if existing projects were found, summarize them briefly and ask the user whether they'd like to continue working on one of those or start something new. If no projects exist, ask the user about their goals and help them figure out what to work on and what team of agents would be most useful.`
+Then check: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on and what team of agents would be most useful.`
 }
 
-// coordinatorRef stores either an instance ID or a legacy agent name.
-type coordinatorRef struct {
+// commanderRef stores either an instance ID or a legacy agent name.
+type commanderRef struct {
 	InstanceID string `json:"instance_id,omitempty"`
 	AgentName  string `json:"agent_name,omitempty"`
 }
 
-func coordinatorPath() string {
+func commanderPath() string {
 	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".eyrie", "coordinator.json")
+	return filepath.Join(home, ".eyrie", "commander.json")
 }
 
-func loadCommanderRef() coordinatorRef {
-	data, err := os.ReadFile(coordinatorPath())
+func loadCommanderRef() commanderRef {
+	data, err := os.ReadFile(commanderPath())
 	if err != nil {
-		return coordinatorRef{}
+		return commanderRef{}
 	}
-	var ref coordinatorRef
+	var ref commanderRef
 	if json.Unmarshal(data, &ref) != nil {
-		return coordinatorRef{}
+		return commanderRef{}
 	}
 	return ref
 }
 
-func saveCommanderRef(ref coordinatorRef) error {
+func saveCommanderRef(ref commanderRef) error {
 	data, err := json.MarshalIndent(ref, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(coordinatorPath(), data, 0o644)
+	return os.WriteFile(commanderPath(), data, 0o644)
 }

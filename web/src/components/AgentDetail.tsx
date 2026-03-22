@@ -604,6 +604,19 @@ interface SessionGroup {
   archived: Session[];
 }
 
+function groupLastActivity(group: SessionGroup): number {
+  let latest = 0;
+  if (group.current?.last_message) {
+    latest = Math.max(latest, new Date(group.current.last_message).getTime());
+  }
+  for (const a of group.archived) {
+    if (a.last_message) {
+      latest = Math.max(latest, new Date(a.last_message).getTime());
+    }
+  }
+  return latest;
+}
+
 function groupSessions(sessions: Session[]): SessionGroup[] {
   const map = new Map<string, SessionGroup>();
   for (const s of sessions) {
@@ -616,7 +629,8 @@ function groupSessions(sessions: Session[]): SessionGroup[] {
     if (s.readonly) group.archived.push(s);
     else group.current = s;
   }
-  return Array.from(map.values());
+  // Sort by most recent activity first
+  return Array.from(map.values()).sort((a, b) => groupLastActivity(b) - groupLastActivity(a));
 }
 
 type FlatItem =
@@ -665,6 +679,8 @@ function ChatTab({
 
   useEffect(() => {
     if (!alive) return;
+    // If briefing mode, let the briefing effect handle session loading
+    if (briefMode === "commander") return;
     fetchSessions(agentName)
       .then((resp) => {
         const all = resp.sessions ?? [];
@@ -678,24 +694,29 @@ function ChatTab({
             return;
           }
         }
-        const defaultName = sessionDisplayName(defaultSessionKey);
-        const match = gs.find((g) => g.name === defaultName);
-        setActiveGroupName(match?.name ?? gs[0]?.name ?? defaultName);
+        // Default to the most recently active tab (groups are sorted by recency)
+        setActiveGroupName(gs[0]?.name ?? sessionDisplayName(defaultSessionKey));
       })
       .catch(() => {
         setActiveGroupName(requestedSession || sessionDisplayName(defaultSessionKey));
       });
   }, [agentName, alive, defaultSessionKey, requestedSession]);
 
+  const prevGroupRef = useRef<string>("");
   const loadGroup = useCallback(
     (group: SessionGroup | undefined) => {
       if (!group) return;
+      const isSwitch = prevGroupRef.current !== "" && prevGroupRef.current !== group.name;
+      prevGroupRef.current = group.name;
       setLoading(true);
       setSessionMsgs(new Map());
       setToggledSet(new Set());
-      setPendingMsgs([]);
-      setStreamingContent("");
-      setToolCalls([]);
+      // Only clear chat state when actually switching tabs, not on refresh
+      if (isSwitch) {
+        setPendingMsgs([]);
+        setStreamingContent("");
+        setToolCalls([]);
+      }
 
       const keys = [
         ...group.archived.map((s) => s.key),
@@ -809,7 +830,10 @@ function ChatTab({
   }
 
   const totalMsgCount = flatItems.filter((it) => it.kind === "message").length;
+  // Module-level flag survives React StrictMode remounts (refs get reset)
   const briefTriggered = useRef(false);
+  const briefKey = `brief-${agentName}`;
+  if ((window as any)[briefKey]) briefTriggered.current = true;
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -821,6 +845,7 @@ function ChatTab({
   useEffect(() => {
     if (briefMode !== "commander" || briefTriggered.current || !alive) return;
     briefTriggered.current = true;
+    (window as any)[briefKey] = true;
     // Clear the query param so refreshing doesn't re-brief
     setSearchParams({}, { replace: true });
 
@@ -842,9 +867,7 @@ function ChatTab({
             const gs = groupSessions(all);
             const match = gs.find((g) => g.name === "eyrie-commander-briefing");
             if (match) setActiveGroupName(match.name);
-          }).catch((err) => {
-            console.error("Failed to fetch sessions for", agentName, err);
-          });
+          }).catch(() => {});
           break;
         case "delta":
           setStreamingContent((prev) => prev + (ev.content ?? ""));
@@ -884,15 +907,14 @@ function ChatTab({
             const gs = groupSessions(all);
             const match = gs.find((g) => g.name === "eyrie-commander-briefing");
             if (match) setActiveGroupName(match.name);
-          }).catch((err) => {
-            console.error("Failed to refresh sessions after briefing", err);
-          });
+          }).catch(() => {});
           break;
         }
         case "error":
           setChatError(ev.error || "Briefing failed");
           setSending(false);
           briefTriggered.current = false; // allow retry
+          delete (window as any)[briefKey];
           break;
       }
     });

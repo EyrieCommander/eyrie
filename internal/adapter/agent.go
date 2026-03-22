@@ -56,6 +56,13 @@ type Agent interface {
 
 	// Personality
 	Personality(ctx context.Context) (*Personality, error)
+
+	// Capabilities reports what roles this agent can fill in the hierarchy.
+	Capabilities() AgentCapabilities
+}
+
+type AgentCapabilities struct {
+	CommanderCapable bool `json:"commander_capable"` // Can serve as Commander (requires tool execution, session context, API access)
 }
 
 type ComponentHealth struct {

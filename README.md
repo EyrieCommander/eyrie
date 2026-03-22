@@ -137,6 +137,12 @@ Three presentation layers share the same adapter and discovery core:
 | Session list | Not supported | WebSocket `sessions.list` |
 | Chat history | Not supported | WebSocket `chat.history` |
 
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, coding conventions, and the PR process.
+
+If you're not sure where to start, check the [open issues](https://github.com/natalie/eyrie/issues) for anything tagged `good first issue` or `help wanted`.
+
 ## License
 
 MIT

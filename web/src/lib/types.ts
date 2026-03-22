@@ -6,6 +6,7 @@ export interface AgentInfo {
   alive: boolean;
   health?: HealthStatus;
   status?: AgentStatus;
+  commander_capable: boolean;
 }
 
 export interface HealthStatus {

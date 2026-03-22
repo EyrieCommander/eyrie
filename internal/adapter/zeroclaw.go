@@ -11,9 +11,21 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"nhooyr.io/websocket"
 )
+
+func isLogLine(line string) bool {
+	// ZeroClaw CLI log lines start with a timestamp like "2026-03-22T13:48:53..."
+	// or contain log-level markers from the tracing crate
+	if len(line) > 20 && (line[4] == '-' && line[7] == '-' && line[10] == 'T') {
+		return true
+	}
+	for _, prefix := range []string{"INFO ", "WARN ", "ERROR ", "DEBUG ", "TRACE "} {
+		if strings.Contains(line, prefix) && strings.Contains(line, "zeroclaw") {
+			return true
+		}
+	}
+	return false
+}
 
 // ZeroClawAdapter communicates with a ZeroClaw instance via its HTTP REST gateway.
 // ZeroClaw exposes: GET /health, GET /api/status, GET /api/config, GET /api/events (SSE).
@@ -473,7 +485,7 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 		sess := Session{
 			Key:      s.ID,
 			Title:    s.Name,
-			ReadOnly: !s.Active,
+			ReadOnly: false, // ZeroClaw's "active" flag means "currently focused", not "writable"
 		}
 		if s.LastMessage != nil {
 			if t, err := time.Parse(time.RFC3339Nano, *s.LastMessage); err == nil {
@@ -550,8 +562,10 @@ func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, sessionKey string, li
 	return messages, nil
 }
 
-// isDefaultSession returns true if the given sessionKey is the active session
-// in ZeroClaw's session store. Legacy untagged messages are attributed to it.
+// isDefaultSession returns true if the given sessionKey is the "main" session.
+// Legacy untagged messages (those with no session_id) are attributed to it.
+// We identify it by name rather than the active flag, since the active session
+// can change when Eyrie activates a briefing session.
 func (z *ZeroClawAdapter) isDefaultSession(ctx context.Context, sessionKey string) bool {
 	body, err := z.getRaw(ctx, "/api/sessions")
 	if err != nil {
@@ -559,15 +573,15 @@ func (z *ZeroClawAdapter) isDefaultSession(ctx context.Context, sessionKey strin
 	}
 	var resp struct {
 		Sessions []struct {
-			ID     string `json:"id"`
-			Active bool   `json:"active"`
+			ID   string `json:"id"`
+			Name string `json:"name"`
 		} `json:"sessions"`
 	}
 	if json.Unmarshal([]byte(body), &resp) != nil {
 		return true
 	}
 	for _, s := range resp.Sessions {
-		if s.Active && s.ID == sessionKey {
+		if s.Name == "main" && s.ID == sessionKey {
 			return true
 		}
 	}
@@ -620,142 +634,78 @@ func (z *ZeroClawAdapter) fetchMemoryEntriesFrom(ctx context.Context, path strin
 }
 
 func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, _ string) (*ChatMessage, error) {
-	payload, _ := json.Marshal(map[string]string{"message": message})
-	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/webhook", strings.NewReader(string(payload)))
+	// Use the CLI agent path for full history, tools, and memory support.
+	cmd := exec.CommandContext(ctx, "zeroclaw", "agent", "-m", message)
+	output, err := cmd.CombinedOutput()
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	if z.token != "" {
-		req.Header.Set("Authorization", "Bearer "+z.token)
+		return nil, fmt.Errorf("zeroclaw agent: %w: %s", err, string(output))
 	}
 
-	chatClient := &http.Client{Timeout: 120 * time.Second}
-	resp, err := chatClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("sending message: %w", err)
-	}
-	defer resp.Body.Close()
-
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("webhook returned %d: %s", resp.StatusCode, string(data))
-	}
-
-	var result struct {
-		Response string `json:"response"`
-		Error    string `json:"error"`
-	}
-	if err := json.Unmarshal(data, &result); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
-	}
-	if result.Error != "" {
-		return nil, fmt.Errorf("agent error: %s", result.Error)
+	// Filter out CLI log lines
+	var clean strings.Builder
+	for _, line := range strings.Split(string(output), "\n") {
+		stripped := ansiRe.ReplaceAllString(line, "")
+		if isLogLine(stripped) {
+			continue
+		}
+		clean.WriteString(line)
+		clean.WriteString("\n")
 	}
 
 	return &ChatMessage{
 		Timestamp: time.Now(),
 		Role:      "assistant",
-		Content:   result.Response,
+		Content:   strings.TrimSpace(clean.String()),
 	}, nil
 }
 
 func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error) {
-	wsURL := strings.Replace(z.baseURL, "http://", "ws://", 1)
-	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
-	wsURL += "/ws/chat"
-	if z.token != "" {
-		wsURL += "?token=" + z.token
-	}
+	// Use the CLI agent path for full history, tools, and memory support.
+	// The WebSocket gateway is single-turn only and doesn't load session context.
+	args := []string{"agent", "-m", message}
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	cmd := exec.CommandContext(ctx, "zeroclaw", args...)
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return nil, fmt.Errorf("connecting to ZeroClaw WS: %w", err)
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
-	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB
-
-	msg := map[string]string{
-		"type":    "message",
-		"content": message,
-	}
-	if sessionKey != "" && sessionKey != "memory" {
-		msg["session_id"] = sessionKey
-	}
-	outgoing, _ := json.Marshal(msg)
-	if err := conn.Write(ctx, websocket.MessageText, outgoing); err != nil {
-		conn.CloseNow()
-		return nil, fmt.Errorf("sending WS message: %w", err)
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting zeroclaw agent: %w", err)
 	}
 
 	ch := make(chan ChatEvent, 64)
-	go z.readStreamWS(ctx, conn, ch)
+	go func() {
+		defer close(ch)
+		scanner := bufio.NewScanner(stdout)
+		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
+		var full strings.Builder
+		for scanner.Scan() {
+			line := scanner.Text()
+			// Filter out CLI log lines (ANSI-colored timestamps, INFO/WARN/ERROR prefixes)
+			stripped := ansiRe.ReplaceAllString(line, "")
+			if isLogLine(stripped) {
+				continue
+			}
+			full.WriteString(line)
+			full.WriteString("\n")
+			select {
+			case ch <- ChatEvent{Type: "delta", Content: line + "\n"}:
+			case <-ctx.Done():
+				cmd.Process.Kill()
+				return
+			}
+		}
+		cmd.Wait()
+		content := strings.TrimSpace(full.String())
+		select {
+		case ch <- ChatEvent{Type: "done", Content: content}:
+		case <-ctx.Done():
+		}
+	}()
 	return ch, nil
 }
 
-func (z *ZeroClawAdapter) readStreamWS(ctx context.Context, conn *websocket.Conn, ch chan<- ChatEvent) {
-	defer close(ch)
-	defer conn.CloseNow()
 
-	for {
-		_, data, err := conn.Read(ctx)
-		if err != nil {
-			return
-		}
-
-		var frame map[string]any
-		if json.Unmarshal(data, &frame) != nil {
-			continue
-		}
-
-		frameType, _ := frame["type"].(string)
-		var ev ChatEvent
-
-		switch frameType {
-		case "chunk":
-			content, _ := frame["content"].(string)
-			ev = ChatEvent{Type: "delta", Content: content}
-		case "tool_call":
-			name, _ := frame["name"].(string)
-			var args map[string]any
-			if a, ok := frame["args"].(map[string]any); ok {
-				args = a
-			}
-			ev = ChatEvent{Type: "tool_start", Tool: name, Args: args}
-		case "tool_result":
-			name, _ := frame["name"].(string)
-			output, _ := frame["output"].(string)
-			ev = ChatEvent{Type: "tool_result", Tool: name, Output: output}
-		case "done":
-			content, _ := frame["full_response"].(string)
-			ev = ChatEvent{Type: "done", Content: content}
-			select {
-			case ch <- ev:
-			case <-ctx.Done():
-			}
-			return
-		case "error":
-			msg, _ := frame["message"].(string)
-			ev = ChatEvent{Type: "error", Error: msg}
-			select {
-			case ch <- ev:
-			case <-ctx.Done():
-			}
-			return
-		default:
-			continue
-		}
-
-		select {
-		case ch <- ev:
-		case <-ctx.Done():
-			return
-		}
-	}
-}
 
 func (z *ZeroClawAdapter) CreateSession(ctx context.Context, name string) (*Session, error) {
 	payload := fmt.Sprintf(`{"name":%q}`, name)
@@ -819,6 +769,27 @@ func (z *ZeroClawAdapter) DestroySession(ctx context.Context, sessionKey string)
 	return z.ResetSession(ctx, sessionKey)
 }
 
+// ActivateSession sets a session as the active one for CLI agent interactions.
+func (z *ZeroClawAdapter) ActivateSession(ctx context.Context, sessionKey string) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/api/sessions/"+sessionKey+"/activate", nil)
+	if err != nil {
+		return err
+	}
+	if z.token != "" {
+		req.Header.Set("Authorization", "Bearer "+z.token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("activating session: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("activate session returned %d: %s", resp.StatusCode, body)
+	}
+	return nil
+}
+
 func (z *ZeroClawAdapter) Personality(ctx context.Context) (*Personality, error) {
 	// ZeroClaw's personality is embedded in its config (system prompt, agent name).
 	// A future version could read dedicated personality files.
@@ -876,4 +847,8 @@ func runCLI(ctx context.Context, command string, args ...string) error {
 		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, string(output))
 	}
 	return nil
+}
+
+func (z *ZeroClawAdapter) Capabilities() AgentCapabilities {
+	return AgentCapabilities{CommanderCapable: false}
 }

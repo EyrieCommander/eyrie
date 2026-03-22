@@ -1569,3 +1569,7 @@ var (
 	_ Agent = (*OpenClawAdapter)(nil)
 	_ Agent = (*ZeroClawAdapter)(nil)
 )
+
+func (o *OpenClawAdapter) Capabilities() AgentCapabilities {
+	return AgentCapabilities{CommanderCapable: true}
+}

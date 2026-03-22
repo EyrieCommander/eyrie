@@ -190,23 +190,30 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
 
       {mode === "choose" && (
         <div className="space-y-3">
-          {runningAgents.length > 0 && (
-            <button
-              onClick={() => setMode("existing")}
-              className="flex w-full items-center gap-4 rounded border border-border bg-surface p-5 text-left transition-all hover:border-accent/50 hover:bg-surface-hover/50"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green/10">
-                <Crown className="h-5 w-5 text-green" />
+          <button
+            onClick={() => runningAgents.length > 0 && setMode("existing")}
+            disabled={runningAgents.length === 0}
+            className={`flex w-full items-center gap-4 rounded border border-border bg-surface p-5 text-left transition-all ${
+              runningAgents.length > 0 ? "hover:border-accent/50 hover:bg-surface-hover/50" : "opacity-50"
+            }`}
+          >
+            <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green/10">
+              <Crown className="h-5 w-5 text-green" />
+            </div>
+            <div>
+              <div className="text-sm font-medium text-text">use an existing agent</div>
+              <div className="mt-0.5 text-xs text-text-muted">
+                {runningAgents.length > 0
+                  ? `promote one of your ${runningAgents.length} running agent${runningAgents.length !== 1 ? "s" : ""} to commander`
+                  : "discovering running agents..."}
               </div>
-              <div>
-                <div className="text-sm font-medium text-text">use an existing agent</div>
-                <div className="mt-0.5 text-xs text-text-muted">
-                  promote one of your {runningAgents.length} running agent{runningAgents.length !== 1 ? "s" : ""} to commander
-                </div>
-              </div>
+            </div>
+            {runningAgents.length > 0 ? (
               <ChevronRight className="ml-auto h-4 w-4 text-text-muted" />
-            </button>
-          )}
+            ) : (
+              <span className="ml-auto h-3 w-3 animate-spin rounded-full border-2 border-text-muted/30 border-t-text-muted" />
+            )}
+          </button>
 
           <button
             onClick={() => setMode("new")}
@@ -236,21 +243,36 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
           </button>
           <div className="text-xs font-medium text-text-secondary">select an agent to be your commander</div>
           <div className="space-y-1.5">
-            {runningAgents.map((agent) => (
-              <button
-                key={agent.name}
-                onClick={() => handleSelectExisting(agent.name)}
-                disabled={saving}
-                className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
-              >
-                <span className="h-1.5 w-1.5 rounded-full bg-green" />
-                <div className="flex-1">
-                  <span className="font-medium text-text">{agent.name}</span>
-                  <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
-                </div>
-                <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
-              </button>
-            ))}
+            {agents.length === 0 && (
+              <div className="flex items-center gap-3 rounded border border-border bg-surface px-4 py-3 opacity-50">
+                <span className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse" />
+                <span className="text-xs text-text-muted">discovering agents...</span>
+              </div>
+            )}
+            {runningAgents.map((agent) => {
+              const canBeCommander = agent.commander_capable;
+              return (
+                <button
+                  key={agent.name}
+                  onClick={() => canBeCommander && handleSelectExisting(agent.name)}
+                  disabled={saving || !canBeCommander}
+                  className={`flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all disabled:opacity-50 ${
+                    canBeCommander ? "hover:border-green/50 hover:bg-surface-hover/50" : "cursor-not-allowed"
+                  }`}
+                >
+                  <span className="h-1.5 w-1.5 rounded-full bg-green" />
+                  <div className="flex-1">
+                    <span className="font-medium text-text">{agent.name}</span>
+                    <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
+                  </div>
+                  {canBeCommander ? (
+                    <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
+                  ) : (
+                    <span className="rounded bg-text-muted/10 px-1.5 py-0.5 text-[10px] text-text-muted">talon only</span>
+                  )}
+                </button>
+              );
+            })}
           </div>
           {saving && savingStatus && (
             <div className="flex items-center gap-2 rounded border border-purple/20 bg-purple/5 px-3 py-2 text-xs text-purple">
@@ -397,14 +419,14 @@ export default function HierarchyPage() {
         </button>
       </div>
 
-      {/* Coordinator */}
+      {/* Commander */}
       <div>
         <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
           commander
         </div>
         <InstanceCard
           instance={hierarchy.commander}
-          onClick={() => handleInstanceClick(hierarchy.commander!.name)}
+          onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
         />
       </div>
 

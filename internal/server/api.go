@@ -16,13 +16,14 @@ import (
 )
 
 type agentJSON struct {
-	Name      string                `json:"name"`
-	Framework string                `json:"framework"`
-	Host      string                `json:"host"`
-	Port      int                   `json:"port"`
-	Alive     bool                  `json:"alive"`
-	Health    *adapter.HealthStatus `json:"health,omitempty"`
-	Status    *adapter.AgentStatus  `json:"status,omitempty"`
+	Name             string                `json:"name"`
+	Framework        string                `json:"framework"`
+	Host             string                `json:"host"`
+	Port             int                   `json:"port"`
+	Alive            bool                  `json:"alive"`
+	Health           *adapter.HealthStatus `json:"health,omitempty"`
+	Status           *adapter.AgentStatus  `json:"status,omitempty"`
+	CommanderCapable bool                  `json:"commander_capable"`
 }
 
 func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
@@ -34,11 +35,12 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 
 	for _, ar := range result.Agents {
 		aj := agentJSON{
-			Name:      ar.Agent.Name,
-			Framework: ar.Agent.Framework,
-			Host:      ar.Agent.Host,
-			Port:      ar.Agent.Port,
-			Alive:     ar.Alive,
+			Name:             ar.Agent.Name,
+			Framework:        ar.Agent.Framework,
+			Host:             ar.Agent.Host,
+			Port:             ar.Agent.Port,
+			Alive:            ar.Alive,
+			CommanderCapable: discovery.NewAgent(ar.Agent).Capabilities().CommanderCapable,
 		}
 
 		if ar.Alive {
