@@ -14,6 +14,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"nhooyr.io/websocket"
@@ -28,6 +29,11 @@ type OpenClawAdapter struct {
 	port       int
 	token      string
 	configPath string
+
+	// Cached RPC connection to reduce WS open/close churn
+	cachedConn   *websocket.Conn
+	cachedConnAt time.Time
+	connMu       sync.Mutex
 }
 
 func NewOpenClawAdapter(id, name, host string, port int, token, configPath string) *OpenClawAdapter {
@@ -1388,27 +1394,61 @@ connected:
 	return conn, nil
 }
 
+// getCachedConn returns a reusable WS connection, creating one if needed.
+// Connections are reused for up to 30 seconds to batch consecutive RPC calls.
+func (o *OpenClawAdapter) getCachedConn(ctx context.Context) (*websocket.Conn, error) {
+	o.connMu.Lock()
+	defer o.connMu.Unlock()
+
+	const maxAge = 30 * time.Second
+	if o.cachedConn != nil && time.Since(o.cachedConnAt) < maxAge {
+		return o.cachedConn, nil
+	}
+	// Close stale connection
+	if o.cachedConn != nil {
+		o.cachedConn.Close(websocket.StatusNormalClosure, "")
+		o.cachedConn = nil
+	}
+	conn, err := o.dial(ctx)
+	if err != nil {
+		return nil, err
+	}
+	o.cachedConn = conn
+	o.cachedConnAt = time.Now()
+	return conn, nil
+}
+
+func (o *OpenClawAdapter) invalidateCachedConn() {
+	o.connMu.Lock()
+	defer o.connMu.Unlock()
+	if o.cachedConn != nil {
+		o.cachedConn.Close(websocket.StatusNormalClosure, "")
+		o.cachedConn = nil
+	}
+}
+
 // rpcCall sends a single RPC request and waits for the response.
 func (o *OpenClawAdapter) rpcCall(ctx context.Context, method string, params map[string]any) (map[string]any, error) {
 	callCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
-	conn, err := o.dial(callCtx)
+	conn, err := o.getCachedConn(callCtx)
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
 
 	req := newRPCRequest(method, params)
 	payload, _ := json.Marshal(req)
 
 	if err := conn.Write(callCtx, websocket.MessageText, payload); err != nil {
+		o.invalidateCachedConn()
 		return nil, fmt.Errorf("sending RPC %s: %w", method, err)
 	}
 
 	for {
 		_, data, err := conn.Read(callCtx)
 		if err != nil {
+			o.invalidateCachedConn()
 			return nil, fmt.Errorf("reading RPC response for %s: %w", method, err)
 		}
 
