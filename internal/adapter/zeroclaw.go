@@ -3,32 +3,24 @@ package adapter
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
+
+	_ "modernc.org/sqlite"
+	"nhooyr.io/websocket"
 )
 
-func isLogLine(line string) bool {
-	// ZeroClaw CLI log lines start with a timestamp like "2026-03-22T13:48:53..."
-	// or contain log-level markers from the tracing crate
-	if len(line) > 20 && (line[4] == '-' && line[7] == '-' && line[10] == 'T') {
-		return true
-	}
-	for _, prefix := range []string{"INFO ", "WARN ", "ERROR ", "DEBUG ", "TRACE "} {
-		if strings.Contains(line, prefix) && strings.Contains(line, "zeroclaw") {
-			return true
-		}
-	}
-	return false
-}
-
-// ZeroClawAdapter communicates with a ZeroClaw instance via its HTTP REST gateway.
+// ZeroClawAdapter communicates with a ZeroClaw instance via its HTTP REST gateway
+// and WebSocket chat endpoint.
 // ZeroClaw exposes: GET /health, GET /api/status, GET /api/config, GET /api/events (SSE).
 type ZeroClawAdapter struct {
 	id         string
@@ -459,43 +451,70 @@ func (z *ZeroClawAdapter) parseActivityEvent(eventType, data string) *ActivityEv
 	return ev
 }
 
-// Sessions returns a single synthetic session representing the ZeroClaw
-// conversation memory (ZeroClaw stores flat memories, not discrete sessions).
+// Sessions returns sessions from ZeroClaw's session backend (0.5.7+).
+// Upstream uses UUID-based session_ids with a gw_ prefix internally.
+// Falls back to a synthetic "memory" session for older versions.
 func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 	body, err := z.getRaw(ctx, "/api/sessions")
 	if err != nil {
 		return z.sessionsLegacy(ctx)
 	}
 
-	var resp struct {
+	// Try upstream 0.5.7+ format first: {"sessions": [{"session_id": "...", ...}]}
+	var upstreamResp struct {
+		Sessions []struct {
+			SessionID    string `json:"session_id"`
+			CreatedAt    string `json:"created_at"`
+			LastActivity string `json:"last_activity"`
+			MessageCount int    `json:"message_count"`
+		} `json:"sessions"`
+		Message string `json:"message,omitempty"` // "Session persistence is disabled"
+	}
+	if json.Unmarshal([]byte(body), &upstreamResp) == nil && upstreamResp.Message == "" {
+		sessions := make([]Session, 0, len(upstreamResp.Sessions))
+		for _, s := range upstreamResp.Sessions {
+			sess := Session{
+				Key:   s.SessionID,
+				Title: s.SessionID, // Upstream sessions are UUID-based, no names
+			}
+			if t, err := time.Parse(time.RFC3339Nano, s.LastActivity); err == nil {
+				sess.LastMsg = &t
+			} else if t, err := time.Parse(time.RFC3339, s.LastActivity); err == nil {
+				sess.LastMsg = &t
+			}
+			sessions = append(sessions, sess)
+		}
+		return sessions, nil
+	}
+
+	// Try older named-session format: {"sessions": [{"id": "...", "name": "...", ...}]}
+	var legacyResp struct {
 		Sessions []struct {
 			ID           string  `json:"id"`
 			Name         string  `json:"name"`
 			CreatedAt    string  `json:"created_at"`
-			Active       bool    `json:"active"`
 			MessageCount int     `json:"message_count"`
 			LastMessage  *string `json:"last_message"`
 		} `json:"sessions"`
 	}
-	if json.Unmarshal([]byte(body), &resp) != nil {
-		return z.sessionsLegacy(ctx)
+	if json.Unmarshal([]byte(body), &legacyResp) == nil && len(legacyResp.Sessions) > 0 {
+		sessions := make([]Session, 0, len(legacyResp.Sessions))
+		for _, s := range legacyResp.Sessions {
+			sess := Session{
+				Key:   s.ID,
+				Title: s.Name,
+			}
+			if s.LastMessage != nil {
+				if t, err := time.Parse(time.RFC3339Nano, *s.LastMessage); err == nil {
+					sess.LastMsg = &t
+				}
+			}
+			sessions = append(sessions, sess)
+		}
+		return sessions, nil
 	}
 
-	sessions := make([]Session, 0, len(resp.Sessions))
-	for _, s := range resp.Sessions {
-		sess := Session{
-			Key:      s.ID,
-			Title:    s.Name,
-			ReadOnly: false, // ZeroClaw's "active" flag means "currently focused", not "writable"
-		}
-		if s.LastMessage != nil {
-			if t, err := time.Parse(time.RFC3339Nano, *s.LastMessage); err == nil {
-				sess.LastMsg = &t
-			}
-		}
-		sessions = append(sessions, sess)
-	}
-	return sessions, nil
+	return z.sessionsLegacy(ctx)
 }
 
 func (z *ZeroClawAdapter) sessionsLegacy(ctx context.Context) ([]Session, error) {
@@ -519,37 +538,100 @@ func (z *ZeroClawAdapter) sessionsLegacy(ctx context.Context) ([]Session, error)
 	}}, nil
 }
 
-// ChatHistory fetches conversation memories from the ZeroClaw REST API.
-// Always fetches all conversation entries, then filters client-side.
-// The default (active) session claims legacy messages that have no session_id tag.
+// ChatHistory returns conversation messages for a session. It reads from
+// ZeroClaw's SQLite session database as the source of truth, then enriches
+// messages with tool call parts from Eyrie's JSONL store where available.
+// Falls back to the legacy memory API if neither is available.
 func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
+	// Read base messages from SQLite
+	dbPath := z.sessionDBPath()
+	if dbPath == "" {
+		return z.chatHistoryLegacy(ctx, sessionKey, limit)
+	}
+
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	if err != nil {
+		return z.chatHistoryLegacy(ctx, sessionKey, limit)
+	}
+	defer db.Close()
+
+	gwKey := "gw_" + sessionKey
+
+	query := `SELECT role, content, created_at FROM sessions WHERE session_key = ? ORDER BY id ASC`
+	args := []any{gwKey}
+	if limit > 0 {
+		query = `SELECT role, content, created_at FROM (
+			SELECT role, content, created_at, id FROM sessions WHERE session_key = ? ORDER BY id DESC LIMIT ?
+		) ORDER BY id ASC`
+		args = append(args, limit)
+	}
+
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return z.chatHistoryLegacy(ctx, sessionKey, limit)
+	}
+	defer rows.Close()
+
+	var messages []ChatMessage
+	for rows.Next() {
+		var role, content, createdAt string
+		if err := rows.Scan(&role, &content, &createdAt); err != nil {
+			continue
+		}
+		ts, _ := time.Parse(time.RFC3339Nano, createdAt)
+		messages = append(messages, ChatMessage{
+			Timestamp: ts,
+			Role:      role,
+			Content:   content,
+		})
+	}
+
+	// Overlay enriched data (tool call parts) from JSONL store
+	enriched := z.loadEnrichedMessages(sessionKey)
+	if len(enriched) > 0 {
+		// Build a lookup: match enriched messages to SQLite messages by
+		// role + content prefix (content is the same, enriched has Parts)
+		for i := range messages {
+			for _, e := range enriched {
+				if e.Role == messages[i].Role && e.Content == messages[i].Content && len(e.Parts) > 0 {
+					messages[i].Parts = e.Parts
+					break
+				}
+			}
+		}
+	}
+
+	return messages, nil
+}
+
+// sessionDBPath returns the path to ZeroClaw's session SQLite database,
+// derived from the config path: {configDir}/workspace/sessions/sessions.db
+func (z *ZeroClawAdapter) sessionDBPath() string {
+	if z.configPath == "" {
+		return ""
+	}
+	dir := filepath.Dir(z.configPath)
+	dbPath := filepath.Join(dir, "workspace", "sessions", "sessions.db")
+	return dbPath
+}
+
+// chatHistoryLegacy falls back to the memory API for pre-0.5.7 ZeroClaw.
+func (z *ZeroClawAdapter) chatHistoryLegacy(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
 	all, err := z.fetchMemoryEntriesFrom(ctx, "/api/memory?category=conversation")
 	if err != nil {
 		return nil, err
 	}
 
-	isDefault := z.isDefaultSession(ctx, sessionKey)
-	var entries []zcMemoryEntry
-	for _, e := range all {
-		if sessionKey == "" || sessionKey == "memory" {
-			entries = append(entries, e)
-		} else if e.SessionID == sessionKey {
-			entries = append(entries, e)
-		} else if e.SessionID == "" && isDefault {
-			entries = append(entries, e)
-		}
-	}
-
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Timestamp.Before(entries[j].Timestamp)
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Timestamp.Before(all[j].Timestamp)
 	})
 
-	if limit > 0 && len(entries) > limit {
-		entries = entries[len(entries)-limit:]
+	if limit > 0 && len(all) > limit {
+		all = all[len(all)-limit:]
 	}
 
-	messages := make([]ChatMessage, 0, len(entries))
-	for _, e := range entries {
+	messages := make([]ChatMessage, 0, len(all))
+	for _, e := range all {
 		role := "user"
 		if strings.HasPrefix(e.Key, "assistant_resp") {
 			role = "assistant"
@@ -561,35 +643,6 @@ func (z *ZeroClawAdapter) ChatHistory(ctx context.Context, sessionKey string, li
 		})
 	}
 	return messages, nil
-}
-
-// isDefaultSession returns true if the given sessionKey is the "main" session.
-// Legacy untagged messages (those with no session_id) are attributed to it.
-// We identify it by name rather than the active flag, since the active session
-// can change when Eyrie activates a briefing session.
-func (z *ZeroClawAdapter) isDefaultSession(ctx context.Context, sessionKey string) bool {
-	body, err := z.getRaw(ctx, "/api/sessions")
-	if err != nil {
-		return true
-	}
-	var resp struct {
-		Sessions []struct {
-			ID   string `json:"id"`
-			Name string `json:"name"`
-		} `json:"sessions"`
-	}
-	if json.Unmarshal([]byte(body), &resp) != nil {
-		return true
-	}
-	for _, s := range resp.Sessions {
-		if s.Name == "main" && s.ID == sessionKey {
-			return true
-		}
-	}
-	if len(resp.Sessions) == 0 {
-		return true
-	}
-	return false
 }
 
 type zcMemoryEntry struct {
@@ -634,122 +687,255 @@ func (z *ZeroClawAdapter) fetchMemoryEntriesFrom(ctx context.Context, path strin
 	return filtered, nil
 }
 
-func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, _ string) (*ChatMessage, error) {
-	// Use the CLI agent path for full history, tools, and memory support.
-	cmd := exec.CommandContext(ctx, "zeroclaw", "agent", "-m", message)
-	output, err := cmd.CombinedOutput()
+func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, sessionKey string) (*ChatMessage, error) {
+	ch, err := z.StreamMessage(ctx, message, sessionKey)
 	if err != nil {
-		return nil, fmt.Errorf("zeroclaw agent: %w: %s", err, string(output))
+		return nil, err
 	}
-
-	// Filter out CLI log lines
-	var clean strings.Builder
-	for _, line := range strings.Split(string(output), "\n") {
-		stripped := ansiRe.ReplaceAllString(line, "")
-		if isLogLine(stripped) {
-			continue
+	var content string
+	for ev := range ch {
+		if ev.Type == "done" {
+			content = ev.Content
+		} else if ev.Type == "error" {
+			return nil, fmt.Errorf("agent error: %s", ev.Error)
 		}
-		clean.WriteString(line)
-		clean.WriteString("\n")
 	}
-
 	return &ChatMessage{
 		Timestamp: time.Now(),
 		Role:      "assistant",
-		Content:   strings.TrimSpace(clean.String()),
+		Content:   content,
 	}, nil
 }
 
+// StreamMessage connects to ZeroClaw's WebSocket chat endpoint with session
+// support. The upstream WS handler (0.5.7+) creates a persistent Agent per
+// connection, hydrates it from the session backend, and runs multi-turn chat
+// with full tool execution.
 func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error) {
-	// Activate the target session if specified, so the CLI uses it
+	wsURL := strings.Replace(z.baseURL, "http://", "ws://", 1)
+	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
+	wsURL += "/ws/chat"
+
+	// Build query params: token + session_id
+	params := []string{}
+	if z.token != "" {
+		params = append(params, "token="+z.token)
+	}
 	if sessionKey != "" {
-		if err := z.ActivateSession(ctx, sessionKey); err != nil {
-			// Non-fatal: log and continue with whatever session is active
-			fmt.Fprintf(os.Stderr, "eyrie: failed to activate session %s: %v\n", sessionKey, err)
-		}
+		params = append(params, "session_id="+sessionKey)
+	}
+	if len(params) > 0 {
+		wsURL += "?" + strings.Join(params, "&")
 	}
 
-	// Use the CLI agent path for full history, tools, and memory support.
-	args := []string{"agent", "-m", message}
-
-	cmd := exec.CommandContext(ctx, "zeroclaw", args...)
-	stdout, err := cmd.StdoutPipe()
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
-		return nil, fmt.Errorf("creating stdout pipe: %w", err)
+		return nil, fmt.Errorf("connecting to ZeroClaw WS: %w", err)
 	}
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("starting zeroclaw agent: %w", err)
-	}
+	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB
 
 	ch := make(chan ChatEvent, 64)
 	go func() {
 		defer close(ch)
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 0, 256*1024), 1024*1024)
-		var full strings.Builder
-		for scanner.Scan() {
-			line := scanner.Text()
-			stripped := ansiRe.ReplaceAllString(line, "")
-			if isLogLine(stripped) {
-				continue
-			}
-			full.WriteString(line)
-			full.WriteString("\n")
-			select {
-			case ch <- ChatEvent{Type: "delta", Content: line + "\n"}:
-			case <-ctx.Done():
-				cmd.Process.Kill()
+		defer conn.CloseNow()
+
+		// Phase 1: Wait for session_start frame (upstream sends this immediately)
+		sessionStarted := false
+		for !sessionStarted {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
 				return
 			}
-		}
-		if err := cmd.Wait(); err != nil {
-			select {
-			case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("zeroclaw agent exited: %v", err)}:
-			case <-ctx.Done():
+			var frame map[string]any
+			if json.Unmarshal(data, &frame) != nil {
+				continue
 			}
+			if frame["type"] == "session_start" {
+				sessionStarted = true
+			}
+		}
+
+		// Phase 2: Send the user message
+		msg := map[string]string{
+			"type":    "message",
+			"content": message,
+		}
+		outgoing, _ := json.Marshal(msg)
+		if err := conn.Write(ctx, websocket.MessageText, outgoing); err != nil {
 			return
 		}
-		content := strings.TrimSpace(full.String())
-		select {
-		case ch <- ChatEvent{Type: "done", Content: content}:
-		case <-ctx.Done():
+
+		// Save the user message to Eyrie's enriched store
+		userMsg := ChatMessage{
+			Timestamp: time.Now(),
+			Role:      "user",
+			Content:   message,
+		}
+		z.saveEnrichedMessage(sessionKey, &userMsg)
+
+		// Phase 3: Read response frames, collecting tool calls
+		var toolCalls []ChatPart
+		for {
+			_, data, err := conn.Read(ctx)
+			if err != nil {
+				return
+			}
+
+			var frame map[string]any
+			if json.Unmarshal(data, &frame) != nil {
+				continue
+			}
+
+			frameType, _ := frame["type"].(string)
+			var ev ChatEvent
+
+			switch frameType {
+			case "chunk":
+				content, _ := frame["content"].(string)
+				ev = ChatEvent{Type: "delta", Content: content}
+			case "tool_call":
+				name, _ := frame["name"].(string)
+				var args map[string]any
+				if a, ok := frame["args"].(map[string]any); ok {
+					args = a
+				}
+				toolID, _ := frame["id"].(string)
+				ev = ChatEvent{Type: "tool_start", Tool: name, ToolID: toolID, Args: args}
+				// Collect the tool call part
+				toolCalls = append(toolCalls, ChatPart{
+					Type: "tool_call",
+					ID:   toolID,
+					Name: name,
+					Args: args,
+				})
+			case "tool_result":
+				name, _ := frame["name"].(string)
+				output, _ := frame["output"].(string)
+				toolID, _ := frame["id"].(string)
+				ev = ChatEvent{Type: "tool_result", Tool: name, ToolID: toolID, Output: output}
+				// Update the matching tool call part with output
+				for i := range toolCalls {
+					if toolCalls[i].ID == toolID || (toolID == "" && toolCalls[i].Name == name) {
+						toolCalls[i].Output = output
+						break
+					}
+				}
+			case "done":
+				content, _ := frame["full_response"].(string)
+				ev = ChatEvent{Type: "done", Content: content}
+				// Save enriched assistant message with tool call parts
+				assistantMsg := ChatMessage{
+					Timestamp: time.Now(),
+					Role:      "assistant",
+					Content:   content,
+				}
+				if len(toolCalls) > 0 {
+					// Build parts: tool calls first, then final text
+					parts := make([]ChatPart, 0, len(toolCalls)+1)
+					parts = append(parts, toolCalls...)
+					if content != "" {
+						parts = append(parts, ChatPart{Type: "text", Text: content})
+					}
+					assistantMsg.Parts = parts
+				}
+				z.saveEnrichedMessage(sessionKey, &assistantMsg)
+				select {
+				case ch <- ev:
+				case <-ctx.Done():
+				}
+				return
+			case "error":
+				msg, _ := frame["message"].(string)
+				ev = ChatEvent{Type: "error", Error: msg}
+				select {
+				case ch <- ev:
+				case <-ctx.Done():
+				}
+				return
+			default:
+				continue
+			}
+
+			select {
+			case ch <- ev:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}()
 	return ch, nil
 }
 
+// saveEnrichedMessage appends a ChatMessage (with tool call parts) to Eyrie's
+// session JSONL store at ~/.eyrie/sessions/{agentName}/{sessionKey}.jsonl.
+func (z *ZeroClawAdapter) saveEnrichedMessage(sessionKey string, msg *ChatMessage) {
+	if sessionKey == "" {
+		return
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return
+	}
+	dir := filepath.Join(home, ".eyrie", "sessions", z.name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return
+	}
+	path := filepath.Join(dir, sessionKey+".jsonl")
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return
+	}
+	f.Write(data)
+	f.Write([]byte("\n"))
+}
+
+// loadEnrichedMessages reads all enriched messages for a session from Eyrie's
+// JSONL store. Returns nil if the file doesn't exist.
+func (z *ZeroClawAdapter) loadEnrichedMessages(sessionKey string) []ChatMessage {
+	if sessionKey == "" {
+		return nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil
+	}
+	path := filepath.Join(home, ".eyrie", "sessions", z.name, sessionKey+".jsonl")
+	f, err := os.Open(path)
+	if err != nil {
+		return nil
+	}
+	defer f.Close()
+
+	var messages []ChatMessage
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 1024*1024), 4*1024*1024) // 4MB max line
+	for scanner.Scan() {
+		var msg ChatMessage
+		if json.Unmarshal(scanner.Bytes(), &msg) == nil {
+			messages = append(messages, msg)
+		}
+	}
+	return messages
+}
 
 
-func (z *ZeroClawAdapter) CreateSession(ctx context.Context, name string) (*Session, error) {
-	payload := fmt.Sprintf(`{"name":%q}`, name)
-	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/api/sessions", strings.NewReader(payload))
-	if err != nil {
-		return nil, err
+
+// CreateSession generates a new session ID for ZeroClaw. Upstream creates
+// sessions implicitly on first WS message, so we just return the ID.
+// The session will be created in the backend when StreamMessage connects.
+func (z *ZeroClawAdapter) CreateSession(_ context.Context, name string) (*Session, error) {
+	// Use the name as the session ID if it looks safe, otherwise generate a UUID.
+	// This makes session IDs human-readable in the ZeroClaw backend.
+	sessionID := name
+	if sessionID == "" {
+		sessionID = fmt.Sprintf("%d", time.Now().UnixMilli())
 	}
-	req.Header.Set("Content-Type", "application/json")
-	if z.token != "" {
-		req.Header.Set("Authorization", "Bearer "+z.token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("creating session: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("create session returned %d: %s", resp.StatusCode, body)
-	}
-	var result struct {
-		Session struct {
-			ID        string `json:"id"`
-			Name      string `json:"name"`
-			CreatedAt string `json:"created_at"`
-		} `json:"session"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decoding create session response: %w", err)
-	}
-	return &Session{Key: result.Session.ID, Title: result.Session.Name}, nil
+	return &Session{Key: sessionID, Title: name}, nil
 }
 
 func (z *ZeroClawAdapter) ResetSession(ctx context.Context, sessionKey string) error {
@@ -782,24 +968,10 @@ func (z *ZeroClawAdapter) DestroySession(ctx context.Context, sessionKey string)
 	return z.ResetSession(ctx, sessionKey)
 }
 
-// ActivateSession sets a session as the active one for CLI agent interactions.
-func (z *ZeroClawAdapter) ActivateSession(ctx context.Context, sessionKey string) error {
-	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/api/sessions/"+sessionKey+"/activate", nil)
-	if err != nil {
-		return err
-	}
-	if z.token != "" {
-		req.Header.Set("Authorization", "Bearer "+z.token)
-	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("activating session: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("activate session returned %d: %s", resp.StatusCode, body)
-	}
+// ActivateSession is a no-op for upstream ZeroClaw (0.5.7+) since sessions are
+// selected per-connection via the ?session_id query param on the WS endpoint.
+// Kept for interface compatibility with the hierarchy briefing handler.
+func (z *ZeroClawAdapter) ActivateSession(_ context.Context, _ string) error {
 	return nil
 }
 
@@ -863,5 +1035,5 @@ func runCLI(ctx context.Context, command string, args ...string) error {
 }
 
 func (z *ZeroClawAdapter) Capabilities() AgentCapabilities {
-	return AgentCapabilities{CommanderCapable: false}
+	return AgentCapabilities{CommanderCapable: true} // Requires ZeroClaw 0.5.7+ with session_persistence enabled
 }
