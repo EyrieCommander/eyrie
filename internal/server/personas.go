@@ -3,6 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 
 	"github.com/natalie/eyrie/internal/persona"
@@ -24,7 +25,10 @@ func (s *Server) handleListPersonas(w http.ResponseWriter, r *http.Request) {
 	// Merge installed status from store
 	store, err := persona.NewStore()
 	if err == nil {
-		installed, _ := store.List()
+		installed, listErr := store.List()
+		if listErr != nil {
+			slog.Warn("failed to list installed personas", "error", listErr)
+		}
 		installedMap := make(map[string]persona.Persona, len(installed))
 		for _, p := range installed {
 			installedMap[p.ID] = p
@@ -55,7 +59,7 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	// Fall back to catalog
 	catalog, err := persona.NewCatalogClient("")
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "persona not found"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to initialize persona catalog: " + err.Error()})
 		return
 	}
 	reg, err := catalog.Fetch(r.Context())
@@ -167,5 +171,5 @@ func (s *Server) handleDeletePersona(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListCategories(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, persona.Categories)
+	writeJSON(w, http.StatusOK, persona.Categories())
 }

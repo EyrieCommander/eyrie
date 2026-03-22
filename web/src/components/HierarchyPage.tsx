@@ -111,7 +111,7 @@ function ProjectSection({ tree, onInstanceClick, onProjectClick }: { tree: Proje
 
 // --- Coordinator Setup ---
 
-function CommanderSetup({ onCreated: _ }: { onCreated: () => void }) {
+function CommanderSetup({ onCreated }: { onCreated: () => void }) {
   const navigate = useNavigate();
   const [mode, setMode] = useState<"choose" | "existing" | "new">("choose");
   const [agents, setAgents] = useState<AgentInfo[]>([]);
@@ -138,6 +138,7 @@ function CommanderSetup({ onCreated: _ }: { onCreated: () => void }) {
     setError("");
     try {
       await setCommander({ agentName });
+      onCreated();
       // Navigate to chat with briefing flag — the chat page will send the briefing
       navigate(`/agents/${agentName}/chat?brief=commander`);
     } catch (e) {
@@ -159,6 +160,7 @@ function CommanderSetup({ onCreated: _ }: { onCreated: () => void }) {
         auto_start: true,
       });
       await setCommander({ instanceId: inst.id });
+      onCreated();
       navigate(`/agents/${inst.name}/chat?brief=commander`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create commander");
@@ -234,21 +236,19 @@ function CommanderSetup({ onCreated: _ }: { onCreated: () => void }) {
           </button>
           <div className="text-xs font-medium text-text-secondary">select an agent to be your commander</div>
           <div className="space-y-1.5">
-            {agents.map((agent) => (
+            {runningAgents.map((agent) => (
               <button
                 key={agent.name}
                 onClick={() => handleSelectExisting(agent.name)}
                 disabled={saving}
                 className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
               >
-                <span className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`} />
+                <span className="h-1.5 w-1.5 rounded-full bg-green" />
                 <div className="flex-1">
                   <span className="font-medium text-text">{agent.name}</span>
                   <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
                 </div>
-                {agent.alive && (
-                  <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
-                )}
+                <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
               </button>
             ))}
           </div>

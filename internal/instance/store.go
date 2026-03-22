@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 )
 
 // Store manages instance metadata on disk at ~/.eyrie/instances/.
-// Each instance gets its own subdirectory; the registry.json file
-// stores the metadata index for fast listing.
+// Each instance gets its own subdirectory containing an instance.json
+// file with the metadata.
 type Store struct {
 	dir string // ~/.eyrie/instances/
 	mu  sync.RWMutex
@@ -65,6 +66,9 @@ func (s *Store) listLocked() ([]Instance, error) {
 
 // Get returns a single instance by ID.
 func (s *Store) Get(id string) (*Instance, error) {
+	if err := validateID(id); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -84,6 +88,9 @@ func (s *Store) Get(id string) (*Instance, error) {
 
 // Save writes instance metadata to disk.
 func (s *Store) Save(inst Instance) error {
+	if err := validateID(inst.ID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -100,6 +107,9 @@ func (s *Store) Save(inst Instance) error {
 
 // UpdateStatus updates just the status field for an instance.
 func (s *Store) UpdateStatus(id, status string) error {
+	if err := validateID(id); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -121,6 +131,9 @@ func (s *Store) UpdateStatus(id, status string) error {
 
 // Delete removes an instance directory and all its contents.
 func (s *Store) Delete(id string) error {
+	if err := validateID(id); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -130,11 +143,17 @@ func (s *Store) Delete(id string) error {
 
 // Dir returns the base directory for a given instance ID.
 func (s *Store) Dir(id string) string {
+	if validateID(id) != nil {
+		return ""
+	}
 	return filepath.Join(s.dir, id)
 }
 
 // NameExists checks whether an instance with the given name already exists.
 func (s *Store) NameExists(name string) (bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
 	instances, err := s.listLocked()
 	if err != nil {
 		return false, err
@@ -145,6 +164,20 @@ func (s *Store) NameExists(name string) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// validIDRe matches safe instance IDs: alphanumerics, hyphens, and underscores only.
+var validIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// validateID ensures the id is safe for use in file paths (no traversal).
+func validateID(id string) error {
+	if id == "" {
+		return fmt.Errorf("instance ID is empty")
+	}
+	if !validIDRe.MatchString(id) {
+		return fmt.Errorf("invalid instance ID %q: must contain only alphanumerics, hyphens, and underscores", id)
+	}
+	return nil
 }
 
 func (s *Store) metaPath(id string) string {

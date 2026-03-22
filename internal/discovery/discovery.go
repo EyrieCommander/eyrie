@@ -111,6 +111,10 @@ func scanInstances() []adapter.DiscoveredAgent {
 			slog.Debug("failed to scan instance config", "instance", inst.Name, "error", err)
 			continue
 		}
+		if agent == nil {
+			slog.Debug("scan returned nil agent for instance", "instance", inst.Name)
+			continue
+		}
 
 		// Override the hardcoded name with the instance name
 		agent.Name = inst.Name

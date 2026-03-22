@@ -108,12 +108,17 @@ func run(ctx context.Context, command string, args ...string) error {
 func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
 	switch framework {
 	case "zeroclaw":
-		if action == ActionStop {
-			// For instances, we need to find the PID and kill it
-			return run(ctx, "zeroclaw", "service", string(action))
+		switch action {
+		case ActionStart:
+			return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+		case ActionStop:
+			return run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
+		case ActionRestart:
+			_ = run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
+			return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+		default:
+			return fmt.Errorf("unknown action %q for zeroclaw", action)
 		}
-		// Start with explicit config
-		return run(ctx, "zeroclaw", "daemon", "--config", configPath)
 	case "openclaw":
 		return run(ctx, "openclaw", "gateway", string(action), "--config", configPath)
 	case "hermes":

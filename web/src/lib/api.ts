@@ -209,7 +209,7 @@ export async function resetSession(
   }
 }
 
-export async function purgeSession(
+export async function deleteSession(
   name: string,
   sessionKey: string,
 ): Promise<void> {
@@ -219,7 +219,7 @@ export async function purgeSession(
   );
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to purge session: ${res.statusText}`);
+    throw new Error(body.error || `Failed to delete session: ${res.statusText}`);
   }
 }
 
@@ -611,7 +611,19 @@ export function streamCommanderBriefing(
             } catch { /* skip */ }
           }
         }
-        if (done) break;
+        if (done) {
+          // Process any trailing data left in buffer
+          if (buffer.startsWith("data: ")) {
+            try {
+              const ev = JSON.parse(buffer.slice(6));
+              if (ev.type === "session" && ev.session_key) {
+                resolveSession!(ev.session_key);
+              }
+              onEvent(ev);
+            } catch { /* skip */ }
+          }
+          break;
+        }
       }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
@@ -631,6 +643,6 @@ export async function setCommander(opts: { instanceId?: string; agentName?: stri
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to set coordinator: ${res.statusText}`);
+    throw new Error(body.error || `Failed to set commander: ${res.statusText}`);
   }
 }

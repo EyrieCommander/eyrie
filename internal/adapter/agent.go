@@ -48,11 +48,11 @@ type Agent interface {
 	// CreateSession creates a new conversation session with the given name. Returns the new session.
 	CreateSession(ctx context.Context, name string) (*Session, error)
 
-	// DeleteSession resets/removes a conversation session (archives the transcript).
-	DeleteSession(ctx context.Context, sessionKey string) error
+	// ResetSession archives the current transcript and starts a fresh session.
+	ResetSession(ctx context.Context, sessionKey string) error
 
-	// PurgeSession permanently removes an archived session file from disk.
-	PurgeSession(ctx context.Context, sessionKey string) error
+	// DeleteSession permanently removes a session from disk.
+	DeleteSession(ctx context.Context, sessionKey string) error
 
 	// Personality
 	Personality(ctx context.Context) (*Personality, error)

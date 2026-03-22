@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/natalie/eyrie/internal/adapter"
 	"github.com/natalie/eyrie/internal/config"
 	"github.com/natalie/eyrie/internal/discovery"
 	"github.com/natalie/eyrie/internal/instance"
@@ -54,8 +53,16 @@ func (s *Server) handleGetHierarchy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	instances, _ := instStore.List()
-	projects, _ := projStore.List()
+	instances, err := instStore.List()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list instances: " + err.Error()})
+		return
+	}
+	projects, err := projStore.List()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to list projects: " + err.Error()})
+		return
+	}
 
 	// Build instance lookup
 	instByID := make(map[string]instance.Instance, len(instances))
@@ -141,6 +148,10 @@ func (s *Server) handleSetCommander(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance_id or agent_name is required"})
 		return
 	}
+	if body.InstanceID != "" && body.AgentName != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "provide either instance_id or agent_name, not both"})
+		return
+	}
 
 	// Verify the target exists
 	if body.InstanceID != "" {
@@ -209,10 +220,20 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	// Gather context for the briefing: installed frameworks, available personas
 	briefing := composeBriefing()
 
-	// Create a dedicated session for the briefing
-	session, err := agent.CreateSession(r.Context(), "eyrie-commander-briefing")
+	// Reset any existing briefing session, then create a fresh one
+	const briefingSessionName = "eyrie-commander-briefing"
+	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
+		for _, s := range sessions {
+			if s.Title == briefingSessionName {
+				_ = agent.ResetSession(r.Context(), s.Key)
+			}
+		}
+	}
+	session, err := agent.CreateSession(r.Context(), briefingSessionName)
 	if err != nil {
-		session = &adapter.Session{Key: ""}
+		fmt.Fprintf(os.Stderr, "eyrie: failed to create briefing session on %s: %v\n", agentName, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to create briefing session: %v", err)})
+		return
 	}
 
 	// Stream the briefing as SSE so the frontend can show the response
@@ -224,7 +245,10 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 
 	eventCh, err := agent.StreamMessage(r.Context(), briefing, session.Key)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		// SSE headers already sent — emit error as SSE event
+		errData, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
+		fmt.Fprintf(w, "data: %s\n\n", errData)
+		flusher.Flush()
 		return
 	}
 

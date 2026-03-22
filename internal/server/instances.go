@@ -2,8 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/natalie/eyrie/internal/instance"
 	"github.com/natalie/eyrie/internal/manager"
@@ -36,7 +38,11 @@ func (s *Server) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, inst)
@@ -59,8 +65,18 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	var pers *persona.Persona
 	if req.PersonaID != "" {
 		ps, err := persona.NewStore()
-		if err == nil {
-			pers, _ = ps.Get(req.PersonaID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open persona store: " + err.Error()})
+			return
+		}
+		pers, err = ps.Get(req.PersonaID)
+		if err != nil {
+			if errors.Is(err, persona.ErrNotFound) {
+				writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to load persona: " + err.Error()})
+			}
+			return
 		}
 	}
 
@@ -80,7 +96,9 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		} else {
 			inst.Status = "running"
 		}
-		store.UpdateStatus(inst.ID, inst.Status)
+		if err := store.UpdateStatus(inst.ID, inst.Status); err != nil {
+			slog.Warn("failed to persist auto-start status", "instance", inst.Name, "error", err)
+		}
 	}
 
 	writeJSON(w, http.StatusCreated, inst)
@@ -95,7 +113,11 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 
@@ -184,7 +206,9 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	if action == "stop" {
 		newStatus = "stopped"
 	}
-	store.UpdateStatus(id, newStatus)
+	if err := store.UpdateStatus(id, newStatus); err != nil {
+		slog.Warn("failed to persist instance status", "instance", id, "status", newStatus, "error", err)
+	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": newStatus})
 }

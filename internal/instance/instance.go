@@ -6,11 +6,20 @@ import "time"
 type HierarchyRole string
 
 const (
-	RoleCommander HierarchyRole = "commander"
-	RoleCaptain   HierarchyRole = "captain"
-	RoleTalon     HierarchyRole = "talon"
-	RoleStandalone   HierarchyRole = "" // not part of a hierarchy
+	RoleCommander  HierarchyRole = "commander"
+	RoleCaptain    HierarchyRole = "captain"
+	RoleTalon      HierarchyRole = "talon"
+	RoleStandalone HierarchyRole = "" // not part of a hierarchy
 )
+
+// Valid returns true if r is one of the recognised hierarchy roles (including empty/standalone).
+func (r HierarchyRole) Valid() bool {
+	switch r {
+	case RoleCommander, RoleCaptain, RoleTalon, RoleStandalone:
+		return true
+	}
+	return false
+}
 
 // Instance is a named, configured agent deployment running on a specific framework.
 // Each instance has its own config file, workspace directory, gateway port, and process.
@@ -26,7 +35,12 @@ type Instance struct {
 	Port          int           `json:"port"`
 	ConfigPath    string        `json:"config_path"`
 	WorkspacePath string        `json:"workspace_path"`
-	Status        string        `json:"status"` // "created", "running", "stopped", "error"
+	AuthToken     string        `json:"auth_token,omitempty"` // gateway auth token (OpenClaw)
+	Status        string        `json:"status"`               // "created", "running", "stopped", "error"
+	PID           int           `json:"pid,omitempty"`
+	LastSeen      time.Time     `json:"last_seen,omitempty"`
+	HealthStatus  string        `json:"health_status,omitempty"` // "healthy", "unhealthy", "unknown"
+	RestartCount  int           `json:"restart_count,omitempty"`
 	CreatedAt     time.Time     `json:"created_at"`
 	CreatedBy     string        `json:"created_by"` // "user" or parent instance ID
 }

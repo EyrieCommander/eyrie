@@ -665,7 +665,7 @@ func (m *Model) deleteCurrentSession() tea.Cmd {
 	return func() tea.Msg {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
-		err := agent.DeleteSession(ctx, key)
+		err := agent.ResetSession(ctx, key)
 		return sessionDeletedMsg{key: key, err: err}
 	}
 }

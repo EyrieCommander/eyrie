@@ -73,7 +73,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	}
 
 	// Generate ID and paths
-	id := uuid.New().String()[:8]
+	id := uuid.New().String()
 	instDir := filepath.Join(p.store.dir, id)
 	workspaceDir := filepath.Join(instDir, "workspace")
 
@@ -140,13 +140,17 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	}
 
 	// Generate framework config
-	if err := p.generateConfig(inst, pers, req.Model); err != nil {
+	if err := p.generateConfig(&inst, pers, req.Model); err != nil {
 		os.RemoveAll(instDir)
 		return nil, fmt.Errorf("failed to generate config: %w", err)
 	}
 
 	// Save instance metadata
-	data, _ := marshalIndent(inst)
+	data, err := marshalIndent(inst)
+	if err != nil {
+		os.RemoveAll(instDir)
+		return nil, fmt.Errorf("failed to marshal instance metadata: %w", err)
+	}
 	if err := os.WriteFile(filepath.Join(instDir, "instance.json"), data, 0o644); err != nil {
 		os.RemoveAll(instDir)
 		return nil, fmt.Errorf("failed to save instance metadata: %w", err)
@@ -177,7 +181,7 @@ func (p *Provisioner) renderIdentityFiles(workspaceDir string, role HierarchyRol
 	return nil
 }
 
-func (p *Provisioner) generateConfig(inst Instance, pers *persona.Persona, modelOverride string) error {
+func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, modelOverride string) error {
 	model := "anthropic/claude-sonnet-4-20250514"
 	provider := "openrouter"
 	if pers != nil && pers.PreferredModel != "" {
@@ -189,11 +193,11 @@ func (p *Provisioner) generateConfig(inst Instance, pers *persona.Persona, model
 
 	switch inst.Framework {
 	case "zeroclaw":
-		return p.generateZeroClawConfig(inst, provider, model)
+		return p.generateZeroClawConfig(*inst, provider, model)
 	case "openclaw":
 		return p.generateOpenClawConfig(inst, provider, model)
 	case "hermes":
-		return p.generateHermesConfig(inst, provider, model)
+		return p.generateHermesConfig(*inst, provider, model)
 	default:
 		return fmt.Errorf("unsupported framework %q", inst.Framework)
 	}
@@ -220,7 +224,9 @@ func (p *Provisioner) generateZeroClawConfig(inst Instance, provider, model stri
 	return config.WriteTOMLAtomic(inst.ConfigPath, cfg)
 }
 
-func (p *Provisioner) generateOpenClawConfig(inst Instance, provider, model string) error {
+func (p *Provisioner) generateOpenClawConfig(inst *Instance, provider, model string) error {
+	token := uuid.New().String()
+	inst.AuthToken = token
 	cfg := map[string]any{
 		"provider": provider,
 		"model":    model,
@@ -228,7 +234,7 @@ func (p *Provisioner) generateOpenClawConfig(inst Instance, provider, model stri
 			"port": inst.Port,
 			"bind": "loopback",
 			"auth": map[string]any{
-				"token": uuid.New().String(),
+				"token": token,
 			},
 		},
 	}

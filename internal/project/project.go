@@ -2,6 +2,7 @@ package project
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +11,9 @@ import (
 
 	"github.com/google/uuid"
 )
+
+// ErrNotFound is returned when a project does not exist.
+var ErrNotFound = errors.New("project not found")
 
 // Project is the top-level organizational entity for a group of agents
 // working toward a shared goal.
@@ -89,7 +93,7 @@ func (s *Store) Get(id string) (*Project, error) {
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("project %q not found", id)
+			return nil, fmt.Errorf("project %q: %w", id, ErrNotFound)
 		}
 		return nil, err
 	}
@@ -105,7 +109,7 @@ func (s *Store) Create(req CreateRequest) (*Project, error) {
 	defer s.mu.Unlock()
 
 	p := Project{
-		ID:          uuid.New().String()[:8],
+		ID:          uuid.New().String(),
 		Name:        req.Name,
 		Description: req.Description,
 		Goal:        req.Goal,
@@ -157,6 +161,9 @@ func (s *Store) AddAgent(projectID, instanceID string) error {
 
 	data, err := os.ReadFile(s.path(projectID))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("project %q: %w", projectID, ErrNotFound)
+		}
 		return err
 	}
 	var p Project
@@ -187,6 +194,9 @@ func (s *Store) RemoveAgent(projectID, instanceID string) error {
 
 	data, err := os.ReadFile(s.path(projectID))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("project %q: %w", projectID, ErrNotFound)
+		}
 		return err
 	}
 	var p Project

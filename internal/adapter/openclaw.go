@@ -1135,7 +1135,7 @@ func (o *OpenClawAdapter) CreateSession(_ context.Context, name string) (*Sessio
 	return &Session{Key: key, Title: name}, nil
 }
 
-func (o *OpenClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
+func (o *OpenClawAdapter) ResetSession(ctx context.Context, sessionKey string) error {
 	_, err := o.rpcCall(ctx, "sessions.reset", map[string]any{"key": sessionKey})
 	if err != nil {
 		return fmt.Errorf("sessions.reset: %w", err)
@@ -1148,7 +1148,7 @@ func (o *OpenClawAdapter) DeleteSession(ctx context.Context, sessionKey string) 
 func (o *OpenClawAdapter) DestroySession(_ context.Context, sessionKey string) error {
 	// For archived sessions, just delete the file
 	if strings.HasPrefix(sessionKey, "archive:") {
-		return o.PurgeSession(context.Background(), sessionKey)
+		return o.DeleteSession(context.Background(), sessionKey)
 	}
 
 	agentsDir := o.agentsDir()
@@ -1186,24 +1186,35 @@ func (o *OpenClawAdapter) DestroySession(_ context.Context, sessionKey string) e
 			SessionID   string `json:"sessionId"`
 			SessionFile string `json:"sessionFile"`
 		}
-		json.Unmarshal(raw, &meta)
+		if err := json.Unmarshal(raw, &meta); err != nil {
+			return fmt.Errorf("parsing session metadata for %q: %w", sessionKey, err)
+		}
 
 		// Delete the JSONL transcript file
 		if meta.SessionFile != "" {
-			os.Remove(meta.SessionFile)
+			if err := os.Remove(meta.SessionFile); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing transcript %s: %w", meta.SessionFile, err)
+			}
 		} else if meta.SessionID != "" {
 			jsonlPath := filepath.Join(agentsDir, entry.Name(), "sessions", meta.SessionID+".jsonl")
-			os.Remove(jsonlPath)
+			if err := os.Remove(jsonlPath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing transcript %s: %w", jsonlPath, err)
+			}
 		}
 
-		// Remove from sessions.json
+		// Remove from sessions.json (atomic write via temp file + rename)
 		delete(store, sessionKey)
 		updated, err := json.MarshalIndent(store, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling sessions.json: %w", err)
 		}
-		if err := os.WriteFile(sessJSONPath, updated, 0o644); err != nil {
-			return fmt.Errorf("writing sessions.json: %w", err)
+		tmpPath := sessJSONPath + ".tmp"
+		if err := os.WriteFile(tmpPath, updated, 0o600); err != nil {
+			return fmt.Errorf("writing sessions.json tmp: %w", err)
+		}
+		if err := os.Rename(tmpPath, sessJSONPath); err != nil {
+			os.Remove(tmpPath)
+			return fmt.Errorf("renaming sessions.json: %w", err)
 		}
 		return nil
 	}
@@ -1211,7 +1222,7 @@ func (o *OpenClawAdapter) DestroySession(_ context.Context, sessionKey string) e
 	return fmt.Errorf("session %q not found", sessionKey)
 }
 
-func (o *OpenClawAdapter) PurgeSession(_ context.Context, sessionKey string) error {
+func (o *OpenClawAdapter) DeleteSession(_ context.Context, sessionKey string) error {
 	if !strings.HasPrefix(sessionKey, "archive:") {
 		return fmt.Errorf("only archived sessions can be purged")
 	}

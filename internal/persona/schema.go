@@ -41,12 +41,19 @@ type Persona struct {
 	AgentAlive  bool   `json:"agent_alive,omitempty"`  // Whether the agent is currently running
 }
 
-// Category groupings for the UI
-var Categories = []CategoryInfo{
+// categories holds the immutable category definitions.
+var categories = []CategoryInfo{
 	{ID: "personal", Name: "personal", Description: "agents that help with your daily life"},
 	{ID: "business", Name: "business", Description: "agents that help run your work"},
 	{ID: "creative", Name: "creative", Description: "agents for creative and artistic work"},
 	{ID: "technical", Name: "technical", Description: "agents for engineering and research"},
+}
+
+// Categories returns a copy of the category definitions so callers cannot mutate package state.
+func Categories() []CategoryInfo {
+	out := make([]CategoryInfo, len(categories))
+	copy(out, categories)
+	return out
 }
 
 type CategoryInfo struct {

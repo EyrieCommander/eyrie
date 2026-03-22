@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 
 	"github.com/natalie/eyrie/internal/project"
@@ -33,7 +34,11 @@ func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, p)
@@ -72,7 +77,11 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 
@@ -118,7 +127,11 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := store.Delete(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
@@ -140,7 +153,11 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := store.AddAgent(projectID, body.InstanceID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
@@ -156,7 +173,11 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if err := store.RemoveAgent(projectID, instanceID); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})

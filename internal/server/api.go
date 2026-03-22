@@ -180,6 +180,26 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, sess)
 }
 
+func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	sessionKey := r.PathValue("session")
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+
+	agent, err := s.findAgent(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	if err := agent.ResetSession(ctx, sessionKey); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	sessionKey := r.PathValue("session")
@@ -193,26 +213,6 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := agent.DeleteSession(ctx, sessionKey); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
-}
-
-func (s *Server) handlePurgeSession(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("name")
-	sessionKey := r.PathValue("session")
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-
-	agent, err := s.findAgent(ctx, name)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	if err := agent.PurgeSession(ctx, sessionKey); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

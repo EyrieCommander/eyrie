@@ -43,6 +43,8 @@ persona-template/
 
 When instantiated, template variables ({{.Name}}, {{.Role}}, {{.ProjectName}}, etc.) are rendered and written to the new agent's workspace. The agent then develops its own memories from there.
 
+**Persona Validation**: When creating/updating personas, each IdentityTemplate value is pre-parsed as a Go `text/template` to catch syntax errors early. HierarchyRole is validated against the allowed set (`commander`, `captain`, `talon`). Template render errors during instantiation are surfaced with descriptive messages including the template filename and variable context.
+
 ### Persona Schema Extension
 
 ```go
@@ -56,7 +58,7 @@ type Persona struct {
     MemorySeeds []string `json:"memory_seeds,omitempty"`
 
     // NEW: Hierarchy role this persona is designed for
-    HierarchyRole string `json:"hierarchy_role,omitempty"` // "coordinator", "orchestrator", "implementer"
+    HierarchyRole string `json:"hierarchy_role,omitempty"` // "commander", "captain", "talon"
 }
 ```
 
@@ -68,20 +70,25 @@ Each instance is a **real agent deployment** with its own config, workspace, por
 
 ```go
 type Instance struct {
-    ID            string    `json:"id"`
-    Name          string    `json:"name"`           // "strategist-sarah"
-    DisplayName   string    `json:"display_name"`   // "Strategist Sarah"
-    Framework     string    `json:"framework"`      // "zeroclaw", "openclaw", "hermes"
-    PersonaID     string    `json:"persona_id"`
-    HierarchyRole string    `json:"hierarchy_role"` // "coordinator", "orchestrator", "implementer"
-    ProjectID     string    `json:"project_id,omitempty"`
-    ParentID      string    `json:"parent_id,omitempty"` // Instance that created this one
-    Port          int       `json:"port"`           // Auto-allocated 43000-43999
-    ConfigPath    string    `json:"config_path"`
-    WorkspacePath string    `json:"workspace_path"`
-    Status        string    `json:"status"`         // "created", "running", "stopped", "error"
-    CreatedAt     time.Time `json:"created_at"`
-    CreatedBy     string    `json:"created_by"`     // "user" or parent instance ID
+    ID            string        `json:"id"`              // Full UUID
+    Name          string        `json:"name"`            // slug: "strategist-sarah"
+    DisplayName   string        `json:"display_name"`    // "Strategist Sarah"
+    Framework     string        `json:"framework"`       // "zeroclaw", "openclaw", "hermes"
+    PersonaID     string        `json:"persona_id,omitempty"`
+    HierarchyRole HierarchyRole `json:"hierarchy_role,omitempty"` // "commander", "captain", "talon"
+    ProjectID     string        `json:"project_id,omitempty"`
+    ParentID      string        `json:"parent_id,omitempty"` // Instance that created this one
+    Port          int           `json:"port"`            // Auto-allocated 43000-43999
+    ConfigPath    string        `json:"config_path"`
+    WorkspacePath string        `json:"workspace_path"`
+    AuthToken     string        `json:"auth_token,omitempty"` // Gateway auth token (OpenClaw)
+    Status        string        `json:"status"`          // "created", "running", "stopped", "error"
+    PID           int           `json:"pid,omitempty"`
+    LastSeen      time.Time     `json:"last_seen,omitempty"`
+    HealthStatus  string        `json:"health_status,omitempty"` // "healthy", "unhealthy", "unknown"
+    RestartCount  int           `json:"restart_count,omitempty"`
+    CreatedAt     time.Time     `json:"created_at"`
+    CreatedBy     string        `json:"created_by"`      // "user" or parent instance ID
 }
 ```
 
@@ -233,12 +240,18 @@ Modify `internal/discovery/discovery.go` to scan instances:
 ```go
 // After scanning cfg.Discovery.ConfigPaths, also scan instances
 instanceDir := filepath.Join(home, ".eyrie", "instances")
-entries, _ := os.ReadDir(instanceDir)
+entries, err := os.ReadDir(instanceDir)
+if err != nil {
+    // Log and continue — instance dir may not exist yet
+    slog.Debug("cannot read instances dir", "error", err)
+}
 for _, entry := range entries {
     if !entry.IsDir() { continue }
     // Read instance.json to get framework, name, port
-    // Scan the framework config file within the instance dir
-    // Use instance.Name instead of hardcoded "zeroclaw"/"openclaw"
+    // Validate and parse each instance.json (skip corrupt files with warning)
+    // Verify framework config file exists inside instance dir
+    // Scan the framework config using instance.Name (not hardcoded framework names)
+    // Check returned agent pointer is non-nil before dereferencing
 }
 ```
 
@@ -247,14 +260,22 @@ for _, entry := range entries {
 Add to `internal/manager/manager.go`:
 
 ```go
-func ExecuteInstance(ctx context.Context, inst Instance, action LifecycleAction) error {
-    switch inst.Framework {
+func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
+    switch framework {
     case "zeroclaw":
-        // zeroclaw daemon --config <inst.ConfigPath>
+        switch action {
+        case ActionStart:  return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+        case ActionStop:   return run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
+        case ActionRestart:
+            _ = run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
+            return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+        default: return fmt.Errorf("unknown action %q for zeroclaw", action)
+        }
     case "openclaw":
-        // openclaw gateway start --config <inst.ConfigPath>
+        return run(ctx, "openclaw", "gateway", string(action), "--config", configPath)
     case "hermes":
-        // hermes gateway start --config <inst.ConfigPath>
+        return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+    default: return fmt.Errorf("unknown framework %q", framework)
     }
 }
 ```
@@ -276,6 +297,11 @@ func ExecuteInstance(ctx context.Context, inst Instance, action LifecycleAction)
 | `web/src/components/ProjectListPage.tsx` | Project grid |
 | `web/src/components/ProjectDetail.tsx` | Project detail |
 | `web/src/components/CoordinatorSetup.tsx` | Setup wizard |
+| `internal/instance/instance_test.go` | Unit tests for instance store and provisioner |
+| `internal/instance/provisioner_test.go` | Provisioner integration tests |
+| `internal/server/middleware.go` | Rate limiting and logging middleware |
+| `internal/server/auth.go` | Token-based authentication middleware (future) |
+| `cmd/eyrie/instance.go` | CLI commands for instance management |
 
 ## Files to Modify
 
@@ -290,6 +316,39 @@ func ExecuteInstance(ctx context.Context, inst Instance, action LifecycleAction)
 | `web/src/lib/api.ts` | Add instance + project API functions |
 | `web/src/components/Sidebar.tsx` | Add hierarchy + projects nav |
 | `web/src/App.tsx` | Add new routes |
+
+## Implementation Notes
+
+### ID Generation
+Instance and Project IDs use full UUIDs (not truncated) to ensure collision resistance.
+
+### Storage Safety
+- All JSON writes in the store modules should use atomic write patterns (write to .tmp then rename)
+- File permissions for session data use 0o600 to avoid world-readable secrets
+- Instance IDs are validated against a safe character set before use in file paths (path traversal prevention)
+- Persona IDs are sanitized via filepath.Base before constructing paths
+- Consider migrating to SQLite/BoltDB for transactional guarantees if corruption becomes an issue
+
+### Coordinator Uniqueness
+- The `handleSetCommander` endpoint rejects requests that provide both `instance_id` and `agent_name`
+- Only one coordinator is stored in `coordinator.json` at a time; setting a new one replaces the old
+- The hierarchy page shows a setup wizard when no coordinator is configured
+
+### API Security (Future Work)
+- Per-instance API tokens (token issuance at instance creation) — OpenClaw instances already get auth tokens
+- Scope-based authorization (coordinator → captain → talon chain)
+- Audit logging for API calls
+- Rate limiting middleware
+- Token validation middleware for agent-to-agent API calls
+
+### Error Handling
+- Server handlers distinguish 404 (not found) from 500 (internal error) for store operations
+- Discovery errors are logged but non-fatal (degraded discovery is better than no discovery)
+- Instance provisioning errors clean up partially-created directories
+
+### Process Monitoring (Instance struct fields)
+- PID, LastSeen, HealthStatus, RestartCount are tracked on Instance
+- These fields use `omitempty` to avoid breaking existing instance.json files
 
 ## Backward Compatibility
 

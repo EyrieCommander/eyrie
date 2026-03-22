@@ -16,8 +16,8 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
     setError("");
     try {
       await createProject({ name, description, goal: goal || undefined });
-      onCreated();
       onClose();
+      onCreated();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create project");
     } finally {
@@ -95,14 +95,17 @@ export default function ProjectListPage() {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [error, setError] = useState("");
 
   const refresh = useCallback(async () => {
     try {
       setLoading(true);
+      setError("");
       const data = await fetchProjects();
       setProjects(data);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to fetch projects:", err);
+      setError(err instanceof Error ? err.message : "Failed to load projects");
     } finally {
       setLoading(false);
     }
@@ -142,9 +145,13 @@ export default function ProjectListPage() {
         </div>
       </div>
 
+      {error && (
+        <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{error}</div>
+      )}
+
       {loading && projects.length === 0 ? (
         <div className="py-12 text-center text-xs text-text-muted">loading projects...</div>
-      ) : projects.length === 0 ? (
+      ) : !error && projects.length === 0 ? (
         <div className="rounded border border-border bg-surface p-8 text-center space-y-3">
           <Briefcase className="mx-auto h-8 w-8 text-text-muted" />
           <p className="text-xs text-text-muted">

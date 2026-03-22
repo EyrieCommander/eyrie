@@ -800,8 +800,8 @@ func (h *HermesAdapter) CreateSession(ctx context.Context, name string) (*Sessio
 	return nil, fmt.Errorf("create session not supported for Hermes (sessions are created automatically when chatting; use 'hermes chat' to start a new session)")
 }
 
-// DeleteSession deletes a conversation session
-func (h *HermesAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
+// ResetSession deletes a conversation session
+func (h *HermesAdapter) ResetSession(ctx context.Context, sessionKey string) error {
 	cmd := exec.CommandContext(ctx, h.binaryPath, "sessions", "delete", sessionKey)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -810,10 +810,10 @@ func (h *HermesAdapter) DeleteSession(ctx context.Context, sessionKey string) er
 	return nil
 }
 
-// PurgeSession permanently removes a session
-func (h *HermesAdapter) PurgeSession(ctx context.Context, sessionKey string) error {
+// DeleteSession permanently removes a session
+func (h *HermesAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
 	// Hermes doesn't distinguish between delete and purge - both permanently remove
-	return h.DeleteSession(ctx, sessionKey)
+	return h.ResetSession(ctx, sessionKey)
 }
 
 // Personality returns the agent's personality

@@ -2,11 +2,15 @@ package persona
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 )
+
+// ErrNotFound is returned when a persona does not exist on disk.
+var ErrNotFound = errors.New("persona not found")
 
 // Store manages persona definitions on disk at ~/.eyrie/personas/.
 type Store struct {
@@ -60,13 +64,16 @@ func (s *Store) List() ([]Persona, error) {
 
 // Get returns a single persona by ID.
 func (s *Store) Get(id string) (*Persona, error) {
+	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
+		return nil, fmt.Errorf("invalid persona ID %q", id)
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
 	data, err := os.ReadFile(s.path(id))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("persona %q not found", id)
+			return nil, fmt.Errorf("persona %q: %w", id, ErrNotFound)
 		}
 		return nil, err
 	}
@@ -80,6 +87,9 @@ func (s *Store) Get(id string) (*Persona, error) {
 
 // Save writes a persona to disk.
 func (s *Store) Save(p Persona) error {
+	if p.ID == "" || p.ID != filepath.Base(p.ID) || p.ID == "." || p.ID == ".." {
+		return fmt.Errorf("invalid persona ID %q", p.ID)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -92,6 +102,9 @@ func (s *Store) Save(p Persona) error {
 
 // Delete removes a persona from disk.
 func (s *Store) Delete(id string) error {
+	if id == "" || id != filepath.Base(id) || id == "." || id == ".." {
+		return fmt.Errorf("invalid persona ID %q", id)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -102,5 +115,6 @@ func (s *Store) Delete(id string) error {
 }
 
 func (s *Store) path(id string) string {
-	return filepath.Join(s.dir, id+".json")
+	safe := filepath.Base(id)
+	return filepath.Join(s.dir, safe+".json")
 }

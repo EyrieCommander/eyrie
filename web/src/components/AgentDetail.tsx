@@ -32,7 +32,7 @@ import {
   streamMessage,
   createSession,
   resetSession,
-  purgeSession,
+  deleteSession,
   destroySession,
   hideSession,
   updateAgentConfig,
@@ -590,7 +590,12 @@ function sessionBaseName(s: Session): string {
     const paren = s.title.indexOf(" (");
     return paren > 0 ? s.title.slice(0, paren) : s.title;
   }
-  return sessionDisplayName(s.key);
+  // For OpenClaw-style keys like "agent:main:foo", use the last segment
+  if (s.key.includes(":")) {
+    return sessionDisplayName(s.key);
+  }
+  // For ZeroClaw-style keys (UUIDs), use the title for grouping
+  return s.title || s.key;
 }
 
 interface SessionGroup {
@@ -781,8 +786,17 @@ function ChatTab({
         });
       }
       const msgs = sessionMsgs.get(activeGroup.current.key) ?? [];
+      let prevTime: number | null = null;
       for (const msg of msgs) {
         if (msg.role === "assistant" && isNoReply(msg.content)) continue;
+        // Insert time-gap spacer when messages are 4+ hours apart
+        const msgTime = msg.timestamp ? new Date(msg.timestamp).getTime() : 0;
+        if (prevTime !== null && msgTime > 0 && msgTime - prevTime > 4 * 60 * 60 * 1000) {
+          const d = new Date(msgTime);
+          const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" });
+          flatItems.push({ kind: "spacer", label });
+        }
+        if (msgTime > 0) prevTime = msgTime;
         flatItems.push({ kind: "message", msg, isCurrent: true, flatIdx });
         flatIdx++;
       }
@@ -810,22 +824,27 @@ function ChatTab({
     // Clear the query param so refreshing doesn't re-brief
     setSearchParams({}, { replace: true });
 
+    let mounted = true;
     setSending(true);
     setStreamingContent("");
     setToolCalls([]);
 
-    streamCommanderBriefing((ev) => {
+    const { controller } = streamCommanderBriefing((ev) => {
+      if (!mounted) return;
       const evType = ev.type as string;
       switch (evType) {
         case "session":
           // Session created — refresh sessions so the tab appears
           fetchSessions(agentName).then((resp) => {
+            if (!mounted) return;
             const all = resp.sessions ?? [];
             setSessions(all);
             const gs = groupSessions(all);
             const match = gs.find((g) => g.name === "eyrie-commander-briefing");
             if (match) setActiveGroupName(match.name);
-          }).catch(() => {});
+          }).catch((err) => {
+            console.error("Failed to fetch sessions for", agentName, err);
+          });
           break;
         case "delta":
           setStreamingContent((prev) => prev + (ev.content ?? ""));
@@ -859,20 +878,29 @@ function ChatTab({
           setSending(false);
           // Refresh to load the persisted messages
           fetchSessions(agentName).then((resp) => {
+            if (!mounted) return;
             const all = resp.sessions ?? [];
             setSessions(all);
             const gs = groupSessions(all);
             const match = gs.find((g) => g.name === "eyrie-commander-briefing");
             if (match) setActiveGroupName(match.name);
-          }).catch(() => {});
+          }).catch((err) => {
+            console.error("Failed to refresh sessions after briefing", err);
+          });
           break;
         }
         case "error":
           setChatError(ev.error || "Briefing failed");
           setSending(false);
+          briefTriggered.current = false; // allow retry
           break;
       }
     });
+
+    return () => {
+      mounted = false;
+      controller.abort();
+    };
   }, [briefMode, alive, agentName]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
@@ -980,11 +1008,11 @@ function ChatTab({
     [agentName, refreshSessions],
   );
 
-  const handlePurgeSession = useCallback(
+  const handleDeleteSession = useCallback(
     async (archiveKey: string) => {
       if (!window.confirm("Permanently delete this archived session? This cannot be undone.")) return;
       try {
-        await purgeSession(agentName, archiveKey);
+        await deleteSession(agentName, archiveKey);
         refreshSessions();
       } catch (e) {
         console.error(e);
@@ -1005,17 +1033,28 @@ function ChatTab({
     [agentName, refreshSessions],
   );
 
-  const handleDeleteGroup = useCallback(
-    async (group: SessionGroup) => {
-      if (!window.confirm(`Delete session "${group.name}" and all its history?`)) return;
+  const safeDestroySession = useCallback(
+    async (key: string) => {
       try {
-        // Destroy archived sessions
+        await destroySession(agentName, key);
+      } catch {
+        // Fallback: delete (reset/archive) then purge
+        try { await resetSession(agentName, key); } catch { /* ignore */ }
+        try { await deleteSession(agentName, key); } catch { /* ignore */ }
+      }
+    },
+    [agentName],
+  );
+
+  const handleDestroySession = useCallback(
+    async (group: SessionGroup) => {
+      if (!window.confirm(`Destroy session "${group.name}" and all its history?`)) return;
+      try {
         for (const s of group.archived) {
-          await destroySession(agentName, s.key);
+          await safeDestroySession(s.key);
         }
-        // Destroy active session
         if (group.current) {
-          await destroySession(agentName, group.current.key);
+          await safeDestroySession(group.current.key);
         }
         setActiveGroupName("main");
         refreshSessions();
@@ -1079,7 +1118,7 @@ function ChatTab({
                 )}
               </button>
               <button
-                onClick={(e) => { e.stopPropagation(); handleDeleteGroup(g); }}
+                onClick={(e) => { e.stopPropagation(); handleDestroySession(g); }}
                 className="absolute -top-1.5 -right-1.5 hidden group-hover/tab:flex h-4 w-4 items-center justify-center rounded-full bg-surface border border-border text-text-muted transition-colors hover:text-red hover:border-red/50"
                 title={`Delete session "${g.name}"`}
               >
@@ -1187,7 +1226,7 @@ function ChatTab({
                   {item.archiveKey && (
                     <span className="hidden group-hover/spacer:inline-flex items-center gap-1">
                       <button
-                        onClick={() => handlePurgeSession(item.archiveKey!)}
+                        onClick={() => handleDeleteSession(item.archiveKey!)}
                         className="rounded px-1 py-0.5 text-[9px] text-text-muted hover:text-red hover:bg-red/10 transition-colors"
                         title="Delete permanently"
                       >

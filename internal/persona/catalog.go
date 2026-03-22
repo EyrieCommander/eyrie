@@ -11,10 +11,20 @@ import (
 	"time"
 )
 
-const (
-	// DefaultCatalogURL points to the local persona catalog for now
-	DefaultCatalogURL = "file:///Users/natalie/Development/eyrie/personas.example.json"
-)
+
+// DefaultCatalogURL returns the persona catalog URL, checking the
+// EYRIE_CATALOG_URL environment variable first and falling back to
+// a bundled file path relative to the user's home directory.
+func DefaultCatalogURL() string {
+	if env := os.Getenv("EYRIE_CATALOG_URL"); env != "" {
+		return env
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "file://./personas.example.json"
+	}
+	return "file://" + filepath.Join(home, ".eyrie", "cache", "personas.json")
+}
 
 // CatalogClient fetches the curated persona catalog.
 type CatalogClient struct {
@@ -25,7 +35,7 @@ type CatalogClient struct {
 
 func NewCatalogClient(catalogURL string) (*CatalogClient, error) {
 	if catalogURL == "" {
-		catalogURL = DefaultCatalogURL
+		catalogURL = DefaultCatalogURL()
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -50,9 +60,15 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 	}
 
 	if strings.HasPrefix(c.catalogURL, "file://") {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("read local persona catalog: %w", err)
+		}
 		path := strings.TrimPrefix(c.catalogURL, "file://")
 		data, err := os.ReadFile(path)
 		if err != nil {
+			return nil, fmt.Errorf("read local persona catalog: %w", err)
+		}
+		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("read local persona catalog: %w", err)
 		}
 		var reg PersonaRegistry

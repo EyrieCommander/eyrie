@@ -777,17 +777,19 @@ func (z *ZeroClawAdapter) CreateSession(ctx context.Context, name string) (*Sess
 		return nil, fmt.Errorf("create session returned %d: %s", resp.StatusCode, body)
 	}
 	var result struct {
-		ID        string `json:"id"`
-		Name      string `json:"name"`
-		CreatedAt string `json:"created_at"`
+		Session struct {
+			ID        string `json:"id"`
+			Name      string `json:"name"`
+			CreatedAt string `json:"created_at"`
+		} `json:"session"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decoding create session response: %w", err)
 	}
-	return &Session{Key: result.ID, Title: result.Name}, nil
+	return &Session{Key: result.Session.ID, Title: result.Session.Name}, nil
 }
 
-func (z *ZeroClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
+func (z *ZeroClawAdapter) ResetSession(ctx context.Context, sessionKey string) error {
 	if sessionKey == "" || sessionKey == "memory" {
 		return fmt.Errorf("cannot delete the legacy memory session")
 	}
@@ -809,8 +811,12 @@ func (z *ZeroClawAdapter) DeleteSession(ctx context.Context, sessionKey string) 
 	return nil
 }
 
-func (z *ZeroClawAdapter) PurgeSession(ctx context.Context, sessionKey string) error {
-	return z.DeleteSession(ctx, sessionKey)
+func (z *ZeroClawAdapter) DeleteSession(ctx context.Context, sessionKey string) error {
+	return z.ResetSession(ctx, sessionKey)
+}
+
+func (z *ZeroClawAdapter) DestroySession(ctx context.Context, sessionKey string) error {
+	return z.ResetSession(ctx, sessionKey)
 }
 
 func (z *ZeroClawAdapter) Personality(ctx context.Context) (*Personality, error) {

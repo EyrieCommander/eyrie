@@ -114,11 +114,16 @@ function AddAgentDialog({
   }, []);
 
   const handleCreate = async () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
+      setError("Name cannot be blank");
+      return;
+    }
     setCreating(true);
     setError("");
     try {
       await createInstance({
-        name,
+        name: trimmedName,
         framework,
         persona_id: personaId || undefined,
         hierarchy_role: "talon",
@@ -208,11 +213,13 @@ export default function ProjectDetail() {
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
 
   const refresh = useCallback(async () => {
     if (!id) return;
     try {
       setLoading(true);
+      setLoadError("");
       const [projects, allInstances, allAgents] = await Promise.all([
         fetchProjects(),
         fetchInstances(),
@@ -230,8 +237,9 @@ export default function ProjectDetail() {
         );
         setInstances(projectInstances);
       }
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to load project data:", err);
+      setLoadError(err instanceof Error ? err.message : "Failed to load project");
     } finally {
       setLoading(false);
     }
@@ -265,6 +273,10 @@ export default function ProjectDetail() {
     <div className="space-y-6">
       <div className="text-xs text-text-muted">~/projects/{project.name}</div>
 
+      {loadError && (
+        <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{loadError}</div>
+      )}
+
       <div className="flex items-center gap-3">
         <button
           onClick={() => navigate("/projects")}
@@ -290,8 +302,12 @@ export default function ProjectDetail() {
         <button
           onClick={async () => {
             if (confirm("delete this project?")) {
-              await deleteProject(project.id);
-              navigate("/projects");
+              try {
+                await deleteProject(project.id);
+                navigate("/projects");
+              } catch (e) {
+                setLoadError(e instanceof Error ? e.message : "Failed to delete project");
+              }
             }
           }}
           className="rounded p-2 text-text-muted transition-colors hover:bg-red/10 hover:text-red"
