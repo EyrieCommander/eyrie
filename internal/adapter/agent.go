@@ -160,12 +160,13 @@ type ChatEvent struct {
 
 // DiscoveredAgent holds the result of auto-discovery before a full adapter is created.
 type DiscoveredAgent struct {
-	Name      string `json:"name"`
-	Framework string `json:"framework"`
-	Host      string `json:"host"`
-	Port      int    `json:"port"`
+	Name       string `json:"name"`
+	Framework  string `json:"framework"`
+	Host       string `json:"host"`
+	Port       int    `json:"port"`
 	ConfigPath string `json:"config_path"`
-	Token     string `json:"-"`
+	Token      string `json:"-"`
+	InstanceID string `json:"instance_id,omitempty"`
 }
 
 func (d *DiscoveredAgent) URL() string {

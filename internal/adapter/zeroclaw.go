@@ -461,22 +461,27 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 		return z.sessionsLegacy(ctx)
 	}
 
-	// Try upstream 0.5.7+ format first: {"sessions": [{"session_id": "...", ...}]}
+	// Try upstream 0.5.7+ format: {"sessions": [{"session_id": "...", "name": "...", ...}]}
 	var upstreamResp struct {
 		Sessions []struct {
-			SessionID    string `json:"session_id"`
-			CreatedAt    string `json:"created_at"`
-			LastActivity string `json:"last_activity"`
-			MessageCount int    `json:"message_count"`
+			SessionID    string  `json:"session_id"`
+			Name         *string `json:"name"`
+			CreatedAt    string  `json:"created_at"`
+			LastActivity string  `json:"last_activity"`
+			MessageCount int     `json:"message_count"`
 		} `json:"sessions"`
 		Message string `json:"message,omitempty"` // "Session persistence is disabled"
 	}
 	if json.Unmarshal([]byte(body), &upstreamResp) == nil && upstreamResp.Message == "" {
 		sessions := make([]Session, 0, len(upstreamResp.Sessions))
 		for _, s := range upstreamResp.Sessions {
+			title := s.SessionID
+			if s.Name != nil && *s.Name != "" {
+				title = *s.Name
+			}
 			sess := Session{
 				Key:   s.SessionID,
-				Title: s.SessionID, // Upstream sessions are UUID-based, no names
+				Title: title,
 			}
 			if t, err := time.Parse(time.RFC3339Nano, s.LastActivity); err == nil {
 				sess.LastMsg = &t
@@ -724,6 +729,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 	}
 	if sessionKey != "" {
 		qv.Set("session_id", sessionKey)
+		qv.Set("name", sessionKey) // Use session key as the human-readable name
 	}
 	if encoded := qv.Encode(); encoded != "" {
 		wsURL += "?" + encoded

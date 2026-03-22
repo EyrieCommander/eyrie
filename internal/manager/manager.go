@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 type LifecycleAction string
@@ -103,6 +104,38 @@ func run(ctx context.Context, command string, args ...string) error {
 	return nil
 }
 
+// runDetached starts a process in the background (for daemons that don't exit).
+// If logDir is non-empty, stdout and stderr are redirected to {logDir}/daemon.stdout.log.
+// Returns once the process has started successfully.
+func runDetached(_ context.Context, logDir string, command string, args ...string) error {
+	cmd := exec.Command(command, args...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	if logDir != "" {
+		if err := os.MkdirAll(logDir, 0o755); err == nil {
+			logPath := filepath.Join(logDir, "daemon.stdout.log")
+			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+				cmd.Stdout = f
+				cmd.Stderr = f
+				// Close the file after the process exits
+				go func() {
+					_ = cmd.Wait()
+					f.Close()
+				}()
+			}
+		}
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("%s %s: %w", command, strings.Join(args, " "), err)
+	}
+	// If we didn't set up the goroutine above (no logDir), still reap the process
+	if logDir == "" {
+		go func() { _ = cmd.Wait() }()
+	}
+	return nil
+}
+
 // ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
 // This is used for provisioned instances that have their own config files.
 func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
@@ -111,23 +144,31 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 		// ZeroClaw uses --config-dir (directory), not --config (file).
 		// configPath points to the config file; we pass its parent directory.
 		configDir := filepath.Dir(configPath)
+		logDir := filepath.Join(configDir, "logs")
 		switch action {
 		case ActionStart:
-			return run(ctx, "zeroclaw", "daemon", "--config-dir", configDir)
+			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		case ActionStop:
 			return run(ctx, "zeroclaw", "service", "stop", "--config-dir", configDir)
 		case ActionRestart:
 			if stopErr := run(ctx, "zeroclaw", "service", "stop", "--config-dir", configDir); stopErr != nil {
-				// Log but continue — the instance may not be running.
 				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw service stop (config-dir %s): %v\n", configDir, stopErr)
 			}
-			return run(ctx, "zeroclaw", "daemon", "--config-dir", configDir)
+			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		default:
 			return fmt.Errorf("unknown action %q for zeroclaw", action)
 		}
 	case "openclaw":
+		if action == ActionStart || action == ActionRestart {
+			ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+			return runDetached(ctx, ocLogDir, "openclaw", "gateway", string(action), "--config", configPath)
+		}
 		return run(ctx, "openclaw", "gateway", string(action), "--config", configPath)
 	case "hermes":
+		if action == ActionStart || action == ActionRestart {
+			hLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+			return runDetached(ctx, hLogDir, "hermes", "gateway", string(action), "--config", configPath)
+		}
 		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
 	default:
 		return fmt.Errorf("unknown framework %q", framework)

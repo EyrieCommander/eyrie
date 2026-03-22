@@ -175,7 +175,7 @@ export default function PersonasPage() {
               key={persona.id}
               persona={persona}
               onInstall={handleInstall}
-              installing={installing === persona.id}
+              installingId={installing ?? undefined}
             />
           ))}
         </div>

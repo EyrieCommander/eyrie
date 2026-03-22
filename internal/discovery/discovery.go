@@ -58,12 +58,21 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	}
 
 	// Stage 3: Probe health endpoints
+	instStore, _ := instance.NewStore()
 	for _, agent := range discovered {
 		alive := probeHealth(ctx, agent.Framework, agent.Host, agent.Port)
 		result.Agents = append(result.Agents, AgentResult{
 			Agent: agent,
 			Alive: alive,
 		})
+		// Update instance status based on health probe
+		if instStore != nil && agent.InstanceID != "" {
+			if alive {
+				_ = instStore.UpdateStatus(agent.InstanceID, "running")
+			} else if inst, err := instStore.Get(agent.InstanceID); err == nil && inst.Status == "starting" {
+				// Keep "starting" — don't downgrade to "stopped" yet, give it time
+			}
+		}
 	}
 
 	return result
@@ -116,8 +125,9 @@ func scanInstances() []adapter.DiscoveredAgent {
 			continue
 		}
 
-		// Override the hardcoded name with the instance name
+		// Override the hardcoded name with the instance name and set instance ID
 		agent.Name = inst.Name
+		agent.InstanceID = inst.ID
 		agents = append(agents, *agent)
 	}
 	return agents

@@ -5,17 +5,33 @@ import type { Project, AgentInstance, AgentInfo, Persona } from "../lib/types";
 import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject } from "../lib/api";
 
 function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: () => void }) {
-  const statusColor = instance.status === "running" ? "bg-green" : instance.status === "error" ? "bg-red" : "bg-text-muted";
+  const isProvisioning = instance.status === "created" || instance.status === "provisioning" || instance.status === "starting";
+  const statusColor = isProvisioning
+    ? "bg-yellow-400"
+    : instance.status === "running"
+      ? "bg-green"
+      : instance.status === "error"
+        ? "bg-red"
+        : "bg-text-muted";
   return (
     <button
       onClick={onClick}
-      className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-accent/50 hover:bg-surface-hover/50"
+      className={`flex w-full items-center gap-3 rounded border px-4 py-3 text-left text-xs transition-all ${
+        isProvisioning
+          ? "border-yellow-400/30 bg-yellow-400/5 hover:border-yellow-400/50 hover:bg-yellow-400/10"
+          : "border-border bg-surface hover:border-accent/50 hover:bg-surface-hover/50"
+      }`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${statusColor}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${statusColor} ${isProvisioning ? "animate-pulse" : ""}`} />
       <div className="flex-1 min-w-0">
         <span className="font-medium text-text">{instance.display_name}</span>
         <span className="ml-2 text-text-muted">{instance.framework} · :{instance.port}</span>
-        {instance.hierarchy_role && (
+        {isProvisioning && (
+          <span className="ml-2 rounded bg-yellow-400/10 px-1.5 py-0.5 text-[10px] font-medium text-yellow-400">
+            provisioning...
+          </span>
+        )}
+        {!isProvisioning && instance.hierarchy_role && (
           <span className="ml-2 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
             {instance.hierarchy_role}
           </span>
@@ -28,12 +44,12 @@ function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: 
 
 function SetCaptainDialog({
   projectId,
-  agents,
+  projectName,
   onDone,
   onClose,
 }: {
   projectId: string;
-  agents: AgentInfo[];
+  projectName: string;
   onDone: () => void;
   onClose: () => void;
 }) {
@@ -41,26 +57,26 @@ function SetCaptainDialog({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  // Create new form
+  // Create new form — default name derived from project
+  const defaultName = `captain-${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
   const [name, setName] = useState("");
   const [framework, setFramework] = useState("openclaw");
-  const [personaId, setPersonaId] = useState("");
-  const [personas, setPersonas] = useState<Persona[]>([]);
+  const [captainInstances, setCaptainInstances] = useState<AgentInstance[]>([]);
 
   useEffect(() => {
-    fetchPersonas().then(setPersonas).catch(() => {});
+    fetchInstances().then((all) => {
+      setCaptainInstances(all.filter((i) => i.hierarchy_role === "captain" && !i.project_id));
+    }).catch(() => {});
   }, []);
 
   const handleCreate = async () => {
-    const trimmedName = name.trim();
-    if (!trimmedName) { setError("Name cannot be blank"); return; }
+    const effectiveName = name.trim() || defaultName;
     setSaving(true);
     setError("");
     try {
       const inst = await createInstance({
-        name: trimmedName,
+        name: effectiveName,
         framework,
-        persona_id: personaId || undefined,
         hierarchy_role: "captain",
         project_id: projectId,
         auto_start: true,
@@ -92,28 +108,13 @@ function SetCaptainDialog({
       <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-sm font-bold text-text">assign captain</h2>
 
-        {/* Mode toggle */}
-        <div className="flex gap-2 text-xs">
-          <button
-            onClick={() => setMode("create")}
-            className={`rounded px-3 py-1.5 transition-colors ${mode === "create" ? "bg-accent text-white" : "border border-border text-text-secondary hover:bg-surface-hover"}`}
-          >
-            create new
-          </button>
-          <button
-            onClick={() => setMode("existing")}
-            className={`rounded px-3 py-1.5 transition-colors ${mode === "existing" ? "bg-accent text-white" : "border border-border text-text-secondary hover:bg-surface-hover"}`}
-          >
-            use existing
-          </button>
-        </div>
-
         {error && (
           <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{error}</div>
         )}
 
         {mode === "create" ? (
           <div className="space-y-3">
+            <p className="text-xs text-text-muted">create a dedicated captain agent for this project</p>
             <div>
               <label className="block text-xs font-medium text-text-secondary mb-1">name</label>
               <input
@@ -121,7 +122,7 @@ function SetCaptainDialog({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-                placeholder="captain-chess"
+                placeholder={defaultName}
                 autoFocus
               />
             </div>
@@ -137,55 +138,62 @@ function SetCaptainDialog({
                 <option value="hermes">Hermes</option>
               </select>
             </div>
-            <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1">persona (optional)</label>
-              <select
-                value={personaId}
-                onChange={(e) => setPersonaId(e.target.value)}
-                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-              >
-                <option value="">none</option>
-                {personas.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name} — {p.role}</option>
-                ))}
-              </select>
-            </div>
-            <div className="flex justify-end gap-2">
-              <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
-                cancel
-              </button>
+            <p className="text-[10px] text-text-muted">
+              the captain will use the built-in project manager identity
+            </p>
+            <div className="flex items-center justify-between">
               <button
-                onClick={handleCreate}
-                disabled={saving || !name.trim()}
-                className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+                onClick={() => setMode("existing")}
+                className="text-xs text-green hover:text-green/80 transition-colors"
               >
-                {saving ? "creating..." : "create captain"}
+                use existing captain
               </button>
+              <div className="flex gap-2">
+                <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
+                  cancel
+                </button>
+                <button
+                  onClick={handleCreate}
+                  disabled={saving}
+                  className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+                >
+                  {saving ? "creating..." : "create captain"}
+                </button>
+              </div>
             </div>
           </div>
         ) : (
           <div className="space-y-3">
-            <p className="text-xs text-text-muted">choose a running agent to be this project's captain</p>
+            <p className="text-xs text-text-muted">select an existing captain instance</p>
             <div className="space-y-1.5 max-h-64 overflow-y-auto">
-              {agents.map((agent) => (
-                <button
-                  key={agent.name}
-                  onClick={() => handleSelectExisting(agent.name)}
-                  disabled={saving}
-                  className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
-                >
-                  <span className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`} />
-                  <div className="flex-1">
-                    <span className="font-medium text-text">{agent.name}</span>
-                    <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
-                  </div>
-                  {agent.alive && (
-                    <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
-                  )}
-                </button>
-              ))}
+              {captainInstances.length === 0 ? (
+                <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
+                  no captain instances available
+                </div>
+              ) : (
+                captainInstances.map((inst) => (
+                  <button
+                    key={inst.id}
+                    onClick={() => handleSelectExisting(inst.id)}
+                    disabled={saving}
+                    className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
+                  >
+                    <span className={`h-1.5 w-1.5 rounded-full ${inst.status === "running" ? "bg-green" : "bg-text-muted"}`} />
+                    <div className="flex-1">
+                      <span className="font-medium text-text">{inst.display_name}</span>
+                      <span className="ml-2 text-text-muted">{inst.framework} · :{inst.port}</span>
+                    </div>
+                  </button>
+                ))
+              )}
             </div>
-            <div className="flex justify-end">
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => setMode("create")}
+                className="text-xs text-green hover:text-green/80 transition-colors"
+              >
+                &larr; create new instead
+              </button>
               <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
                 cancel
               </button>
@@ -356,6 +364,14 @@ export default function ProjectDetail() {
     refresh();
   }, [refresh]);
 
+  // Poll while any instance is provisioning
+  useEffect(() => {
+    const hasProvisioning = instances.some((i) => i.status === "created" || i.status === "provisioning");
+    if (!hasProvisioning) return;
+    const interval = setInterval(refresh, 3000);
+    return () => clearInterval(interval);
+  }, [instances, refresh]);
+
   if (loading && !project) {
     return <div className="py-20 text-center text-xs text-text-muted">loading project...</div>;
   }
@@ -467,7 +483,7 @@ export default function ProjectDetail() {
       {showSetOrchestrator && (
         <SetCaptainDialog
           projectId={project.id}
-          agents={agents}
+          projectName={project.name}
           onDone={() => { setShowSetOrchestrator(false); refresh(); }}
           onClose={() => setShowSetOrchestrator(false)}
         />

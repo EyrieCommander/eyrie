@@ -98,10 +98,10 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	if req.AutoStart {
 		if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); err != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", err)
-			// Don't fail the creation — just note the error
 			inst.Status = "error"
 		} else {
-			inst.Status = "running"
+			// Set to "starting" — discovery will confirm "running" once the agent is alive
+			inst.Status = "starting"
 		}
 		if err := store.UpdateStatus(inst.ID, inst.Status); err != nil {
 			slog.Warn("failed to persist auto-start status", "instance", inst.Name, "error", err)
