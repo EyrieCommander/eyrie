@@ -43,13 +43,13 @@ func NewProvisioner(store *Store) *Provisioner {
 func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Instance, error) {
 	// Validate
 	if req.Name == "" {
-		return nil, fmt.Errorf("instance name is required")
+		return nil, fmt.Errorf("instance name: %w", ErrRequiredField)
 	}
 	if req.Framework == "" {
-		return nil, fmt.Errorf("framework is required")
+		return nil, fmt.Errorf("framework: %w", ErrRequiredField)
 	}
 	if req.Framework != "zeroclaw" && req.Framework != "openclaw" && req.Framework != "hermes" {
-		return nil, fmt.Errorf("unsupported framework %q", req.Framework)
+		return nil, fmt.Errorf("%q: %w", req.Framework, ErrUnsupportedFramework)
 	}
 
 	// Reserve name and port under lock, then release for I/O
@@ -62,7 +62,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	for _, inst := range existing {
 		if inst.Name == req.Name {
 			p.store.mu.Unlock()
-			return nil, fmt.Errorf("instance name %q already exists", req.Name)
+			return nil, fmt.Errorf("instance name %q: %w", req.Name, ErrNameExists)
 		}
 	}
 	port, err := AllocatePort(existing)
@@ -121,12 +121,14 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		}
 	}
 
-	// Build template context
+	// Build template context — ProjectName, ProjectGoal, and ParentAgent are
+	// populated from the request so identity templates can reference them.
 	tc := TemplateContext{
 		Name:        inst.Name,
 		DisplayName: inst.DisplayName,
 		Framework:   inst.Framework,
 		EyrieURL:    "http://127.0.0.1:7200",
+		ParentAgent: req.ParentID,
 	}
 	if pers != nil {
 		tc.Role = pers.Role
@@ -209,12 +211,14 @@ func (p *Provisioner) generateZeroClawConfig(inst Instance, provider, model stri
 		"default_model":       model,
 		"default_temperature": 0.7,
 		"gateway": map[string]any{
-			"port": inst.Port,
-			"host": "127.0.0.1",
+			"port":                inst.Port,
+			"host":                "127.0.0.1",
+			"session_persistence": true,
 		},
 		"autonomy": map[string]any{
-			"level":          "supervised",
-			"workspace_only": true,
+			"level":            "supervised",
+			"workspace_only":   true,
+			"allowed_commands": []string{"git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "date", "curl"},
 		},
 		"memory": map[string]any{
 			"backend":   "sqlite",

@@ -42,15 +42,16 @@ interface PersonaCardProps {
   persona: Persona;
   onInstall: (id: string) => void;
   onSelect?: (id: string) => void;
-  installing?: boolean;
+  installingId?: string;
 }
 
 export default function PersonaCard({
   persona,
   onInstall,
   onSelect,
-  installing,
+  installingId,
 }: PersonaCardProps) {
+  const isInstalling = persona.id === installingId;
   const Icon = iconMap[persona.icon] || User;
 
   return (
@@ -125,11 +126,11 @@ export default function PersonaCard({
       ) : (
         <button
           onClick={() => onInstall(persona.id)}
-          disabled={installing}
+          disabled={isInstalling}
           className="w-full px-3 py-2 rounded text-xs font-medium border border-accent text-accent hover:bg-accent hover:text-white transition-all flex items-center justify-center gap-2 disabled:opacity-50"
         >
           <Plus className="w-3.5 h-3.5" />
-          {installing ? "adding..." : "add persona"}
+          {isInstalling ? "adding..." : "add persona"}
         </button>
       )}
     </div>

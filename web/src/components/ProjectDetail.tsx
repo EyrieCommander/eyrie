@@ -37,10 +37,44 @@ function SetCaptainDialog({
   onDone: () => void;
   onClose: () => void;
 }) {
+  const [mode, setMode] = useState<"create" | "existing">("create");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const handleSelect = async (agentName: string) => {
+  // Create new form
+  const [name, setName] = useState("");
+  const [framework, setFramework] = useState("openclaw");
+  const [personaId, setPersonaId] = useState("");
+  const [personas, setPersonas] = useState<Persona[]>([]);
+
+  useEffect(() => {
+    fetchPersonas().then(setPersonas).catch(() => {});
+  }, []);
+
+  const handleCreate = async () => {
+    const trimmedName = name.trim();
+    if (!trimmedName) { setError("Name cannot be blank"); return; }
+    setSaving(true);
+    setError("");
+    try {
+      const inst = await createInstance({
+        name: trimmedName,
+        framework,
+        persona_id: personaId || undefined,
+        hierarchy_role: "captain",
+        project_id: projectId,
+        auto_start: true,
+      });
+      await updateProject(projectId, { orchestrator_id: inst.id });
+      onDone();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to create captain");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSelectExisting = async (agentName: string) => {
     setSaving(true);
     setError("");
     try {
@@ -57,37 +91,107 @@ function SetCaptainDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-sm font-bold text-text">assign captain</h2>
-        <p className="text-xs text-text-muted">choose an agent to orchestrate this project</p>
+
+        {/* Mode toggle */}
+        <div className="flex gap-2 text-xs">
+          <button
+            onClick={() => setMode("create")}
+            className={`rounded px-3 py-1.5 transition-colors ${mode === "create" ? "bg-accent text-white" : "border border-border text-text-secondary hover:bg-surface-hover"}`}
+          >
+            create new
+          </button>
+          <button
+            onClick={() => setMode("existing")}
+            className={`rounded px-3 py-1.5 transition-colors ${mode === "existing" ? "bg-accent text-white" : "border border-border text-text-secondary hover:bg-surface-hover"}`}
+          >
+            use existing
+          </button>
+        </div>
 
         {error && (
           <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{error}</div>
         )}
 
-        <div className="space-y-1.5 max-h-64 overflow-y-auto">
-          {agents.map((agent) => (
-            <button
-              key={agent.name}
-              onClick={() => handleSelect(agent.name)}
-              disabled={saving}
-              className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
-            >
-              <span className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`} />
-              <div className="flex-1">
-                <span className="font-medium text-text">{agent.name}</span>
-                <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
-              </div>
-              {agent.alive && (
-                <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex justify-end">
-          <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
-            cancel
-          </button>
-        </div>
+        {mode === "create" ? (
+          <div className="space-y-3">
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+                placeholder="captain-chess"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">framework</label>
+              <select
+                value={framework}
+                onChange={(e) => setFramework(e.target.value)}
+                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+              >
+                <option value="openclaw">OpenClaw</option>
+                <option value="zeroclaw">ZeroClaw</option>
+                <option value="hermes">Hermes</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">persona (optional)</label>
+              <select
+                value={personaId}
+                onChange={(e) => setPersonaId(e.target.value)}
+                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+              >
+                <option value="">none</option>
+                {personas.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name} — {p.role}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
+                cancel
+              </button>
+              <button
+                onClick={handleCreate}
+                disabled={saving || !name.trim()}
+                className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+              >
+                {saving ? "creating..." : "create captain"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <p className="text-xs text-text-muted">choose a running agent to be this project's captain</p>
+            <div className="space-y-1.5 max-h-64 overflow-y-auto">
+              {agents.map((agent) => (
+                <button
+                  key={agent.name}
+                  onClick={() => handleSelectExisting(agent.name)}
+                  disabled={saving}
+                  className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
+                >
+                  <span className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`} />
+                  <div className="flex-1">
+                    <span className="font-medium text-text">{agent.name}</span>
+                    <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
+                  </div>
+                  {agent.alive && (
+                    <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">running</span>
+                  )}
+                </button>
+              ))}
+            </div>
+            <div className="flex justify-end">
+              <button onClick={onClose} className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-hover">
+                cancel
+              </button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -110,7 +214,10 @@ function AddAgentDialog({
   const [error, setError] = useState("");
 
   useEffect(() => {
-    fetchPersonas().then(setPersonas).catch(() => {});
+    fetchPersonas().then(setPersonas).catch((err) => {
+      console.error("Failed to load personas:", err);
+      setPersonas([]);
+    });
   }, []);
 
   const handleCreate = async () => {

@@ -231,9 +231,9 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 
 	// Clean up any existing briefing session first
 	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
-		for _, s := range sessions {
-			if s.Title == briefingSessionName {
-				_ = agent.ResetSession(r.Context(), s.Key)
+		for _, sess := range sessions {
+			if sess.Title == briefingSessionName {
+				_ = agent.ResetSession(r.Context(), sess.Key)
 			}
 		}
 	}
@@ -271,10 +271,12 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// First, send the session key so frontend knows where to navigate
-	sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
-	data, _ := json.Marshal(sessionEvent)
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
+	if sessionKey != "" {
+		sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
+		data, _ := json.Marshal(sessionEvent)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	}
 
 	// Then stream the agent's response
 	for ev := range eventCh {
@@ -326,7 +328,7 @@ First, use the exec tool to run curl commands against the Eyrie API at http://12
 3. Check for existing projects:
    exec: curl -s http://127.0.0.1:7200/api/projects
 
-Next: use your "edit" to save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
+Next: use your "edit" tool to save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
 
 Then: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on and what team of agents would be most useful.`
 }

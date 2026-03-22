@@ -81,30 +81,40 @@ function ProjectSection({ tree, onInstanceClick, onProjectClick }: { tree: Proje
         )}
       </button>
 
-      {tree.captain && (
-        <div className="ml-5">
-          <InstanceCard
-            instance={tree.captain}
-            onClick={() => onInstanceClick(tree.captain!.name)}
-          />
-        </div>
-      )}
-
-      {tree.talons.length > 0 && (
-        <div className="ml-10 space-y-1.5">
-          {tree.talons.map((agent) => (
+      {/* Captain */}
+      <div className="ml-5">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">captain</span>
+        {tree.captain ? (
+          <div className="mt-1">
             <InstanceCard
-              key={agent.id}
-              instance={agent}
-              onClick={() => onInstanceClick(agent.name)}
+              instance={tree.captain}
+              onClick={() => onInstanceClick(tree.captain!.name)}
             />
-          ))}
-        </div>
-      )}
+          </div>
+        ) : (
+          <p className="mt-1 text-xs text-text-muted italic">none assigned</p>
+        )}
+      </div>
 
-      {!tree.captain && tree.talons.length === 0 && (
-        <p className="ml-5 text-xs text-text-muted italic">no agents assigned yet</p>
-      )}
+      {/* Talons */}
+      <div className="ml-5">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+          talons {tree.talons.length > 0 && `(${tree.talons.length})`}
+        </span>
+        {tree.talons.length > 0 ? (
+          <div className="mt-1 ml-5 space-y-1.5">
+            {tree.talons.map((agent) => (
+              <InstanceCard
+                key={agent.id}
+                instance={agent}
+                onClick={() => onInstanceClick(agent.name)}
+              />
+            ))}
+          </div>
+        ) : (
+          <p className="mt-1 text-xs text-text-muted italic">none assigned</p>
+        )}
+      </div>
     </div>
   );
 }
@@ -120,17 +130,32 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
   const [saving, setSaving] = useState(false);
   const [savingStatus, setSavingStatus] = useState("");
   const [error, setError] = useState("");
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // "new" form state
   const [name, setName] = useState("atlas");
   const [framework, setFramework] = useState("openclaw");
   const [personaId, setPersonaId] = useState("");
 
-  useEffect(() => {
-    fetchAgents().then(setAgents).catch((e) => console.error("Failed to discover agents:", e));
-    fetchFrameworks().then(setFrameworks).catch((e) => console.error("Failed to fetch frameworks:", e));
-    fetchPersonas().then(setPersonas).catch((e) => console.error("Failed to fetch personas:", e));
+  const loadData = useCallback(() => {
+    setLoadError(null);
+    fetchAgents().then(setAgents).catch((e) => {
+      console.error("Failed to discover agents:", e);
+      setLoadError(e instanceof Error ? e.message : "Failed to discover agents");
+    });
+    fetchFrameworks().then(setFrameworks).catch((e) => {
+      console.error("Failed to fetch frameworks:", e);
+      setLoadError(e instanceof Error ? e.message : "Failed to fetch frameworks");
+    });
+    fetchPersonas().then(setPersonas).catch((e) => {
+      console.error("Failed to fetch personas:", e);
+      setLoadError(e instanceof Error ? e.message : "Failed to fetch personas");
+    });
   }, []);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
 
   const handleSelectExisting = async (agentName: string) => {
     setSaving(true);
@@ -188,6 +213,18 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
         </div>
       )}
 
+      {loadError && (
+        <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red flex items-center justify-between">
+          <span>{loadError}</span>
+          <button
+            onClick={loadData}
+            className="ml-3 shrink-0 rounded bg-red/10 px-2 py-1 text-[10px] font-medium text-red hover:bg-red/20 transition-colors"
+          >
+            retry
+          </button>
+        </div>
+      )}
+
       {mode === "choose" && (
         <div className="space-y-3">
           <button
@@ -205,11 +242,18 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
               <div className="mt-0.5 text-xs text-text-muted">
                 {runningAgents.length > 0
                   ? `promote one of your ${runningAgents.length} running agent${runningAgents.length !== 1 ? "s" : ""} to commander`
-                  : "discovering running agents..."}
+                  : loadError ? "failed to discover agents" : "discovering running agents..."}
               </div>
             </div>
             {runningAgents.length > 0 ? (
               <ChevronRight className="ml-auto h-4 w-4 text-text-muted" />
+            ) : loadError ? (
+              <span
+                onClick={(e) => { e.stopPropagation(); loadData(); }}
+                className="ml-auto text-[10px] text-red hover:text-red/80 cursor-pointer"
+              >
+                retry
+              </span>
             ) : (
               <span className="ml-auto h-3 w-3 animate-spin rounded-full border-2 border-text-muted/30 border-t-text-muted" />
             )}
@@ -244,10 +288,22 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
           <div className="text-xs font-medium text-text-secondary">select an agent to be your commander</div>
           <div className="space-y-1.5">
             {agents.length === 0 && (
-              <div className="flex items-center gap-3 rounded border border-border bg-surface px-4 py-3 opacity-50">
-                <span className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse" />
-                <span className="text-xs text-text-muted">discovering agents...</span>
-              </div>
+              loadError ? (
+                <div className="flex items-center justify-between rounded border border-red/30 bg-red/5 px-4 py-3">
+                  <span className="text-xs text-red">failed to discover agents</span>
+                  <button
+                    onClick={loadData}
+                    className="rounded bg-red/10 px-2 py-1 text-[10px] font-medium text-red hover:bg-red/20 transition-colors"
+                  >
+                    retry
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 rounded border border-border bg-surface px-4 py-3 opacity-50">
+                  <span className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse" />
+                  <span className="text-xs text-text-muted">discovering agents...</span>
+                </div>
+              )
             )}
             {runningAgents.map((agent) => {
               const canBeCommander = agent.commander_capable;
@@ -360,14 +416,16 @@ export default function HierarchyPage() {
   const navigate = useNavigate();
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
   const [loading, setLoading] = useState(true);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     try {
+      setFetchError(null);
       setLoading(true);
       const data = await fetchHierarchy();
       setHierarchy(data);
-    } catch {
-      // ignore
+    } catch (e) {
+      setFetchError(e instanceof Error ? e.message : "Failed to fetch hierarchy");
     } finally {
       setLoading(false);
     }
@@ -387,6 +445,26 @@ export default function HierarchyPage() {
     return (
       <div className="py-20 text-center text-xs text-text-muted">
         loading hierarchy...
+      </div>
+    );
+  }
+
+  if (fetchError) {
+    return (
+      <div className="py-20 text-center space-y-3">
+        <div className="rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red inline-block">
+          {fetchError}
+        </div>
+        <div>
+          <button
+            onClick={refresh}
+            disabled={loading}
+            className="text-xs text-text-muted hover:text-text transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`inline h-3 w-3 mr-1 ${loading ? "animate-spin" : ""}`} />
+            retry
+          </button>
+        </div>
       </div>
     );
   }
@@ -429,6 +507,72 @@ export default function HierarchyPage() {
           onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
         />
       </div>
+
+      {/* Captains */}
+      {(() => {
+        const allCaptains = hierarchy.projects
+          .filter((t) => t.captain)
+          .map((t) => ({ instance: t.captain!, projectName: t.project.name }));
+        return (
+          <div>
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+              captains ({allCaptains.length})
+            </div>
+            {allCaptains.length === 0 ? (
+              <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
+                no captains yet — assign one to a project
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {allCaptains.map(({ instance, projectName }) => (
+                  <div key={instance.id} className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <InstanceCard
+                        instance={instance}
+                        onClick={() => handleInstanceClick(instance.name)}
+                      />
+                    </div>
+                    <span className="shrink-0 text-[10px] text-text-muted">{projectName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Talons */}
+      {(() => {
+        const allTalons = hierarchy.projects.flatMap((t) =>
+          t.talons.map((talon) => ({ instance: talon, projectName: t.project.name }))
+        );
+        return (
+          <div>
+            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+              talons ({allTalons.length})
+            </div>
+            {allTalons.length === 0 ? (
+              <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
+                no talons yet — add agents to your projects
+              </div>
+            ) : (
+              <div className="space-y-1.5">
+                {allTalons.map(({ instance, projectName }) => (
+                  <div key={instance.id} className="flex items-center gap-2">
+                    <div className="flex-1">
+                      <InstanceCard
+                        instance={instance}
+                        onClick={() => handleInstanceClick(instance.name)}
+                      />
+                    </div>
+                    <span className="shrink-0 text-[10px] text-text-muted">{projectName}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Projects */}
       <div>

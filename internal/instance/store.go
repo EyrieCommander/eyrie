@@ -2,12 +2,25 @@ package instance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"sync"
 )
+
+// ErrNotFound is returned when an instance does not exist on disk.
+var ErrNotFound = errors.New("instance not found")
+
+// ErrNameExists is returned when an instance name is already taken.
+var ErrNameExists = errors.New("instance name already exists")
+
+// ErrRequiredField is returned when a required field is missing.
+var ErrRequiredField = errors.New("required field is missing")
+
+// ErrUnsupportedFramework is returned for unknown framework names.
+var ErrUnsupportedFramework = errors.New("unsupported framework")
 
 // Store manages instance metadata on disk at ~/.eyrie/instances/.
 // Each instance gets its own subdirectory containing an instance.json
@@ -75,7 +88,7 @@ func (s *Store) Get(id string) (*Instance, error) {
 	data, err := os.ReadFile(s.metaPath(id))
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("instance %q not found", id)
+			return nil, fmt.Errorf("instance %q: %w", id, ErrNotFound)
 		}
 		return nil, err
 	}
@@ -115,6 +128,9 @@ func (s *Store) UpdateStatus(id, status string) error {
 
 	data, err := os.ReadFile(s.metaPath(id))
 	if err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("instance %q: %w", id, ErrNotFound)
+		}
 		return err
 	}
 	var inst Instance
@@ -210,5 +226,9 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 		os.Remove(tmpName)
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return nil
 }

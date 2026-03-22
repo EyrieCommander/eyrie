@@ -69,8 +69,12 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("read local persona catalog: %w", err)
 		}
-		path := strings.TrimPrefix(c.catalogURL, "file://")
-		data, err := os.ReadFile(path)
+		u, parseErr := url.Parse(c.catalogURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("parse catalog URL: %w", parseErr)
+		}
+		localPath := filepath.FromSlash(u.Path)
+		data, err := os.ReadFile(localPath)
 		if err != nil {
 			return nil, fmt.Errorf("read local persona catalog: %w", err)
 		}

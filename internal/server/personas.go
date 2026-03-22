@@ -25,6 +25,9 @@ func (s *Server) handleListPersonas(w http.ResponseWriter, r *http.Request) {
 
 	// Merge installed status from store
 	store, err := persona.NewStore()
+	if err != nil {
+		slog.Warn("failed to create persona store", "error", err)
+	}
 	if err == nil {
 		installed, listErr := store.List()
 		if listErr != nil {
@@ -88,7 +91,11 @@ func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		PersonaID string `json:"persona_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.PersonaID == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed JSON: " + err.Error()})
+		return
+	}
+	if body.PersonaID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "persona_id is required"})
 		return
 	}
@@ -175,6 +182,16 @@ func (s *Server) handleDeletePersona(w http.ResponseWriter, r *http.Request) {
 	store, err := persona.NewStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open persona store"})
+		return
+	}
+
+	// Verify persona exists before deleting so we can return 404 for missing IDs
+	if _, err := store.Get(id); err != nil {
+		if errors.Is(err, persona.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("persona %q not found", id)})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to check persona: %v", err)})
+		}
 		return
 	}
 

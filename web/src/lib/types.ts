@@ -179,13 +179,15 @@ export interface PersonaCategory {
 
 // --- Instance types ---
 
+export type HierarchyRole = "commander" | "captain" | "talon" | "";
+
 export interface AgentInstance {
   id: string;
   name: string;
   display_name: string;
   framework: string;
   persona_id?: string;
-  hierarchy_role?: "commander" | "captain" | "talon" | "";
+  hierarchy_role?: HierarchyRole;
   project_id?: string;
   parent_id?: string;
   port: number;
@@ -200,7 +202,7 @@ export interface CreateInstanceRequest {
   name: string;
   framework: string;
   persona_id?: string;
-  hierarchy_role?: string;
+  hierarchy_role?: HierarchyRole;
   project_id?: string;
   parent_id?: string;
   model?: string;

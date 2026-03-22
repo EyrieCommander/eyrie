@@ -97,6 +97,10 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if update.Name != nil {
+		if *update.Name == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "project name cannot be empty"})
+			return
+		}
 		p.Name = *update.Name
 	}
 	if update.Description != nil {

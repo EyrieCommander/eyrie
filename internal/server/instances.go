@@ -5,7 +5,6 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
-	"strings"
 
 	"github.com/natalie/eyrie/internal/instance"
 	"github.com/natalie/eyrie/internal/manager"
@@ -38,7 +37,7 @@ func (s *Server) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := store.Get(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, instance.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		} else {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -83,10 +82,10 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	provisioner := instance.NewProvisioner(store)
 	inst, err := provisioner.Provision(req, pers)
 	if err != nil {
-		// Validation errors (name exists, bad framework, etc.) get 400; others get 500
-		if strings.Contains(err.Error(), "already exists") ||
-			strings.Contains(err.Error(), "is required") ||
-			strings.Contains(err.Error(), "unsupported framework") {
+		// Validation errors get 400; others get 500
+		if errors.Is(err, instance.ErrNameExists) ||
+			errors.Is(err, instance.ErrRequiredField) ||
+			errors.Is(err, instance.ErrUnsupportedFramework) {
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		} else {
 			slog.Error("instance provisioning failed", "error", err)
@@ -121,7 +120,7 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := store.Get(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, instance.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		} else {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -138,7 +137,17 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if update.Name != "" {
+	if update.Name != "" && update.Name != inst.Name {
+		// Check uniqueness before allowing rename
+		exists, err := store.NameExists(update.Name)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if exists {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance name \"" + update.Name + "\" already exists"})
+			return
+		}
 		inst.Name = update.Name
 	}
 	if update.DisplayName != "" {
@@ -162,7 +171,7 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := store.Get(id)
 	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
+		if errors.Is(err, instance.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		} else {
 			slog.Error("failed to get instance for deletion", "id", id, "error", err)
@@ -192,7 +201,11 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	}
 	inst, err := store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if errors.Is(err, instance.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 

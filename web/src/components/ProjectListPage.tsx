@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Briefcase, ChevronRight } from "lucide-react";
 import type { Project } from "../lib/types";
 import { fetchProjects, createProject } from "../lib/api";
 
 function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [goal, setGoal] = useState("");
@@ -25,9 +26,18 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
     }
   };
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    dialogRef.current?.focus();
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" onClick={onClose}>
+      <div ref={dialogRef} tabIndex={-1} className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4 outline-none" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-sm font-bold text-text">create project</h2>
 
         <div>

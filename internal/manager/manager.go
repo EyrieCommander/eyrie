@@ -108,14 +108,20 @@ func run(ctx context.Context, command string, args ...string) error {
 func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
 	switch framework {
 	case "zeroclaw":
+		// ZeroClaw uses --config-dir (directory), not --config (file).
+		// configPath points to the config file; we pass its parent directory.
+		configDir := filepath.Dir(configPath)
 		switch action {
 		case ActionStart:
-			return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+			return run(ctx, "zeroclaw", "daemon", "--config-dir", configDir)
 		case ActionStop:
-			return run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
+			return run(ctx, "zeroclaw", "service", "stop", "--config-dir", configDir)
 		case ActionRestart:
-			_ = run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
-			return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+			if stopErr := run(ctx, "zeroclaw", "service", "stop", "--config-dir", configDir); stopErr != nil {
+				// Log but continue — the instance may not be running.
+				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw service stop (config-dir %s): %v\n", configDir, stopErr)
+			}
+			return run(ctx, "zeroclaw", "daemon", "--config-dir", configDir)
 		default:
 			return fmt.Errorf("unknown action %q for zeroclaw", action)
 		}

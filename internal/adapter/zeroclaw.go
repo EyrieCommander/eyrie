@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -716,16 +717,16 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 	wsURL = strings.Replace(wsURL, "https://", "wss://", 1)
 	wsURL += "/ws/chat"
 
-	// Build query params: token + session_id
-	params := []string{}
+	// Build query params with proper URL encoding
+	qv := make(url.Values)
 	if z.token != "" {
-		params = append(params, "token="+z.token)
+		qv.Set("token", z.token)
 	}
 	if sessionKey != "" {
-		params = append(params, "session_id="+sessionKey)
+		qv.Set("session_id", sessionKey)
 	}
-	if len(params) > 0 {
-		wsURL += "?" + strings.Join(params, "&")
+	if encoded := qv.Encode(); encoded != "" {
+		wsURL += "?" + encoded
 	}
 
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
@@ -778,6 +779,10 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		for {
 			_, data, err := conn.Read(ctx)
 			if err != nil {
+				select {
+				case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("connection read: %v", err)}:
+				case <-ctx.Done():
+				}
 				return
 			}
 

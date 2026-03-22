@@ -830,7 +830,8 @@ function ChatTab({
   }
 
   const totalMsgCount = flatItems.filter((it) => it.kind === "message").length;
-  // Module-level flag survives React StrictMode remounts (refs get reset)
+  // Window-level flag prevents StrictMode double-fire; ref tracks in-component state.
+  // The window flag is cleaned up on unmount to allow re-briefing in new sessions.
   const briefTriggered = useRef(false);
   const briefKey = `brief-${agentName}`;
   if ((window as any)[briefKey]) briefTriggered.current = true;
@@ -922,8 +923,9 @@ function ChatTab({
     return () => {
       mounted = false;
       controller.abort();
+      delete (window as any)[briefKey];
     };
-  }, [briefMode, alive, agentName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [briefMode, alive, agentName, briefKey, setSearchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const text = input.trim();
@@ -1089,7 +1091,7 @@ function ChatTab({
         refreshSessions();
       }
     },
-    [agentName, refreshSessions],
+    [agentName, refreshSessions, safeDestroySession],
   );
 
   const handleCreateSession = async () => {

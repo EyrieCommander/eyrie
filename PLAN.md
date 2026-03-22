@@ -43,7 +43,22 @@ persona-template/
 
 When instantiated, template variables ({{.Name}}, {{.Role}}, {{.ProjectName}}, etc.) are rendered and written to the new agent's workspace. The agent then develops its own memories from there.
 
-**Persona Validation**: When creating/updating personas, each IdentityTemplate value is pre-parsed as a Go `text/template` to catch syntax errors early. HierarchyRole is validated against the allowed set (`commander`, `captain`, `talon`). Template render errors during instantiation are surfaced with descriptive messages including the template filename and variable context.
+**Persona Validation**: When creating/updating personas, each IdentityTemplate value is pre-parsed as a Go `text/template` with `template.Option("missingkey=error")` to catch syntax errors and undefined variables early. HierarchyRole is validated via `HierarchyRole.Valid()` against the allowed set (`commander`, `captain`, `talon`, or empty for standalone). Template render errors during instantiation return a 4xx API error with a descriptive message including the template filename and variable context; the same error is recorded in the instance's Status field so parent agents can observe and recover. Errors are also logged server-side for auditing.
+
+### HierarchyRole Type (implemented in `internal/instance/instance.go`)
+
+```go
+type HierarchyRole string
+
+const (
+    RoleCommander  HierarchyRole = "commander"
+    RoleCaptain    HierarchyRole = "captain"
+    RoleTalon      HierarchyRole = "talon"
+    RoleStandalone HierarchyRole = "" // not part of a hierarchy
+)
+
+func (r HierarchyRole) Valid() bool { /* checks against known roles */ }
+```
 
 ### Persona Schema Extension
 
@@ -120,13 +135,19 @@ type Project struct {
     Goal           string            `json:"goal"`
     OrchestratorID string            `json:"orchestrator_id"` // Instance ID
     RoleAgentIDs   []string          `json:"role_agent_ids"`  // Instance IDs
-    Status         string            `json:"status"`          // "active", "paused", "completed"
+    Status         string            `json:"status"`          // see status transitions below
     CreatedAt      time.Time         `json:"created_at"`
     CreatedBy      string            `json:"created_by"`      // "user" or coordinator ID
 }
 ```
 
 Storage: `~/.eyrie/projects/<project-id>.json`
+
+**Project Status Transitions:**
+- Initial state on creation: `"active"`
+- Valid states: `"active"`, `"paused"`, `"completed"`, `"archived"`
+- Allowed transitions: active→paused, paused→active, active→completed, paused→completed, completed→archived
+- Completing a project is a terminal state (no reopen); archiving removes it from active views
 
 ## Agents Creating Agents: HTTP REST API
 
@@ -143,6 +164,8 @@ URL: http://127.0.0.1:7200
 ### Create an agent
 POST /api/instances
 Body: {"name": "researcher", "framework": "openclaw", "persona_id": "research-analyst", "project_id": "...", "auto_start": true}
+Response: {"id": "...", "name": "...", "status": "created"|"running"|"error", "port": N, ...}
+Note: auto_start=true attempts synchronous start; on failure status becomes "error" but instance is still created
 
 ### List agents
 GET /api/instances
@@ -288,7 +311,7 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 |------|---------|
 | `internal/instance/instance.go` | Instance struct |
 | `internal/instance/store.go` | Instance CRUD (JSON, mutex-protected) |
-| `internal/instance/ports.go` | Port allocation (43000-43999) |
+| `internal/instance/ports.go` | Port allocation: sequential scan of 43000-43999, skipping ports used by existing instances (in-memory map) and probing OS availability via `portAvailable()` (bind test); returns error when range exhausted |
 | `internal/instance/provisioner.go` | Config gen, workspace scaffolding, identity rendering |
 | `internal/project/project.go` | Project struct |
 | `internal/project/store.go` | Project CRUD |
@@ -327,30 +350,38 @@ Instance and Project IDs use full UUIDs (not truncated) to ensure collision resi
 ### Storage Safety
 - All JSON writes in the store modules should use atomic write patterns (write to .tmp then rename)
 - File permissions for session data use 0o600 to avoid world-readable secrets
-- Instance IDs are validated against a safe character set before use in file paths (path traversal prevention)
-- Persona IDs are sanitized via filepath.Base before constructing paths
+- Instance IDs are validated by `validateID()` in `store.go` using regex `^[a-zA-Z0-9_-]+$` (matches RFC4122 UUIDs and custom slug IDs); returns `"invalid instance ID %q: must contain only alphanumerics, hyphens, and underscores"` on failure
+- Persona IDs are validated in `persona/store.go` via `id != filepath.Base(id)` check (rejects path separators, `.`, `..`) plus non-empty check; returns `"invalid persona ID %q"` on failure
 - Consider migrating to SQLite/BoltDB for transactional guarantees if corruption becomes an issue
 
 ### Coordinator Uniqueness
 - The `handleSetCommander` endpoint rejects requests that provide both `instance_id` and `agent_name`
 - Only one coordinator is stored in `coordinator.json` at a time; setting a new one replaces the old
+- `coordinator.json` schema: `{"instance_id": "string (optional)", "agent_name": "string (optional)"}` — exactly one field must be set; stored at `~/.eyrie/commander.json`
+- Migration: if `coordinator.json` does not exist, the hierarchy page shows a setup wizard; no migration is needed since the file is created on first commander assignment
 - The hierarchy page shows a setup wizard when no coordinator is configured
 
 ### API Security (Future Work)
-- Per-instance API tokens (token issuance at instance creation) — OpenClaw instances already get auth tokens
+- Per-instance API tokens (token issuance at instance creation) — OpenClaw instances already get auth tokens via `inst.AuthToken`
+- Agent-to-agent creation endpoints should require token authentication: middleware checks `Authorization: Bearer <token>` against the calling instance's AuthToken, rejects with 401/403 and logs the attempt
 - Scope-based authorization (coordinator → captain → talon chain)
-- Audit logging for API calls
+- Audit logging for API calls (successful and failed creation attempts)
 - Rate limiting middleware
-- Token validation middleware for agent-to-agent API calls
+- Token validation middleware for agent-to-agent API calls — gate creation workflow behind this middleware or a feature flag
 
 ### Error Handling
-- Server handlers distinguish 404 (not found) from 500 (internal error) for store operations
+- Server handlers distinguish 404 (not found) from 500 (internal error) using sentinel errors (`instance.ErrNotFound`, `project.ErrNotFound`, `persona.ErrNotFound`) and `errors.Is()` — no string matching
+- Provisioning validation errors use sentinels (`instance.ErrNameExists`, `instance.ErrRequiredField`, `instance.ErrUnsupportedFramework`) → HTTP 400; all other errors → HTTP 500 with slog.Error
 - Discovery errors are logged but non-fatal (degraded discovery is better than no discovery)
-- Instance provisioning errors clean up partially-created directories
+- Instance provisioning errors clean up partially-created directories via `os.RemoveAll(instDir)` at each failure point in `Provision()`; provisioning is safe to retry with the same name after cleanup since the name uniqueness check runs at the start
 
 ### Process Monitoring (Instance struct fields)
 - PID, LastSeen, HealthStatus, RestartCount are tracked on Instance
 - These fields use `omitempty` to avoid breaking existing instance.json files
+- HealthStatus uses states: `"healthy"`, `"unhealthy"`, `"unknown"` (default on creation)
+- RestartCount is incremented by the lifecycle manager on each restart action
+- LastSeen is updated when a successful health check or activity event is received
+- Future: a `monitorInstanceHealth` goroutine on a configurable interval (e.g. 10s) to poll health endpoints and update these fields automatically
 
 ## Backward Compatibility
 

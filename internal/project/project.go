@@ -4,9 +4,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -88,10 +90,12 @@ func (s *Store) List() ([]Project, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
 		if err != nil {
+			slog.Warn("failed to read project file", "file", entry.Name(), "error", err)
 			continue
 		}
 		var p Project
 		if err := json.Unmarshal(data, &p); err != nil {
+			slog.Warn("failed to unmarshal project file", "file", entry.Name(), "error", err)
 			continue
 		}
 		projects = append(projects, p)
@@ -121,6 +125,10 @@ func (s *Store) Get(id string) (*Project, error) {
 }
 
 func (s *Store) Create(req CreateRequest) (*Project, error) {
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, fmt.Errorf("project Name is required")
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -180,6 +188,9 @@ func (s *Store) Delete(id string) error {
 func (s *Store) AddAgent(projectID, instanceID string) error {
 	if err := validateProjectID(projectID); err != nil {
 		return err
+	}
+	if strings.TrimSpace(instanceID) == "" {
+		return fmt.Errorf("instanceID is required")
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
