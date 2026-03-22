@@ -193,23 +193,25 @@ func (s *Server) handleSetCommander(w http.ResponseWriter, r *http.Request) {
 // and returns the session key so the frontend can navigate to it.
 func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	ref := loadCommanderRef()
-	agentName := ref.AgentName
-	if agentName == "" {
-		agentName = ref.InstanceID
-	}
-	if agentName == "" {
+	if ref.AgentName == "" && ref.InstanceID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no commander set"})
 		return
 	}
 
-	// Find the agent
+	// Find the agent — match by AgentName or InstanceID
 	disc := s.runDiscovery(r.Context())
 	var found *discovery.AgentResult
 	for i := range disc.Agents {
-		if disc.Agents[i].Agent.Name == agentName {
+		a := disc.Agents[i].Agent
+		if (ref.AgentName != "" && a.Name == ref.AgentName) ||
+			(ref.InstanceID != "" && a.Name == ref.InstanceID) {
 			found = &disc.Agents[i]
 			break
 		}
+	}
+	agentName := ref.AgentName
+	if agentName == "" {
+		agentName = ref.InstanceID
 	}
 	if found == nil || !found.Alive {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "commander agent not found or not running"})
@@ -312,21 +314,21 @@ You create both Captains and Talons. Captains manage their Talons day-to-day but
 
 ## Getting started
 
-Use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1:7200. Do NOT use web_fetch — it blocks localhost. Use curl instead:
+First, use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1:7200. Do NOT use web_fetch — it blocks localhost. Use curl instead:
 
 1. Fetch the full API reference:
    exec: curl -s http://127.0.0.1:7200/api/reference
 
-2. Save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
-
-3. Review available frameworks and personas (no need to save these — query them fresh each time):
+2. Review available frameworks and personas:
    exec: curl -s http://127.0.0.1:7200/api/registry/frameworks
    exec: curl -s http://127.0.0.1:7200/api/registry/personas
 
-4. Check for existing projects:
+3. Check for existing projects:
    exec: curl -s http://127.0.0.1:7200/api/projects
 
-Then check: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on and what team of agents would be most useful.`
+Next: use your "edit" to save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
+
+Then: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on and what team of agents would be most useful.`
 }
 
 // commanderRef stores either an instance ID or a legacy agent name.
@@ -336,7 +338,13 @@ type commanderRef struct {
 }
 
 func commanderPath() string {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = os.Getenv("HOME")
+	}
+	if home == "" {
+		home = os.TempDir()
+	}
 	return filepath.Join(home, ".eyrie", "commander.json")
 }
 
@@ -353,9 +361,13 @@ func loadCommanderRef() commanderRef {
 }
 
 func saveCommanderRef(ref commanderRef) error {
+	path := commanderPath()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(ref, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(commanderPath(), data, 0o644)
+	return os.WriteFile(path, data, 0o644)
 }

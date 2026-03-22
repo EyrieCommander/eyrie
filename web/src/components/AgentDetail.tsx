@@ -700,7 +700,7 @@ function ChatTab({
       .catch(() => {
         setActiveGroupName(requestedSession || sessionDisplayName(defaultSessionKey));
       });
-  }, [agentName, alive, defaultSessionKey, requestedSession]);
+  }, [agentName, alive, defaultSessionKey, requestedSession, briefMode]);
 
   const prevGroupRef = useRef<string>("");
   const loadGroup = useCallback(
@@ -883,7 +883,7 @@ function ChatTab({
             const updated = [...prev];
             let idx = -1;
             for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].tool === ev.tool && !updated[i].done) { idx = i; break; }
+              if (((ev.tool_id && updated[i].toolId === ev.tool_id) || (!ev.tool_id && updated[i].tool === ev.tool)) && !updated[i].done) { idx = i; break; }
             }
             if (idx >= 0) {
               updated[idx] = { ...updated[idx], output: ev.output, success: ev.success, done: true };
@@ -963,7 +963,7 @@ function ChatTab({
             const updated = [...prev];
             let idx = -1;
             for (let i = updated.length - 1; i >= 0; i--) {
-              if (updated[i].tool === ev.tool && !updated[i].done) {
+              if (((ev.tool_id && updated[i].toolId === ev.tool_id) || (!ev.tool_id && updated[i].tool === ev.tool)) && !updated[i].done) {
                 idx = i;
                 break;
               }
@@ -1078,8 +1078,12 @@ function ChatTab({
         if (group.current) {
           await safeDestroySession(group.current.key);
         }
-        setActiveGroupName("main");
-        refreshSessions();
+        // Switch to first remaining group after deletion
+        const resp = await fetchSessions(agentName);
+        const all = resp.sessions ?? [];
+        setSessions(all);
+        const gs = groupSessions(all);
+        setActiveGroupName(gs[0]?.name ?? "");
       } catch (e) {
         console.error(e);
         refreshSessions();

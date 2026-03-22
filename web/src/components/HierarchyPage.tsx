@@ -127,9 +127,9 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
   const [personaId, setPersonaId] = useState("");
 
   useEffect(() => {
-    fetchAgents().then(setAgents).catch(() => {});
-    fetchFrameworks().then(setFrameworks).catch(() => {});
-    fetchPersonas().then(setPersonas).catch(() => {});
+    fetchAgents().then(setAgents).catch((e) => console.error("Failed to discover agents:", e));
+    fetchFrameworks().then(setFrameworks).catch((e) => console.error("Failed to fetch frameworks:", e));
+    fetchPersonas().then(setPersonas).catch((e) => console.error("Failed to fetch personas:", e));
   }, []);
 
   const handleSelectExisting = async (agentName: string) => {

@@ -83,7 +83,15 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	provisioner := instance.NewProvisioner(store)
 	inst, err := provisioner.Provision(req, pers)
 	if err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		// Validation errors (name exists, bad framework, etc.) get 400; others get 500
+		if strings.Contains(err.Error(), "already exists") ||
+			strings.Contains(err.Error(), "is required") ||
+			strings.Contains(err.Error(), "unsupported framework") {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		} else {
+			slog.Error("instance provisioning failed", "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to provision instance"})
+		}
 		return
 	}
 
@@ -154,7 +162,12 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 
 	inst, err := store.Get(id)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		if strings.Contains(err.Error(), "not found") {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			slog.Error("failed to get instance for deletion", "id", id, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to get instance"})
+		}
 		return
 	}
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"sort"
 	"strings"
@@ -660,8 +661,15 @@ func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, _ string) (*
 }
 
 func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error) {
+	// Activate the target session if specified, so the CLI uses it
+	if sessionKey != "" {
+		if err := z.ActivateSession(ctx, sessionKey); err != nil {
+			// Non-fatal: log and continue with whatever session is active
+			fmt.Fprintf(os.Stderr, "eyrie: failed to activate session %s: %v\n", sessionKey, err)
+		}
+	}
+
 	// Use the CLI agent path for full history, tools, and memory support.
-	// The WebSocket gateway is single-turn only and doesn't load session context.
 	args := []string{"agent", "-m", message}
 
 	cmd := exec.CommandContext(ctx, "zeroclaw", args...)
@@ -681,7 +689,6 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		var full strings.Builder
 		for scanner.Scan() {
 			line := scanner.Text()
-			// Filter out CLI log lines (ANSI-colored timestamps, INFO/WARN/ERROR prefixes)
 			stripped := ansiRe.ReplaceAllString(line, "")
 			if isLogLine(stripped) {
 				continue
@@ -695,7 +702,13 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 				return
 			}
 		}
-		cmd.Wait()
+		if err := cmd.Wait(); err != nil {
+			select {
+			case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("zeroclaw agent exited: %v", err)}:
+			case <-ctx.Done():
+			}
+			return
+		}
 		content := strings.TrimSpace(full.String())
 		select {
 		case ch <- ChatEvent{Type: "done", Content: content}:

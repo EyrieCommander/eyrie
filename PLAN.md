@@ -58,7 +58,7 @@ type Persona struct {
     MemorySeeds []string `json:"memory_seeds,omitempty"`
 
     // NEW: Hierarchy role this persona is designed for
-    HierarchyRole string `json:"hierarchy_role,omitempty"` // "commander", "captain", "talon"
+    HierarchyRole HierarchyRole `json:"hierarchy_role,omitempty"` // Uses the HierarchyRole type
 }
 ```
 
@@ -179,7 +179,9 @@ DELETE /api/projects/{id}                # Archive project
 
 ### Hierarchy Endpoint (`internal/server/hierarchy.go`)
 ```
-GET    /api/hierarchy                    # Full tree: coordinator -> projects -> agents
+GET    /api/hierarchy                    # Full tree: commander -> projects -> agents
+POST   /api/hierarchy/commander          # Set the commander (body: {"instance_id": "..."} or {"agent_name": "..."} — mutually exclusive)
+POST   /api/hierarchy/commander/brief    # Send commander briefing (SSE stream)
 ```
 
 ## Storage Layout

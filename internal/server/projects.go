@@ -86,30 +86,30 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var update struct {
-		Name           string `json:"name,omitempty"`
-		Description    string `json:"description,omitempty"`
-		Goal           string `json:"goal,omitempty"`
-		Status         string `json:"status,omitempty"`
-		OrchestratorID string `json:"orchestrator_id,omitempty"`
+		Name           *string `json:"name"`
+		Description    *string `json:"description"`
+		Goal           *string `json:"goal"`
+		Status         *string `json:"status"`
+		OrchestratorID *string `json:"orchestrator_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
 		return
 	}
-	if update.Name != "" {
-		p.Name = update.Name
+	if update.Name != nil {
+		p.Name = *update.Name
 	}
-	if update.Description != "" {
-		p.Description = update.Description
+	if update.Description != nil {
+		p.Description = *update.Description
 	}
-	if update.Goal != "" {
-		p.Goal = update.Goal
+	if update.Goal != nil {
+		p.Goal = *update.Goal
 	}
-	if update.Status != "" {
-		p.Status = update.Status
+	if update.Status != nil {
+		p.Status = *update.Status
 	}
-	if update.OrchestratorID != "" {
-		p.OrchestratorID = update.OrchestratorID
+	if update.OrchestratorID != nil {
+		p.OrchestratorID = *update.OrchestratorID
 	}
 
 	if err := store.Save(*p); err != nil {
@@ -142,7 +142,11 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		InstanceID string `json:"instance_id"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.InstanceID == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if body.InstanceID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance_id is required"})
 		return
 	}

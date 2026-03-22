@@ -11,20 +11,12 @@ const (
 	PortRangeEnd   = 43999
 )
 
-// reservedPorts are used by known framework defaults and Eyrie itself.
-var reservedPorts = map[int]bool{
-	42617: true, // ZeroClaw default
-	18789: true, // OpenClaw default
-	7200:  true, // Eyrie dashboard
-}
-
 // AllocatePort finds the first available port in the instance range
-// that is not used by any existing instance or reserved.
+// (43000-43999) that is not used by any existing instance.
+// Known framework ports (42617, 18789, 7200) are outside this range
+// and don't need explicit reservation.
 func AllocatePort(existing []Instance) (int, error) {
-	used := make(map[int]bool, len(existing)+len(reservedPorts))
-	for k, v := range reservedPorts {
-		used[k] = v
-	}
+	used := make(map[int]bool, len(existing))
 	for _, inst := range existing {
 		used[inst.Port] = true
 	}

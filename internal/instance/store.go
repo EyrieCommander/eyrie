@@ -86,7 +86,7 @@ func (s *Store) Get(id string) (*Instance, error) {
 	return &inst, nil
 }
 
-// Save writes instance metadata to disk.
+// Save writes instance metadata to disk atomically.
 func (s *Store) Save(inst Instance) error {
 	if err := validateID(inst.ID); err != nil {
 		return err
@@ -102,7 +102,7 @@ func (s *Store) Save(inst Instance) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.metaPath(inst.ID), data, 0o644)
+	return atomicWrite(s.metaPath(inst.ID), data, 0o644)
 }
 
 // UpdateStatus updates just the status field for an instance.
@@ -126,7 +126,7 @@ func (s *Store) UpdateStatus(id, status string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.metaPath(id), out, 0o644)
+	return atomicWrite(s.metaPath(id), out, 0o644)
 }
 
 // Delete removes an instance directory and all its contents.
@@ -182,4 +182,33 @@ func validateID(id string) error {
 
 func (s *Store) metaPath(id string) string {
 	return filepath.Join(s.dir, id, "instance.json")
+}
+
+// atomicWrite writes data to a temp file then renames to the target path.
+func atomicWrite(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpName)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	if err := os.Chmod(tmpName, perm); err != nil {
+		os.Remove(tmpName)
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

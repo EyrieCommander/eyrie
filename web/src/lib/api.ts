@@ -575,6 +575,7 @@ export function streamCommanderBriefing(
 ): { controller: AbortController; sessionReady: Promise<string> } {
   const controller = new AbortController();
   let resolveSession: (key: string) => void;
+  let sessionResolved = false;
   const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
   (async () => {
     try {
@@ -605,7 +606,7 @@ export function streamCommanderBriefing(
             try {
               const ev = JSON.parse(line.slice(6));
               if (ev.type === "session" && ev.session_key) {
-                resolveSession!(ev.session_key);
+                resolveSession!(ev.session_key); sessionResolved = true;
               }
               onEvent(ev);
             } catch { /* skip */ }
@@ -617,7 +618,7 @@ export function streamCommanderBriefing(
             try {
               const ev = JSON.parse(buffer.slice(6));
               if (ev.type === "session" && ev.session_key) {
-                resolveSession!(ev.session_key);
+                resolveSession!(ev.session_key); sessionResolved = true;
               }
               onEvent(ev);
             } catch { /* skip */ }
@@ -625,11 +626,13 @@ export function streamCommanderBriefing(
           break;
         }
       }
+      // Ensure promise settles even if no session event was received
+      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         onEvent({ type: "error", error: e instanceof Error ? e.message : "Briefing failed" });
       }
-      resolveSession!("");
+      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
     }
   })();
   return { controller, sessionReady };

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -50,8 +51,14 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	// Check store first (installed personas may be customized)
 	store, err := persona.NewStore()
 	if err == nil {
-		if p, err := store.Get(id); err == nil {
+		p, storeErr := store.Get(id)
+		if storeErr == nil {
 			writeJSON(w, http.StatusOK, p)
+			return
+		}
+		if !errors.Is(storeErr, persona.ErrNotFound) {
+			slog.Error("failed to read persona from store", "id", id, "error", storeErr)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to read persona"})
 			return
 		}
 	}
@@ -141,7 +148,16 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ensure ID matches route
+	// Verify persona exists before updating
+	if _, err := store.Get(id); err != nil {
+		if errors.Is(err, persona.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("persona %q not found", id)})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to check persona"})
+		}
+		return
+	}
+
 	p.ID = id
 	p.Installed = true
 

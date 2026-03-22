@@ -4,12 +4,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 )
+
+const maxPersonaCatalogSize = 5 * 1024 * 1024 // 5 MB
 
 
 // DefaultCatalogURL returns the persona catalog URL, checking the
@@ -23,7 +27,9 @@ func DefaultCatalogURL() string {
 	if err != nil {
 		return "file://./personas.example.json"
 	}
-	return "file://" + filepath.Join(home, ".eyrie", "cache", "personas.json")
+	p := filepath.Join(home, ".eyrie", "cache", "personas.json")
+	u := url.URL{Scheme: "file", Path: p}
+	return u.String()
 }
 
 // CatalogClient fetches the curated persona catalog.
@@ -38,8 +44,8 @@ func NewCatalogClient(catalogURL string) (*CatalogClient, error) {
 		catalogURL = DefaultCatalogURL()
 	}
 	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
+	if err != nil || home == "" {
+		home = "."
 	}
 	cacheDir := filepath.Join(home, ".eyrie", "cache")
 	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
@@ -94,7 +100,7 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 	}
 
 	var reg PersonaRegistry
-	if err := json.NewDecoder(resp.Body).Decode(&reg); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxPersonaCatalogSize)).Decode(&reg); err != nil {
 		return nil, fmt.Errorf("parse persona catalog: %w", err)
 	}
 	_ = c.saveCache(&reg)

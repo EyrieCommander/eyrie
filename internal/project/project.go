@@ -6,11 +6,24 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var validProjectIDRe = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func validateProjectID(id string) error {
+	if id == "" {
+		return fmt.Errorf("project ID is empty")
+	}
+	if !validProjectIDRe.MatchString(id) {
+		return fmt.Errorf("invalid project ID %q", id)
+	}
+	return nil
+}
 
 // ErrNotFound is returned when a project does not exist.
 var ErrNotFound = errors.New("project not found")
@@ -87,6 +100,9 @@ func (s *Store) List() ([]Project, error) {
 }
 
 func (s *Store) Get(id string) (*Project, error) {
+	if err := validateProjectID(id); err != nil {
+		return nil, err
+	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -133,6 +149,9 @@ func (s *Store) Create(req CreateRequest) (*Project, error) {
 }
 
 func (s *Store) Save(p Project) error {
+	if err := validateProjectID(p.ID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -145,6 +164,9 @@ func (s *Store) Save(p Project) error {
 }
 
 func (s *Store) Delete(id string) error {
+	if err := validateProjectID(id); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -156,6 +178,9 @@ func (s *Store) Delete(id string) error {
 
 // AddAgent adds a role agent to a project.
 func (s *Store) AddAgent(projectID, instanceID string) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -189,6 +214,9 @@ func (s *Store) AddAgent(projectID, instanceID string) error {
 
 // RemoveAgent removes a role agent from a project.
 func (s *Store) RemoveAgent(projectID, instanceID string) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

@@ -52,25 +52,25 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		return nil, fmt.Errorf("unsupported framework %q", req.Framework)
 	}
 
-	// Check name uniqueness
+	// Reserve name and port under lock, then release for I/O
 	p.store.mu.Lock()
-	defer p.store.mu.Unlock()
-
 	existing, err := p.store.listLocked()
 	if err != nil {
+		p.store.mu.Unlock()
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
 	for _, inst := range existing {
 		if inst.Name == req.Name {
+			p.store.mu.Unlock()
 			return nil, fmt.Errorf("instance name %q already exists", req.Name)
 		}
 	}
-
-	// Allocate port
 	port, err := AllocatePort(existing)
 	if err != nil {
+		p.store.mu.Unlock()
 		return nil, fmt.Errorf("port allocation failed: %w", err)
 	}
+	p.store.mu.Unlock()
 
 	// Generate ID and paths
 	id := uuid.New().String()

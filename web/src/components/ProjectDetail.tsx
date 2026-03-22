@@ -193,7 +193,7 @@ function AddAgentDialog({
           </button>
           <button
             onClick={handleCreate}
-            disabled={creating || !name}
+            disabled={creating || !name.trim()}
             className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
           >
             {creating ? "creating..." : "create agent"}

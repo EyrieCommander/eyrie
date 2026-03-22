@@ -35,7 +35,7 @@ type Instance struct {
 	Port          int           `json:"port"`
 	ConfigPath    string        `json:"config_path"`
 	WorkspacePath string        `json:"workspace_path"`
-	AuthToken     string        `json:"auth_token,omitempty"` // gateway auth token (OpenClaw)
+	AuthToken     string        `json:"-"` // gateway auth token — excluded from JSON output for security
 	Status        string        `json:"status"`               // "created", "running", "stopped", "error"
 	PID           int           `json:"pid,omitempty"`
 	LastSeen      time.Time     `json:"last_seen,omitempty"`

@@ -91,9 +91,9 @@ export default function PersonaCard({
 
       {/* Traits */}
       <div className="flex flex-wrap gap-1.5 mb-3">
-        {persona.traits.slice(0, 3).map((trait) => (
+        {persona.traits.slice(0, 3).map((trait, idx) => (
           <span
-            key={trait}
+            key={`${trait}-${idx}`}
             className="text-[10px] px-2 py-0.5 rounded-full bg-surface text-text-muted"
           >
             {trait}
