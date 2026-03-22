@@ -746,11 +746,17 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		defer close(ch)
 		defer conn.CloseNow()
 
-		// Phase 1: Wait for session_start frame (upstream sends this immediately)
+		// Phase 1: Wait for session_start frame with timeout
+		startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer startCancel()
 		sessionStarted := false
 		for !sessionStarted {
-			_, data, err := conn.Read(ctx)
+			_, data, err := conn.Read(startCtx)
 			if err != nil {
+				select {
+				case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("waiting for session_start: %v", err)}:
+				case <-ctx.Done():
+				}
 				return
 			}
 			var frame map[string]any
@@ -761,6 +767,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 				sessionStarted = true
 			}
 		}
+		startCancel() // release the timeout context early
 
 		// Phase 2: Send the user message
 		msg := map[string]string{
@@ -769,6 +776,10 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		}
 		outgoing, _ := json.Marshal(msg)
 		if err := conn.Write(ctx, websocket.MessageText, outgoing); err != nil {
+			select {
+			case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("sending message: %v", err)}:
+			case <-ctx.Done():
+			}
 			return
 		}
 
@@ -877,10 +888,22 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 	return ch, nil
 }
 
+// safeSessionKey validates that a session key is safe for use in file paths.
+// Rejects empty strings, path separators, and traversal sequences.
+func safeSessionKey(key string) bool {
+	if key == "" || key == "." || key == ".." {
+		return false
+	}
+	if strings.ContainsAny(key, "/\\") || strings.Contains(key, "..") {
+		return false
+	}
+	return key == filepath.Base(key)
+}
+
 // saveEnrichedMessage appends a ChatMessage (with tool call parts) to Eyrie's
 // session JSONL store at ~/.eyrie/sessions/{agentName}/{sessionKey}.jsonl.
 func (z *ZeroClawAdapter) saveEnrichedMessage(sessionKey string, msg *ChatMessage) {
-	if sessionKey == "" {
+	if !safeSessionKey(sessionKey) {
 		return
 	}
 	home, err := os.UserHomeDir()
@@ -908,7 +931,7 @@ func (z *ZeroClawAdapter) saveEnrichedMessage(sessionKey string, msg *ChatMessag
 // loadEnrichedMessages reads all enriched messages for a session from Eyrie's
 // JSONL store. Returns nil if the file doesn't exist.
 func (z *ZeroClawAdapter) loadEnrichedMessages(sessionKey string) []ChatMessage {
-	if sessionKey == "" {
+	if !safeSessionKey(sessionKey) {
 		return nil
 	}
 	home, err := os.UserHomeDir()

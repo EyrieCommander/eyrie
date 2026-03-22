@@ -111,7 +111,12 @@ func parseOpenClawLogLine(raw string) *LogEntry {
 
 	level := "info"
 	component := m[2]
-	msg := m[3]
+	msg := strings.TrimSpace(m[3])
+
+	// Skip empty log messages (e.g., health probe noise)
+	if msg == "" {
+		return nil
+	}
 
 	if strings.Contains(strings.ToLower(msg), "error") {
 		level = "error"

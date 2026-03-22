@@ -246,6 +246,11 @@ func (o *OpenClawAdapter) readLogStream(ctx context.Context, conn *websocket.Con
 			entry.Level = l
 		}
 
+		// Skip empty log messages (health probe noise)
+		if strings.TrimSpace(entry.Message) == "" {
+			continue
+		}
+
 		select {
 		case ch <- entry:
 		case <-ctx.Done():

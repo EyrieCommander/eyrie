@@ -19,6 +19,10 @@
 - [ ] **Talon management**: Captains need a way to communicate tasks to their Talons and track progress.
 - [ ] **Cross-agent messaging**: Agents in the same project should be able to send messages to each other through Eyrie.
 
+## Bugs
+
+- [ ] **Config editor corrupts TOML**: The config editor serializes the full ZeroClaw schema, converting integers to floats (`port = 43000.0`), arrays to strings (`allowed_commands = "["`), and expanding every field. This breaks `scanZeroClawConfig` parsing and agent discovery. The editor should preserve the original format or only write changed fields.
+
 ## UI
 
 - [ ] **Hierarchy page**: Show agent status (running/stopped) with live refresh.
