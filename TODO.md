@@ -1,45 +1,79 @@
 # Eyrie TODO
 
+## Current State (2026-03-23)
+
+**Branch:** `feature/project-orchestrator`
+
+### What's working:
+- Commander system: select existing agent, briefing flow, hierarchy page
+- Agent instances: provisioning ZeroClaw instances with own config/workspace/port
+- Named sessions on ZeroClaw 0.5.7 (upstream merged our PR #4267 as #4275)
+- Streaming tool events on ZeroClaw (PR #4350 submitted, passing tests)
+- Project CRUD with captain assignment
+- Project group chat: backend (SSE streaming, per-agent sessions, @mention routing)
+- Project group chat: frontend (messages, @mention autocomplete with keyboard nav)
+- Agent lifecycle: start/stop/restart (including provisioned instances)
+- Session management: time-gap spacers, most-recent-first tabs, reset/delete
+- Chat history from ZeroClaw's SQLite session DB + JSONL enrichment
+
+### Next steps (in order):
+1. **Test project chat end-to-end** — clear chess coach chat, click "start project chat", verify commander introduces project and captain takes over
+2. **Fix captain not responding to briefing** — captain receives briefing but doesn't respond (may be a ZeroClaw tool execution issue with the kimi model)
+3. **OpenClaw observe-group** — use `requireMention: true` for OpenClaw agents in project chat so they silently observe without wasting LLM calls
+4. **Commander creating agents via API** — the vision is the commander calling `POST /api/instances` during conversation to provision talons
+5. **Cross-agent message sync** — after an agent responds in project chat, forward its response to other agents' sessions
+
+### ZeroClaw PRs:
+- **#4275 (named sessions)**: Merged ✅ (our #4267 was superseded)
+- **#4350 (streaming tool events)**: Open, all checks pass (3 tests, clippy clean)
+- **feature/named-sessions** branch: can be deleted (superseded)
+- **feature/streaming-tool-events** branch: active, rebased on 0.5.9
+
+---
+
 ## Security
 
-- [ ] **Agent-to-Eyrie API access**: Currently requires adding `allowedHostnames: ["127.0.0.1"]` to OpenClaw's SSRF policy. This is a manual config change that weakens OpenClaw's security boundary. For production, explore:
+- [ ] **Agent-to-Eyrie API access**: Currently agents use `curl` via `exec` tool to reach Eyrie's API at localhost:7200. OpenClaw's `web_fetch` blocks private IPs (SSRF policy). For production, explore:
   - Eyrie as an MCP server (agents connect via MCP protocol instead of HTTP)
   - Tailscale-based access (Eyrie binds to Tailscale IP, avoids private IP issue)
   - Agent-specific API tokens with scoped permissions
   - mTLS between agents and Eyrie
-  - A dedicated Eyrie CLI tool that agents invoke instead of web_fetch
-- [ ] **Auto-pairing for provisioned instances**: Currently provisioned ZeroClaw instances disable pairing (`require_pairing = false`) for simplicity. For production, Eyrie should auto-pair: start the daemon, capture the pairing code from stdout, call `POST /pair`, and save the auth token. This keeps the security model intact while automating the handshake.
-  - **Secure token storage**: The saved auth token must be stored securely — use restrictive file permissions (0o600) at minimum, and prefer OS keyring integration (macOS Keychain, Linux secret-service) or encrypted file storage when available. Tokens should support rotation/refresh and the storage path should be under `~/.eyrie/tokens/` (separate from instance configs). When agent-specific API token middleware is implemented, use the same secure storage for those tokens.
-- [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. This can lead to dozens of stale daemons accumulating. Before starting a new daemon, check for and kill any existing process on the target port.
+- [ ] **Auto-pairing for provisioned instances**: Currently provisioned ZeroClaw instances disable pairing (`require_pairing = false`). For production, Eyrie should auto-pair: start the daemon, capture the pairing code from stdout, call `POST /pair`, and save the auth token.
+  - **Secure token storage**: Use restrictive file permissions (0o600) at minimum, prefer OS keyring integration. Tokens should support rotation/refresh under `~/.eyrie/tokens/`.
+- [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. Before starting a new daemon, check for and kill any existing process on the target port.
 
 ## Functionality
 
-- [ ] **Commander briefing session**: When the agent can't fetch localhost, the briefing includes all data inline. Need a cleaner solution for frameworks that block private network access.
-- [ ] **Instance provisioning**: Test creating actual agent instances via the API — verify config generation, port allocation, and process startup work end-to-end for each framework.
-- [ ] **Captain flow**: After Commander creates a project and Captain, the Captain should receive its own briefing with project context.
-- [ ] **Talon management**: Captains need a way to communicate tasks to their Talons and track progress.
-- [ ] **Cross-agent messaging**: Agents in the same project should be able to send messages to each other through Eyrie.
+- [ ] **Project group chat**: Test end-to-end flow (commander intro → captain takes over → user conversation)
+- [ ] **Captain briefing**: Captain should silently bootstrap (fetch API ref, save TOOLS.md) without introducing itself — introduction happens in group chat
+- [ ] **Instance provisioning for all frameworks**: Currently only ZeroClaw tested. Need OpenClaw and Hermes instance provisioning (config gen, port alloc, startup)
+- [ ] **Commander creating agents**: Commander should be able to call `POST /api/instances` via curl to provision talons during conversation
+- [ ] **Cross-agent messaging**: After an agent responds in project chat, sync the response to other participants' sessions
+- [ ] **ZeroClaw observe-group**: Cherry-pick or reimplement `observe_group` from closed PR #4328 so ZeroClaw agents can store group history without responding
+- [ ] **OpenClaw observe-group**: Use native `requireMention: true` in group config for project chat participants
 
 ## Bugs
 
-- [ ] **Config editor corrupts TOML**: The config editor serializes the full ZeroClaw schema, converting integers to floats (`port = 43000.0`), arrays to strings (`allowed_commands = "["`), and expanding every field. This breaks `scanZeroClawConfig` parsing and agent discovery. The editor should preserve the original format or only write changed fields.
+- [ ] **Config editor corrupts TOML**: Serializes full schema, converting integers to floats, arrays to strings. Breaks `scanZeroClawConfig` parsing and agent discovery.
+- [ ] **OpenClaw log noise**: Empty `[info]` lines appear every 30 seconds from HTTP health probe. Low priority but noisy.
+- [ ] **Discovery timing**: Newly created instances show "Agent not found" for a few seconds before discovery picks them up. Added yellow provisioning state but race window still exists.
 
 ## UI
 
-- [ ] **Hierarchy page**: Show agent status (running/stopped) with live refresh.
-- [ ] **Project detail**: Add activity timeline showing what each agent is doing.
-- [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept).
-- [ ] **Session management**: The session group delete button needs testing across all frameworks (currently only OpenClaw supports DestroySession).
+- [ ] **Hierarchy page**: Show agent status (running/stopped) with live refresh
+- [ ] **Project detail**: Add activity timeline showing what each agent is doing
+- [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept)
+- [ ] **Session management**: Test session group delete across all frameworks
 
 ## Integrations
 
-- [ ] **Telegram bridge for project chat**: Mirror Eyrie project conversations into Telegram groups for mobile access. Each project maps to a Telegram group; agents respond via their existing Telegram channel support (`mention_only` mode). Eyrie remains the source of truth.
-- [ ] **Discord bridge for project chat**: Same as Telegram bridge but for Discord servers/channels. Leverage ZeroClaw's existing Discord channel support with per-channel-ID sessions.
-- [ ] **Slack bridge**: Optional integration for teams already using Slack for coordination.
+- [ ] **Telegram bridge for project chat**: Mirror Eyrie project conversations into Telegram groups for mobile access
+- [ ] **Discord bridge for project chat**: Same as Telegram bridge for Discord
+- [ ] **Slack bridge**: Optional for teams using Slack
 
 ## Architecture
 
-- [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/Hermes (like Telegram or Discord). Agents would see project messages via their `Channel` trait with native group behavior (`mention_only`, per-chat sessions, `ChannelMessage` struct). Builds on top of the current WebSocket-based project chat — not a replacement, but a deeper integration.
-- [ ] **PicoClaw support**: Add as a fourth framework option — even lighter than ZeroClaw for simple Talon roles.
-- [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev Talon + marketing Talon + research Talon).
-- [ ] **Agent-to-agent protocol**: Define how agents in a project coordinate (shared context, task handoffs, status updates).
+- [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/Hermes (like Telegram/Discord). Deeper integration than WebSocket-based project chat.
+- [ ] **PicoClaw support**: Fourth framework option — lighter than ZeroClaw for simple Talon roles
+- [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
+- [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)
