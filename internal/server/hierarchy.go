@@ -419,10 +419,12 @@ Use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1
 
 Save the API reference to your TOOLS.md under an "## Eyrie API" heading.
 
-Then introduce yourself to your user, summarize the project goal, and discuss what they need. Based on that conversation, propose:
+You will be added to a group chat with your user and the Commander. When the chat starts, the Commander will introduce the project and hand off to you. At that point, discuss requirements with the user and propose:
 - An initial plan with milestones
 - What Talon agents would be useful (roles, personas, frameworks)
-- What to focus on first`)
+- What to focus on first
+
+Do NOT introduce yourself now — just save the reference and wait for the group chat to begin.`)
 
 	return b.String()
 }

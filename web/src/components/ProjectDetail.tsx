@@ -3,7 +3,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Trash2, Briefcase, ChevronRight, Crown } from "lucide-react";
 import { MessageSquare, Send } from "lucide-react";
 import type { Project, AgentInstance, AgentInfo, Persona, ProjectChatMessage } from "../lib/types";
-import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, createInstance, deleteProject, updateProject, streamCaptainBriefing, fetchProjectChat, streamProjectChat } from "../lib/api";
+import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, fetchHierarchy, createInstance, deleteProject, updateProject, streamCaptainBriefing, fetchProjectChat, streamProjectChat } from "../lib/api";
 
 function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: () => void }) {
   const isProvisioning = instance.status === "created" || instance.status === "provisioning" || instance.status === "starting";
@@ -338,6 +338,7 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
   const [streamingContent, setStreamingContent] = useState("");
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
+  const [mentionIdx, setMentionIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -453,29 +454,30 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
 
       {/* Input */}
       <div className="relative border-t border-border p-3 flex gap-2">
-        {showMentions && (
-          <div className="absolute bottom-full left-3 mb-1 rounded border border-border bg-bg shadow-lg py-1 min-w-[160px]">
-            {participants
-              .filter((p) => !mentionFilter || p.role.includes(mentionFilter) || p.name.includes(mentionFilter))
-              .map((p) => (
+        {showMentions && (() => {
+          const filtered = participants.filter((p) => !mentionFilter || p.role.includes(mentionFilter) || p.name.includes(mentionFilter));
+          if (filtered.length === 0) return null;
+          return (
+            <div className="absolute bottom-full left-3 mb-1 rounded border border-border bg-bg shadow-lg py-1 min-w-[160px]">
+              {filtered.map((p, i) => (
                 <button
                   key={p.name}
                   onClick={() => {
-                    // Replace the @partial with @role
                     const atIdx = input.lastIndexOf("@");
                     const before = atIdx >= 0 ? input.slice(0, atIdx) : input;
                     setInput(before + "@" + p.role + " ");
                     setShowMentions(false);
                     inputRef.current?.focus();
                   }}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-surface-hover"
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left ${i === mentionIdx ? "bg-surface-hover" : "hover:bg-surface-hover"}`}
                 >
                   <span className={`font-bold ${ROLE_COLORS[p.role] || "text-text"}`}>{p.role}</span>
                   <span className="text-text-muted">{p.name}</span>
                 </button>
               ))}
-          </div>
-        )}
+            </div>
+          );
+        })()}
         <input
           ref={inputRef}
           type="text"
@@ -483,19 +485,33 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
           onChange={(e) => {
             const val = e.target.value;
             setInput(val);
-            // Detect @mention trigger
             const atIdx = val.lastIndexOf("@");
             if (atIdx >= 0 && (atIdx === 0 || val[atIdx - 1] === " ")) {
               const partial = val.slice(atIdx + 1).toLowerCase();
               setMentionFilter(partial);
               setShowMentions(true);
+              setMentionIdx(0);
             } else {
               setShowMentions(false);
             }
           }}
           onKeyDown={(e) => {
             if (e.key === "Escape") { setShowMentions(false); return; }
-            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); setShowMentions(false); handleSend(); }
+            if (showMentions) {
+              const filtered = participants.filter((p) => !mentionFilter || p.role.includes(mentionFilter) || p.name.includes(mentionFilter));
+              if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((prev) => Math.min(prev + 1, filtered.length - 1)); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((prev) => Math.max(prev - 1, 0)); return; }
+              if ((e.key === "Enter" || e.key === "Tab") && filtered.length > 0) {
+                e.preventDefault();
+                const p = filtered[mentionIdx];
+                const atIdx = input.lastIndexOf("@");
+                const before = atIdx >= 0 ? input.slice(0, atIdx) : input;
+                setInput(before + "@" + p.role + " ");
+                setShowMentions(false);
+                return;
+              }
+            }
+            if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
           }}
           className="flex-1 rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
           placeholder="type a message... (@ to mention)"
@@ -524,17 +540,22 @@ export default function ProjectDetail() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState<"team" | "chat">("chat");
+  const [commanderName, setCommanderName] = useState("");
 
   const refresh = useCallback(async () => {
     if (!id) return;
     try {
       if (!project) setLoading(true);
       setLoadError("");
-      const [projects, allInstances, allAgents] = await Promise.all([
+      const [projects, allInstances, allAgents, hierarchy] = await Promise.all([
         fetchProjects(),
         fetchInstances(),
         fetchAgents(),
+        fetchHierarchy().catch(() => null),
       ]);
+      if (hierarchy?.commander) {
+        setCommanderName(hierarchy.commander.name);
+      }
       const p = projects.find((p) => p.id === id);
       setProject(p ?? null);
       setAgents(allAgents);
@@ -660,11 +681,9 @@ export default function ProjectDetail() {
         <ProjectChat
           projectId={project.id}
           participants={[
+            ...(commanderName ? [{ name: commanderName, role: "commander" }] : []),
             ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
             ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
-            ...agents.filter((a) => a.name !== captainInstance?.name && a.name !== captainAgent?.name)
-              .slice(0, 1) // commander (first non-captain agent — rough heuristic)
-              .map((a) => ({ name: a.name, role: "commander" })),
             ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
           ]}
         />
