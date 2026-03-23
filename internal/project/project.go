@@ -189,7 +189,8 @@ func (s *Store) AddAgent(projectID, instanceID string) error {
 	if err := validateProjectID(projectID); err != nil {
 		return err
 	}
-	if strings.TrimSpace(instanceID) == "" {
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
 		return fmt.Errorf("instanceID is required")
 	}
 	s.mu.Lock()

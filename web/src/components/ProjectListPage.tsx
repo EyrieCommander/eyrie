@@ -16,7 +16,7 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
     setCreating(true);
     setError("");
     try {
-      await createProject({ name, description, goal: goal || undefined });
+      await createProject({ name: name.trim(), description, goal: goal || undefined });
       onClose();
       onCreated();
     } catch (e) {
@@ -89,7 +89,7 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
           </button>
           <button
             onClick={handleCreate}
-            disabled={creating || !name}
+            disabled={creating || !name.trim()}
             className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
           >
             {creating ? "creating..." : "create"}

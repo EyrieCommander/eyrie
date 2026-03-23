@@ -137,25 +137,46 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
   const [framework, setFramework] = useState("openclaw");
   const [personaId, setPersonaId] = useState("");
 
-  const loadData = useCallback(() => {
+  const loadData = useCallback(async () => {
     setLoadError(null);
-    fetchAgents().then(setAgents).catch((e) => {
-      console.error("Failed to discover agents:", e);
-      setLoadError(e instanceof Error ? e.message : "Failed to discover agents");
-    });
-    fetchFrameworks().then(setFrameworks).catch((e) => {
-      console.error("Failed to fetch frameworks:", e);
-      setLoadError(e instanceof Error ? e.message : "Failed to fetch frameworks");
-    });
-    fetchPersonas().then(setPersonas).catch((e) => {
-      console.error("Failed to fetch personas:", e);
-      setLoadError(e instanceof Error ? e.message : "Failed to fetch personas");
-    });
+    const [agentsResult, frameworksResult, personasResult] = await Promise.allSettled([
+      fetchAgents(),
+      fetchFrameworks(),
+      fetchPersonas(),
+    ]);
+
+    if (agentsResult.status === "fulfilled") setAgents(agentsResult.value);
+    if (frameworksResult.status === "fulfilled") setFrameworks(frameworksResult.value);
+    if (personasResult.status === "fulfilled") setPersonas(personasResult.value);
+
+    const errors: string[] = [];
+    if (agentsResult.status === "rejected") {
+      console.error("Failed to discover agents:", agentsResult.reason);
+      errors.push(agentsResult.reason instanceof Error ? agentsResult.reason.message : "Failed to discover agents");
+    }
+    if (frameworksResult.status === "rejected") {
+      console.error("Failed to fetch frameworks:", frameworksResult.reason);
+      errors.push(frameworksResult.reason instanceof Error ? frameworksResult.reason.message : "Failed to fetch frameworks");
+    }
+    if (personasResult.status === "rejected") {
+      console.error("Failed to fetch personas:", personasResult.reason);
+      errors.push(personasResult.reason instanceof Error ? personasResult.reason.message : "Failed to fetch personas");
+    }
+
+    setLoadError(errors.length > 0 ? errors.join("; ") : null);
   }, []);
 
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Sync default framework selection to an actually-installed framework
+  useEffect(() => {
+    const installedIds = frameworks.filter((f) => f.installed).map((f) => f.id);
+    if (installedIds.length > 0 && !installedIds.includes(framework)) {
+      setFramework(installedIds[0]);
+    }
+  }, [frameworks, framework]);
 
   const handleSelectExisting = async (agentName: string) => {
     setSaving(true);

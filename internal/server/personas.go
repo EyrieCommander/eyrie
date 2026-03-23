@@ -53,6 +53,9 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 
 	// Check store first (installed personas may be customized)
 	store, err := persona.NewStore()
+	if err != nil {
+		slog.Warn("failed to create persona store", "id", id, "error", err)
+	}
 	if err == nil {
 		p, storeErr := store.Get(id)
 		if storeErr == nil {

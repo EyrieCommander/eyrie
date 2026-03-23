@@ -117,6 +117,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {
+			os.RemoveAll(instDir)
 			return nil, fmt.Errorf("failed to create directory %s: %w", d, err)
 		}
 	}

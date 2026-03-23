@@ -180,8 +180,10 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to stop first
-	_ = manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStop)
+	// Try to stop first — log but don't block deletion
+	if stopErr := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
+		slog.Warn("failed to stop instance before deletion", "instance", inst.Name, "framework", inst.Framework, "error", stopErr)
+	}
 
 	if err := store.Delete(id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

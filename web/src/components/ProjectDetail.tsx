@@ -67,7 +67,7 @@ function SetCaptainDialog({
   useEffect(() => {
     fetchInstances().then((all) => {
       setCaptainInstances(all.filter((i) => i.hierarchy_role === "captain" && !i.project_id));
-    }).catch(() => {});
+    }).catch((err) => { console.error("Failed to fetch instances:", err); });
   }, []);
 
   const handleCreate = async () => {
@@ -83,6 +83,8 @@ function SetCaptainDialog({
         auto_start: true,
       });
       await updateProject(projectId, { orchestrator_id: inst.id });
+      // Brief the captain on the project (fire and forget — it runs in background)
+      streamCaptainBriefing(projectId, () => {});
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create captain");
@@ -325,6 +327,7 @@ const ROLE_COLORS: Record<string, string> = {
   commander: "text-accent",
   captain: "text-yellow-400",
   talon: "text-blue-400",
+  system: "text-text-muted",
 };
 
 function ProjectChat({ projectId, participants }: { projectId: string; participants: { name: string; role: string }[] }) {
@@ -386,8 +389,37 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
         {messages.length === 0 && !sending && (
-          <div className="text-center text-xs text-text-muted py-10">
-            no messages yet. start a conversation with your project team.
+          <div className="text-center py-10 space-y-4">
+            <p className="text-xs text-text-muted">
+              start the project chat to bring the team together
+            </p>
+            <button
+              onClick={() => {
+                setSending(true);
+                // Brief the captain first, then initialize the chat
+                const { sessionReady } = streamCaptainBriefing(projectId, () => {});
+                sessionReady.then(() => {
+                  // Send the initialization message
+                  const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
+                    if (event.type === "message" && event.message) {
+                      setMessages((prev) => [...prev, event.message!]);
+                    } else if (event.type === "done") {
+                      setSending(false);
+                    } else if (event.type === "error") {
+                      setSending(false);
+                    }
+                  });
+                  return () => controller.abort();
+                }).catch((err) => {
+                  console.error("Captain briefing failed:", err);
+                  setSending(false);
+                });
+              }}
+              disabled={sending}
+              className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+            >
+              {sending ? "initializing..." : "start project chat"}
+            </button>
           </div>
         )}
         {messages.map((msg) => (
@@ -496,7 +528,7 @@ export default function ProjectDetail() {
   const refresh = useCallback(async () => {
     if (!id) return;
     try {
-      setLoading(true);
+      if (!project) setLoading(true);
       setLoadError("");
       const [projects, allInstances, allAgents] = await Promise.all([
         fetchProjects(),
@@ -529,7 +561,7 @@ export default function ProjectDetail() {
 
   // Poll while any instance is provisioning
   useEffect(() => {
-    const hasProvisioning = instances.some((i) => i.status === "created" || i.status === "provisioning");
+    const hasProvisioning = instances.some((i) => i.status === "created" || i.status === "provisioning" || i.status === "starting");
     if (!hasProvisioning) return;
     const interval = setInterval(refresh, 3000);
     return () => clearInterval(interval);

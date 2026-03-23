@@ -146,6 +146,7 @@ func (s *Store) UpdateStatus(id, status string) error {
 }
 
 // Delete removes an instance directory and all its contents.
+// Returns ErrNotFound if the instance does not exist.
 func (s *Store) Delete(id string) error {
 	if err := validateID(id); err != nil {
 		return err
@@ -154,6 +155,12 @@ func (s *Store) Delete(id string) error {
 	defer s.mu.Unlock()
 
 	dir := filepath.Join(s.dir, id)
+	if _, err := os.Stat(dir); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("instance %q: %w", id, ErrNotFound)
+		}
+		return err
+	}
 	return os.RemoveAll(dir)
 }
 

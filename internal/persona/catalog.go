@@ -27,7 +27,8 @@ func DefaultCatalogURL() string {
 	if err != nil {
 		return "file://./personas.example.json"
 	}
-	p := filepath.Join(home, ".eyrie", "cache", "personas.json")
+	// Source path is distinct from cache path (~/.eyrie/cache/personas.json)
+	p := filepath.Join(home, ".eyrie", "personas.json")
 	u := url.URL{Scheme: "file", Path: p}
 	return u.String()
 }

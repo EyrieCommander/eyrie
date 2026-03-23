@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/project"
 )
 
@@ -240,7 +242,12 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 	proj, err := pStore.Get(projectID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		} else {
+			slog.Error("failed to load project for chat", "project", projectID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		}
 		return
 	}
 
@@ -251,11 +258,14 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	existing, _ := cs.Messages(projectID, 1)
+	firstMessage := len(existing) == 0
+
 	// Parse @mentions
 	mention := parseMention(body.Message)
 
 	userMsg := project.ChatMessage{
-		ID:        uuid.New().String()[:8],
+		ID:        uuid.New().String(),
 		Sender:    "user",
 		Role:      "user",
 		Content:   body.Message,
@@ -265,6 +275,27 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	if err := cs.Append(projectID, userMsg); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save message"})
 		return
+	}
+
+	// On first message, add a system message with project context after the user's message
+	if firstMessage {
+		initContent := fmt.Sprintf(`project "%s" chat started.`, proj.Name)
+		if proj.Goal != "" {
+			initContent += fmt.Sprintf("\ngoal: %s", proj.Goal)
+		}
+		if proj.Description != "" {
+			initContent += fmt.Sprintf("\n%s", proj.Description)
+		}
+		initContent += "\n\n@commander please introduce this project to the captain and get things rolling."
+		initMsg := project.ChatMessage{
+			ID:        uuid.New().String(),
+			Sender:    "eyrie",
+			Role:      "system",
+			Content:   initContent,
+			Timestamp: time.Now(),
+			Mention:   "commander",
+		}
+		_ = cs.Append(projectID, initMsg)
 	}
 
 	// Discover participating agents
@@ -335,7 +366,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 
 		// Store the agent's response in Eyrie's project log
 		agentMsg := project.ChatMessage{
-			ID:        uuid.New().String()[:8],
+			ID:        uuid.New().String(),
 			Sender:    p.name,
 			Role:      p.role,
 			Content:   responseContent,
@@ -356,7 +387,10 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 			// Fire-and-forget: send as a "user" message to their session
 			// so it appears in their conversation history
 			go func(a adapter.Agent, msg, sk string) {
-				_, _ = a.SendMessage(r.Context(), msg, sk)
+				// Use a detached context — r.Context() is cancelled when the handler returns
+				bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_, _ = a.SendMessage(bgCtx, msg, sk)
 			}(otherAgent, labeled, sessionKey)
 		}
 
@@ -378,13 +412,31 @@ type projectParticipant struct {
 	agent adapter.DiscoveredAgent
 }
 
+// resolveInstanceName maps an instance ID or agent name to the discovered agent name.
+func resolveInstanceName(id string, disc discovery.Result) string {
+	// Direct match by name
+	for _, ar := range disc.Agents {
+		if ar.Agent.Name == id {
+			return id
+		}
+	}
+	// Try instance store lookup (UUID → name)
+	if store, err := instance.NewStore(); err == nil {
+		if inst, err := store.Get(id); err == nil {
+			return inst.Name
+		}
+	}
+	return id
+}
+
 func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []projectParticipant {
 	var participants []projectParticipant
 
 	// Captain first (project lead, responds by default)
 	if proj.OrchestratorID != "" {
+		captainName := resolveInstanceName(proj.OrchestratorID, disc)
 		for _, ar := range disc.Agents {
-			if ar.Agent.Name == proj.OrchestratorID || ar.Agent.InstanceID == proj.OrchestratorID {
+			if ar.Agent.Name == captainName {
 				if ar.Alive {
 					participants = append(participants, projectParticipant{
 						name: ar.Agent.Name, role: "captain", agent: ar.Agent,

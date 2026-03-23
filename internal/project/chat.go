@@ -67,8 +67,12 @@ func (cs *ChatStore) Append(projectID string, msg ChatMessage) error {
 	}
 	defer f.Close()
 
-	f.Write(data)
-	f.Write([]byte("\n"))
+	if _, err := f.Write(data); err != nil {
+		return fmt.Errorf("writing chat message: %w", err)
+	}
+	if _, err := f.Write([]byte("\n")); err != nil {
+		return fmt.Errorf("writing chat newline: %w", err)
+	}
 	return nil
 }
 
@@ -95,6 +99,9 @@ func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error
 		if json.Unmarshal(scanner.Bytes(), &msg) == nil {
 			messages = append(messages, msg)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("reading chat file: %w", err)
 	}
 
 	if limit > 0 && len(messages) > limit {

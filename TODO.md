@@ -9,6 +9,7 @@
   - mTLS between agents and Eyrie
   - A dedicated Eyrie CLI tool that agents invoke instead of web_fetch
 - [ ] **Auto-pairing for provisioned instances**: Currently provisioned ZeroClaw instances disable pairing (`require_pairing = false`) for simplicity. For production, Eyrie should auto-pair: start the daemon, capture the pairing code from stdout, call `POST /pair`, and save the auth token. This keeps the security model intact while automating the handshake.
+  - **Secure token storage**: The saved auth token must be stored securely — use restrictive file permissions (0o600) at minimum, and prefer OS keyring integration (macOS Keychain, Linux secret-service) or encrypted file storage when available. Tokens should support rotation/refresh and the storage path should be under `~/.eyrie/tokens/` (separate from instance configs). When agent-specific API token middleware is implemented, use the same secure storage for those tokens.
 - [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. This can lead to dozens of stale daemons accumulating. Before starting a new daemon, check for and kill any existing process on the target port.
 
 ## Functionality

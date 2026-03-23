@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 )
@@ -46,9 +47,17 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 		return run(ctx, "zeroclaw", "service", string(action))
 	}
 	// Stop: try service stop first, then always pkill to catch manually started daemons
-	_ = run(ctx, "zeroclaw", "service", string(action))
-	killCmd := exec.Command("pkill", "-f", "zeroclaw daemon$")
-	_ = killCmd.Run()
+	svcErr := run(ctx, "zeroclaw", "service", string(action))
+	killCmd := exec.Command("pkill", "-f", "zeroclaw daemon")
+	killErr := killCmd.Run()
+	// Return nil if either succeeded; only fail if both failed
+	if svcErr != nil && killErr != nil {
+		// pkill exit code 1 means "no processes matched" — that's OK
+		if exitErr, ok := killErr.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return svcErr // no processes to kill; report the service error
+		}
+		return fmt.Errorf("service stop: %v; pkill: %v", svcErr, killErr)
+	}
 	return nil
 }
 
@@ -116,9 +125,13 @@ func runDetached(_ context.Context, logDir string, command string, args ...strin
 
 	var logFile *os.File
 	if logDir != "" {
-		if err := os.MkdirAll(logDir, 0o755); err == nil {
+		if err := os.MkdirAll(logDir, 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "eyrie: failed to create log dir %s: %v\n", logDir, err)
+		} else {
 			logPath := filepath.Join(logDir, "daemon.stdout.log")
-			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			if f, err := os.OpenFile(logPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644); err != nil {
+				fmt.Fprintf(os.Stderr, "eyrie: failed to open log file %s: %v\n", logPath, err)
+			} else {
 				cmd.Stdout = f
 				cmd.Stderr = f
 				logFile = f
@@ -147,9 +160,16 @@ func runDetached(_ context.Context, logDir string, command string, args ...strin
 // to the given directory. This is more reliable than "zeroclaw service stop" for processes
 // started via runDetached (which don't register with launchd/systemd).
 func killByConfigDir(configDir string) error {
-	// Use pkill to find processes with the config-dir argument
-	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s", configDir))
-	_ = cmd.Run() // pkill returns non-zero if no processes found, which is fine
+	// Escape regex metacharacters in configDir to avoid injection
+	escaped := regexp.QuoteMeta(configDir)
+	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s", escaped))
+	if err := cmd.Run(); err != nil {
+		// pkill exit code 1 means "no processes matched" — not an error
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return nil
+		}
+		return fmt.Errorf("pkill for config-dir %s: %w", configDir, err)
+	}
 	return nil
 }
 

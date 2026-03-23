@@ -116,13 +116,23 @@ export default function PersonaCard({
 
       {/* Action */}
       {persona.installed ? (
-        <button
-          onClick={() => onSelect?.(persona.id)}
-          className="w-full px-3 py-2 rounded text-xs font-medium bg-green/10 text-green flex items-center justify-center gap-2 hover:bg-green/20 transition-colors"
-        >
-          <CheckCircle className="w-3.5 h-3.5" />
-          installed
-        </button>
+        onSelect ? (
+          <button
+            onClick={() => onSelect(persona.id)}
+            className="w-full px-3 py-2 rounded text-xs font-medium bg-green/10 text-green flex items-center justify-center gap-2 hover:bg-green/20 transition-colors"
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            installed
+          </button>
+        ) : (
+          <div
+            aria-disabled="true"
+            className="w-full px-3 py-2 rounded text-xs font-medium bg-green/10 text-green flex items-center justify-center gap-2 cursor-default opacity-75"
+          >
+            <CheckCircle className="w-3.5 h-3.5" />
+            installed
+          </div>
+        )
       ) : (
         <button
           onClick={() => onInstall(persona.id)}

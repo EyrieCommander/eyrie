@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -50,10 +51,12 @@ func (s *Store) List() ([]Persona, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(s.dir, entry.Name()))
 		if err != nil {
+			slog.Warn("failed to read persona file", "file", entry.Name(), "error", err)
 			continue
 		}
 		var p Persona
 		if err := json.Unmarshal(data, &p); err != nil {
+			slog.Warn("failed to unmarshal persona file", "file", entry.Name(), "error", err)
 			continue
 		}
 		p.Installed = true
