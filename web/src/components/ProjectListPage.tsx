@@ -1,28 +1,90 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Briefcase, ChevronRight } from "lucide-react";
-import type { Project } from "../lib/types";
-import { fetchProjects, createProject } from "../lib/api";
+import type { Project, AgentInstance } from "../lib/types";
+import { fetchProjects, fetchInstances, createProject, createInstance, updateProject, instanceAction } from "../lib/api";
 
 function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
+
+  // Step 1: project details, Step 2: captain assignment
+  const [step, setStep] = useState<1 | 2>(1);
+
+  // Project fields
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [goal, setGoal] = useState("");
+
+  // Captain fields
+  const [captainMode, setCaptainMode] = useState<"create" | "existing">("create");
+  const [captainName, setCaptainName] = useState("");
+  const [captainFramework, setCaptainFramework] = useState("zeroclaw");
+  const [existingCaptains, setExistingCaptains] = useState<AgentInstance[]>([]);
+  const [selectedCaptainId, setSelectedCaptainId] = useState("");
+  const [startingCaptain, setStartingCaptain] = useState("");
+
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+
+  // Derived default captain name from project name
+  const defaultCaptainName = `captain-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+
+  // Fetch existing captain instances when entering step 2
+  useEffect(() => {
+    if (step === 2) {
+      fetchInstances().then((all) => {
+        // Show captains that are unassigned OR stopped (user might want to restart one)
+        setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
+      }).catch(() => {});
+    }
+  }, [step]);
 
   const handleCreate = async () => {
     setCreating(true);
     setError("");
     try {
-      await createProject({ name: name.trim(), description, goal: goal || undefined });
+      // Create the project
+      const proj = await createProject({ name: name.trim(), description, goal: goal || undefined });
+
+      // Create or assign captain
+      if (captainMode === "create") {
+        const effectiveName = captainName.trim() || defaultCaptainName;
+        const inst = await createInstance({
+          name: effectiveName,
+          framework: captainFramework,
+          hierarchy_role: "captain",
+          project_id: proj.id,
+          auto_start: true,
+        });
+        await updateProject(proj.id, { orchestrator_id: inst.id });
+      } else if (selectedCaptainId) {
+        await updateProject(proj.id, { orchestrator_id: selectedCaptainId });
+      }
+
       onClose();
       onCreated();
+      navigate(`/projects/${proj.id}`);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create project");
     } finally {
       setCreating(false);
+    }
+  };
+
+  const handleStartCaptain = async (id: string) => {
+    setStartingCaptain(id);
+    try {
+      await instanceAction(id, "start");
+      // Refresh the list after a moment
+      setTimeout(async () => {
+        const all = await fetchInstances();
+        setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
+        setStartingCaptain("");
+      }, 2000);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to start captain");
+      setStartingCaptain("");
     }
   };
 
@@ -39,62 +101,182 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="dialog" aria-modal="true" onClick={onClose}>
       <div ref={dialogRef} tabIndex={-1} className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4 outline-none" onClick={(e) => e.stopPropagation()}>
         <h2 className="text-sm font-bold text-text">create project</h2>
-
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">name</label>
-          <input
-            type="text"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-            placeholder="launch my SaaS"
-            autoFocus
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">description</label>
-          <textarea
-            value={description}
-            onChange={(e) => setDescription(e.target.value)}
-            rows={2}
-            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none resize-none"
-            placeholder="what is this project about?"
-          />
-        </div>
-
-        <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">goal (optional)</label>
-          <input
-            type="text"
-            value={goal}
-            onChange={(e) => setGoal(e.target.value)}
-            className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
-            placeholder="the desired outcome"
-          />
+        <div className="flex gap-2">
+          <span className={`text-[10px] ${step === 1 ? "text-accent font-bold" : "text-text-muted"}`}>1. details</span>
+          <span className="text-[10px] text-text-muted">&rarr;</span>
+          <span className={`text-[10px] ${step === 2 ? "text-accent font-bold" : "text-text-muted"}`}>2. captain</span>
         </div>
 
         {error && (
-          <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">
-            {error}
-          </div>
+          <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{error}</div>
         )}
 
-        <div className="flex justify-end gap-2">
-          <button
-            onClick={onClose}
-            className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-hover"
-          >
-            cancel
-          </button>
-          <button
-            onClick={handleCreate}
-            disabled={creating || !name.trim()}
-            className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
-          >
-            {creating ? "creating..." : "create"}
-          </button>
-        </div>
+        {step === 1 && (
+          <>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">name</label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+                placeholder="launch my SaaS"
+                autoFocus
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">description</label>
+              <textarea
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                rows={2}
+                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none resize-none"
+                placeholder="what is this project about?"
+              />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-text-secondary mb-1">goal (optional)</label>
+              <input
+                type="text"
+                value={goal}
+                onChange={(e) => setGoal(e.target.value)}
+                className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+                placeholder="the desired outcome"
+              />
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-hover"
+              >
+                cancel
+              </button>
+              <button
+                onClick={() => setStep(2)}
+                disabled={!name.trim()}
+                className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
+              >
+                next
+              </button>
+            </div>
+          </>
+        )}
+
+        {step === 2 && (
+          <>
+            {captainMode === "create" ? (
+              <div className="space-y-3">
+                <p className="text-xs text-text-muted">create a captain to lead this project</p>
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1">captain name</label>
+                  <input
+                    type="text"
+                    value={captainName}
+                    onChange={(e) => setCaptainName(e.target.value)}
+                    className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+                    placeholder={defaultCaptainName}
+                    autoFocus
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-medium text-text-secondary mb-1">framework</label>
+                  <select
+                    value={captainFramework}
+                    onChange={(e) => setCaptainFramework(e.target.value)}
+                    className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+                  >
+                    <option value="zeroclaw">ZeroClaw</option>
+                    <option value="openclaw">OpenClaw</option>
+                    <option value="hermes">Hermes</option>
+                  </select>
+                </div>
+                <button
+                  onClick={() => setCaptainMode("existing")}
+                  className="text-xs text-green hover:text-green/80 transition-colors"
+                >
+                  use existing captain instead
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <p className="text-xs text-text-muted">select an existing captain</p>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {existingCaptains.length === 0 ? (
+                    <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
+                      no captain instances found
+                    </div>
+                  ) : (
+                    existingCaptains.map((inst) => {
+                      const isStopped = inst.status !== "running";
+                      const isSelected = selectedCaptainId === inst.id;
+                      return (
+                        <div
+                          key={inst.id}
+                          className={`flex items-center gap-3 rounded border px-4 py-2.5 text-xs transition-all ${
+                            isSelected
+                              ? "border-green bg-green/5"
+                              : "border-border bg-surface hover:border-green/30"
+                          }`}
+                        >
+                          <button
+                            onClick={() => setSelectedCaptainId(inst.id)}
+                            className="flex flex-1 items-center gap-3 text-left"
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${isStopped ? "bg-text-muted" : "bg-green"}`} />
+                            <span className="font-medium text-text">{inst.display_name}</span>
+                            <span className="text-text-muted">{inst.framework}</span>
+                            {inst.project_id && (
+                              <span className="text-[10px] text-text-muted">(assigned)</span>
+                            )}
+                          </button>
+                          {isStopped && (
+                            <button
+                              disabled={startingCaptain === inst.id}
+                              onClick={() => handleStartCaptain(inst.id)}
+                              className="rounded bg-green px-2 py-0.5 text-[10px] font-medium text-white hover:bg-green/80 disabled:opacity-50"
+                            >
+                              {startingCaptain === inst.id ? "starting..." : "start"}
+                            </button>
+                          )}
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+                <button
+                  onClick={() => { setCaptainMode("create"); setSelectedCaptainId(""); }}
+                  className="text-xs text-green hover:text-green/80 transition-colors"
+                >
+                  &larr; create new instead
+                </button>
+              </div>
+            )}
+
+            <div className="flex justify-between">
+              <button
+                onClick={() => setStep(1)}
+                className="text-xs text-text-muted hover:text-text transition-colors"
+              >
+                &larr; back
+              </button>
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary transition-colors hover:bg-surface-hover"
+                >
+                  cancel
+                </button>
+                <button
+                  onClick={handleCreate}
+                  disabled={creating || (captainMode === "existing" && !selectedCaptainId)}
+                  className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
+                >
+                  {creating ? "creating..." : "create project"}
+                </button>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -1,8 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { Routes, Route, Navigate, useParams, useNavigate } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
-import type { AgentInfo } from "./lib/types";
-import { fetchAgents } from "./lib/api";
+import type { AgentInfo, Project } from "./lib/types";
+import { fetchAgents, fetchProjects } from "./lib/api";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
 import InstallPage from "./components/InstallPage";
@@ -13,6 +13,7 @@ import ProjectDetail from "./components/ProjectDetail";
 
 export default function App() {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -20,8 +21,12 @@ export default function App() {
     try {
       setLoading(true);
       setError(null);
-      const data = await fetchAgents();
-      setAgents(data);
+      const [agentData, projectData] = await Promise.all([
+        fetchAgents(),
+        fetchProjects().catch(() => [] as Project[]),
+      ]);
+      setAgents(agentData);
+      setProjects(projectData);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to fetch agents");
     } finally {
@@ -37,7 +42,7 @@ export default function App() {
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar agents={agents} />
+      <Sidebar agents={agents} projects={projects} />
 
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-8 py-8">

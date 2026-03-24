@@ -248,11 +248,13 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
 
       {mode === "choose" && (
         <div className="space-y-3">
-          <button
+          <div
             onClick={() => runningAgents.length > 0 && setMode("existing")}
-            disabled={runningAgents.length === 0}
+            role={runningAgents.length > 0 ? "button" : undefined}
+            tabIndex={runningAgents.length > 0 ? 0 : undefined}
+            onKeyDown={runningAgents.length > 0 ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); setMode("existing"); } } : undefined}
             className={`flex w-full items-center gap-4 rounded border border-border bg-surface p-5 text-left transition-all ${
-              runningAgents.length > 0 ? "hover:border-accent/50 hover:bg-surface-hover/50" : "opacity-50"
+              runningAgents.length > 0 ? "hover:border-accent/50 hover:bg-surface-hover/50 cursor-pointer" : "opacity-50"
             }`}
           >
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-green/10">
@@ -269,16 +271,16 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
             {runningAgents.length > 0 ? (
               <ChevronRight className="ml-auto h-4 w-4 text-text-muted" />
             ) : loadError ? (
-              <span
+              <button
                 onClick={(e) => { e.stopPropagation(); loadData(); }}
                 className="ml-auto text-[10px] text-red hover:text-red/80 cursor-pointer"
               >
                 retry
-              </span>
+              </button>
             ) : (
               <span className="ml-auto h-3 w-3 animate-spin rounded-full border-2 border-text-muted/30 border-t-text-muted" />
             )}
-          </button>
+          </div>
 
           <button
             onClick={() => setMode("new")}
@@ -393,11 +395,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
                       <option key={f.id} value={f.id}>{f.name}</option>
                     ))
                   : (
-                    <>
-                      <option value="zeroclaw">ZeroClaw</option>
-                      <option value="openclaw">OpenClaw</option>
-                      <option value="hermes">Hermes</option>
-                    </>
+                    <option value="" disabled>no frameworks installed</option>
                   )}
               </select>
             </div>
@@ -418,7 +416,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
 
             <button
               onClick={handleCreateNew}
-              disabled={saving || !name}
+              disabled={saving || !name || installedFrameworks.length === 0}
               className="rounded bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
             >
               {saving ? "creating..." : "create commander"}
@@ -446,7 +444,11 @@ export default function HierarchyPage() {
       const data = await fetchHierarchy();
       setHierarchy(data);
     } catch (e) {
-      setFetchError(e instanceof Error ? e.message : "Failed to fetch hierarchy");
+      const msg = e instanceof Error ? e.message : "Failed to fetch hierarchy";
+      setHierarchy((prev) => {
+        if (prev === null) setFetchError(msg);
+        return prev;
+      });
     } finally {
       setLoading(false);
     }
@@ -516,6 +518,37 @@ export default function HierarchyPage() {
           <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
           $ refresh
         </button>
+      </div>
+
+      {/* Role descriptions */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="rounded border border-accent/20 bg-accent/5 p-3 space-y-1">
+          <div className="flex items-center gap-1.5">
+            <Crown className="h-3 w-3 text-accent" />
+            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">commander</span>
+          </div>
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            your executive. creates projects, assigns captains, tracks cross-project progress. your primary point of contact.
+          </p>
+        </div>
+        <div className="rounded border border-green/20 bg-green/5 p-3 space-y-1">
+          <div className="flex items-center gap-1.5">
+            <Briefcase className="h-3 w-3 text-green" />
+            <span className="text-[10px] font-bold text-green uppercase tracking-wider">captain</span>
+          </div>
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            your tech lead. owns a project end-to-end — plans work, creates talons, coordinates the team. reports to the commander.
+          </p>
+        </div>
+        <div className="rounded border border-border bg-surface/50 p-3 space-y-1">
+          <div className="flex items-center gap-1.5">
+            <User className="h-3 w-3 text-text-secondary" />
+            <span className="text-[10px] font-bold text-text-secondary uppercase tracking-wider">talon</span>
+          </div>
+          <p className="text-[10px] text-text-muted leading-relaxed">
+            a specialist. focused on one role — researcher, developer, writer, etc. created and managed by the captain.
+          </p>
+        </div>
       </div>
 
       {/* Commander */}
