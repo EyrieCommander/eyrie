@@ -54,18 +54,40 @@ func makeLifecycleRunner(action manager.LifecycleAction) func(*cobra.Command, []
 		name := args[0]
 		for _, ar := range result.Agents {
 			if ar.Agent.Name == name {
-				fmt.Printf("%sing %s (%s)...\n", capitalize(string(action)), name, ar.Agent.Framework)
+				fmt.Printf("%s %s (%s)...\n", gerund(string(action)), name, ar.Agent.Framework)
 
 				if err := manager.Execute(ctx, ar.Agent.Framework, action); err != nil {
 					return fmt.Errorf("%s failed: %w", action, err)
 				}
 
-				fmt.Printf("Agent %q %sed successfully.\n", name, action)
+				fmt.Printf("Agent %q %s successfully.\n", name, pastTense(string(action)))
 				return nil
 			}
 		}
 
 		return fmt.Errorf("agent %q not found. Run 'eyrie discover' to see available agents", name)
+	}
+}
+
+func gerund(action string) string {
+	switch action {
+	case "stop":
+		return "Stopping"
+	case "restart":
+		return "Restarting"
+	default:
+		return capitalize(action) + "ing"
+	}
+}
+
+func pastTense(action string) string {
+	switch action {
+	case "stop":
+		return "stopped"
+	case "restart":
+		return "restarted"
+	default:
+		return action + "ed"
 	}
 }
 

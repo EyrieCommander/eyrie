@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"syscall"
+	"time"
 )
 
 type LifecycleAction string
@@ -162,7 +163,7 @@ func runDetached(_ context.Context, logDir string, command string, args ...strin
 func killByConfigDir(configDir string) error {
 	// Escape regex metacharacters in configDir to avoid injection
 	escaped := regexp.QuoteMeta(configDir)
-	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s", escaped))
+	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s(\\s|$)", escaped))
 	if err := cmd.Run(); err != nil {
 		// pkill exit code 1 means "no processes matched" — not an error
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
@@ -191,6 +192,13 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 		case ActionRestart:
 			if stopErr := killByConfigDir(configDir); stopErr != nil {
 				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw stop (config-dir %s): %v\n", configDir, stopErr)
+			}
+			// Wait for old process to exit before starting a new one
+			for i := 0; i < 10; i++ {
+				time.Sleep(100 * time.Millisecond)
+				if err := killByConfigDir(configDir); err == nil {
+					break // no matching process found (pkill returns nil on exit code 1)
+				}
 			}
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		default:
