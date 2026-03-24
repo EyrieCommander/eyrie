@@ -155,14 +155,15 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
-	var p persona.Persona
-	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+	var patch persona.Persona
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid persona data"})
 		return
 	}
 
-	// Verify persona exists before updating
-	if _, err := store.Get(id); err != nil {
+	// Fetch existing persona so partial payloads don't zero-out fields
+	existing, err := store.Get(id)
+	if err != nil {
 		if errors.Is(err, persona.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("persona %q not found", id)})
 		} else {
@@ -171,15 +172,52 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.ID = id
-	p.Installed = true
+	// Merge non-zero fields from the patch into the existing persona
+	if patch.Name != "" {
+		existing.Name = patch.Name
+	}
+	if patch.Role != "" {
+		existing.Role = patch.Role
+	}
+	if patch.Description != "" {
+		existing.Description = patch.Description
+	}
+	if patch.Icon != "" {
+		existing.Icon = patch.Icon
+	}
+	if patch.Category != "" {
+		existing.Category = patch.Category
+	}
+	if patch.PreferredModel != "" {
+		existing.PreferredModel = patch.PreferredModel
+	}
+	if patch.PreferredFramework != "" {
+		existing.PreferredFramework = patch.PreferredFramework
+	}
+	if patch.SystemPrompt != "" {
+		existing.SystemPrompt = patch.SystemPrompt
+	}
+	if len(patch.IdentityTemplate) > 0 {
+		existing.IdentityTemplate = patch.IdentityTemplate
+	}
+	if len(patch.MemorySeeds) > 0 {
+		existing.MemorySeeds = patch.MemorySeeds
+	}
+	if patch.HierarchyRole != "" {
+		existing.HierarchyRole = patch.HierarchyRole
+	}
+	if patch.AgentName != "" {
+		existing.AgentName = patch.AgentName
+	}
+	existing.ID = id
+	existing.Installed = true
 
-	if err := store.Save(p); err != nil {
+	if err := store.Save(*existing); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to save persona: %v", err)})
 		return
 	}
 
-	writeJSON(w, http.StatusOK, p)
+	writeJSON(w, http.StatusOK, existing)
 }
 
 func (s *Server) handleDeletePersona(w http.ResponseWriter, r *http.Request) {

@@ -27,8 +27,8 @@ func main() {
 	wsURL := fmt.Sprintf("ws://127.0.0.1:42617/ws/chat?token=%s&session_id=%s", url.QueryEscape(token), url.QueryEscape(sessionID))
 	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
-		fmt.Println("dial error:", err)
-		return
+		fmt.Fprintln(os.Stderr, "dial error:", err)
+		os.Exit(1)
 	}
 	defer conn.CloseNow()
 	conn.SetReadLimit(4 * 1024 * 1024)
@@ -36,16 +36,16 @@ func main() {
 	// Read session_start
 	_, data, err := conn.Read(ctx)
 	if err != nil {
-		fmt.Println("read session_start error:", err)
-		return
+		fmt.Fprintln(os.Stderr, "read session_start error:", err)
+		os.Exit(1)
 	}
 	fmt.Printf("< %s\n", truncate(string(data), 200))
 
 	// Send message
 	msg, _ := json.Marshal(map[string]string{"type": "message", "content": "ping"})
 	if err := conn.Write(ctx, websocket.MessageText, msg); err != nil {
-		fmt.Println("write error:", err)
-		return
+		fmt.Fprintln(os.Stderr, "write error:", err)
+		os.Exit(1)
 	}
 	fmt.Println("> sent ping")
 
@@ -53,8 +53,8 @@ func main() {
 	for i := 0; i < 20; i++ {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
-			fmt.Println("read error:", err)
-			return
+			fmt.Fprintln(os.Stderr, "read error:", err)
+			os.Exit(1)
 		}
 		fmt.Printf("< %s\n", truncate(string(data), 300))
 		var frame map[string]any

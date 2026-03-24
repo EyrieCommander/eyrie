@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -59,6 +60,8 @@ func (s *Store) List() ([]Persona, error) {
 			slog.Warn("failed to unmarshal persona file", "file", entry.Name(), "error", err)
 			continue
 		}
+		// Derive canonical ID from filename so List() returns IDs that Get() can find.
+		p.ID = strings.TrimSuffix(entry.Name(), ".json")
 		p.Installed = true
 		personas = append(personas, p)
 	}

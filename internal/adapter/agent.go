@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"os/exec"
 	"strconv"
@@ -115,7 +116,12 @@ func ProbeProvider(ctx context.Context, provider string) string {
 		return "error"
 	}
 	defer resp.Body.Close()
+	// Drain body to enable connection reuse
+	_, _ = io.Copy(io.Discard, resp.Body)
 
+	// Accept 2xx and 4xx as "reachable". 4xx means the provider is up but
+	// the request was rejected (e.g. missing auth key), which still indicates
+	// the endpoint is reachable.
 	if resp.StatusCode >= 200 && resp.StatusCode < 500 {
 		return "ok"
 	}
@@ -128,6 +134,9 @@ func providerBaseURL(provider string) string {
 	// Custom provider: "custom:http://127.0.0.1:3456/v1"
 	if strings.HasPrefix(provider, "custom:") {
 		u := strings.TrimPrefix(provider, "custom:")
+		u = strings.TrimRight(u, "/")
+		// Strip trailing /models or /models/ so ProbeProvider won't double it
+		u = strings.TrimSuffix(u, "/models")
 		u = strings.TrimRight(u, "/")
 		// Ensure it ends with /v1
 		if !strings.HasSuffix(u, "/v1") {

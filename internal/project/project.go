@@ -163,6 +163,14 @@ func (s *Store) Save(p Project) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Prevent implicit creation — the project file must already exist.
+	if _, err := os.Stat(s.path(p.ID)); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("project %q: %w", p.ID, ErrNotFound)
+		}
+		return err
+	}
+
 	p.UpdatedAt = time.Now()
 	data, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {

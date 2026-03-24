@@ -6,7 +6,7 @@ Transform Eyrie from a framework manager into a **project orchestrator** with a 
 
 ## Three-Tier Agent Hierarchy
 
-### 1. Master Coordinator (one per user)
+### 1. Master Commander (one per user)
 - Has its own identity, memory, and workspace
 - Knows about ALL the user's projects
 - Can create project orchestrators via Eyrie's API
@@ -43,39 +43,18 @@ persona-template/
 
 When instantiated, template variables ({{.Name}}, {{.Role}}, {{.ProjectName}}, etc.) are rendered and written to the new agent's workspace. The agent then develops its own memories from there.
 
-**Persona Validation**: When creating/updating personas, each IdentityTemplate value is pre-parsed as a Go `text/template` with `template.Option("missingkey=error")` to catch syntax errors and undefined variables early. HierarchyRole is validated via `HierarchyRole.Valid()` against the allowed set (`commander`, `captain`, `talon`, or empty for standalone). Template render errors during instantiation return a 4xx API error with a descriptive message including the template filename and variable context; the same error is recorded in the instance's Status field so parent agents can observe and recover. Errors are also logged server-side for auditing.
+**Persona Validation**: Each IdentityTemplate value is pre-parsed as a Go template with `missingkey=error` to catch syntax errors early. Templates are parsed with an empty `FuncMap` (no custom functions allowed) and scanned for dangerous pipelines (`call`, `template`, `exec`, `index`, `slice`) which are rejected. Only a whitelisted set of top-level variables (Name, Role, ProjectName, DisplayName, Framework, EyrieURL, ParentAgent, Description) are permitted. Rendered values are escaped to prevent path traversal or shell injection during file writes. HierarchyRole is validated via `Valid()` against the allowed set (`commander`, `captain`, `talon`, or empty for standalone). Only privileged principals (admins or owning agents) may create or modify personas with IdentityTemplate values; unauthorized attempts are rejected and logged. Template render errors during instantiation return a 4xx API error with a descriptive message; the error is also recorded in the instance's Status field so parent agents can recover.
 
-### HierarchyRole Type (implemented in `internal/instance/instance.go`)
+### HierarchyRole
 
-```go
-type HierarchyRole string
-
-const (
-    RoleCommander  HierarchyRole = "commander"
-    RoleCaptain    HierarchyRole = "captain"
-    RoleTalon      HierarchyRole = "talon"
-    RoleStandalone HierarchyRole = "" // not part of a hierarchy
-)
-
-func (r HierarchyRole) Valid() bool { /* checks against known roles */ }
-```
+A string type in `internal/instance/instance.go` with constants: `commander`, `captain`, `talon`, and empty string (standalone). Includes a `Valid()` method.
 
 ### Persona Schema Extension
 
-```go
-type Persona struct {
-    // ... existing fields (ID, Name, Role, Description, etc.) ...
-
-    // NEW: Identity template files (key=filename, value=Go template string)
-    IdentityTemplate map[string]string `json:"identity_template,omitempty"`
-
-    // NEW: Seed memories for MEMORY.md
-    MemorySeeds []string `json:"memory_seeds,omitempty"`
-
-    // NEW: Hierarchy role this persona is designed for
-    HierarchyRole HierarchyRole `json:"hierarchy_role,omitempty"` // Uses the HierarchyRole type
-}
-```
+Add three new fields to the existing Persona struct:
+- **IdentityTemplate** (`map[string]string`) — identity template files (key=filename, value=Go template string)
+- **MemorySeeds** (`[]string`) — seed memories for MEMORY.md
+- **HierarchyRole** — hierarchy role this persona is designed for
 
 ## Agent Instances
 
@@ -83,29 +62,12 @@ Each instance is a **real agent deployment** with its own config, workspace, por
 
 ### Instance Schema
 
-```go
-type Instance struct {
-    ID            string        `json:"id"`              // Full UUID
-    Name          string        `json:"name"`            // slug: "strategist-sarah"
-    DisplayName   string        `json:"display_name"`    // "Strategist Sarah"
-    Framework     string        `json:"framework"`       // "zeroclaw", "openclaw", "hermes"
-    PersonaID     string        `json:"persona_id,omitempty"`
-    HierarchyRole HierarchyRole `json:"hierarchy_role,omitempty"` // "commander", "captain", "talon"
-    ProjectID     string        `json:"project_id,omitempty"`
-    ParentID      string        `json:"parent_id,omitempty"` // Instance that created this one
-    Port          int           `json:"port"`            // Auto-allocated 43000-43999
-    ConfigPath    string        `json:"config_path"`
-    WorkspacePath string        `json:"workspace_path"`
-    AuthToken     string        `json:"auth_token,omitempty"` // Gateway auth token (OpenClaw)
-    Status        string        `json:"status"`          // "created", "running", "stopped", "error"
-    PID           int           `json:"pid,omitempty"`
-    LastSeen      time.Time     `json:"last_seen,omitempty"`
-    HealthStatus  string        `json:"health_status,omitempty"` // "healthy", "unhealthy", "unknown"
-    RestartCount  int           `json:"restart_count,omitempty"`
-    CreatedAt     time.Time     `json:"created_at"`
-    CreatedBy     string        `json:"created_by"`      // "user" or parent instance ID
-}
-```
+Each instance tracks:
+- **Identity**: ID (full UUID), Name (slug), DisplayName, Framework, PersonaID
+- **Hierarchy**: HierarchyRole, ProjectID, ParentID (instance that created this one)
+- **Runtime**: Port (auto-allocated 43000-43999), ConfigPath, WorkspacePath, AuthToken (OpenClaw)
+- **Status**: Status (`created`/`running`/`stopped`/`error`), PID, LastSeen, HealthStatus (`healthy`/`unhealthy`/`unknown`), RestartCount
+- **Metadata**: CreatedAt, CreatedBy (`user` or parent instance ID)
 
 ### Instance Directory Structure
 
@@ -127,19 +89,7 @@ type Instance struct {
 
 ## Projects
 
-```go
-type Project struct {
-    ID             string            `json:"id"`
-    Name           string            `json:"name"`
-    Description    string            `json:"description"`
-    Goal           string            `json:"goal"`
-    OrchestratorID string            `json:"orchestrator_id"` // Instance ID
-    RoleAgentIDs   []string          `json:"role_agent_ids"`  // Instance IDs
-    Status         string            `json:"status"`          // see status transitions below
-    CreatedAt      time.Time         `json:"created_at"`
-    CreatedBy      string            `json:"created_by"`      // "user" or coordinator ID
-}
-```
+Each project tracks: ID, Name, Description, Goal, OrchestratorID (instance ID), RoleAgentIDs (instance IDs), Status, CreatedAt, CreatedBy (`user` or coordinator ID).
 
 Storage: `~/.eyrie/projects/<project-id>.json`
 
@@ -156,28 +106,7 @@ Agents call Eyrie's REST API to create other agents. This works because:
 - No new SDK dependencies needed
 - Framework-agnostic
 
-The coordinator's TOOLS.md includes:
-```markdown
-## Eyrie API (Agent Management)
-URL: http://127.0.0.1:7200
-
-### Create an agent
-POST /api/instances
-Body: {"name": "researcher", "framework": "openclaw", "persona_id": "research-analyst", "project_id": "...", "auto_start": true}
-Response: {"id": "...", "name": "...", "status": "created"|"running"|"error", "port": N, ...}
-Note: auto_start=true attempts synchronous start; on failure status becomes "error" but instance is still created
-
-### List agents
-GET /api/instances
-
-### Start/stop an agent
-POST /api/instances/<id>/start
-POST /api/instances/<id>/stop
-
-### Create a project
-POST /api/projects
-Body: {"name": "launch my SaaS", "goal": "..."}
-```
+The coordinator's TOOLS.md includes instructions for calling the Eyrie REST API at `http://127.0.0.1:7200` — creating/listing instances, start/stop lifecycle actions, and creating projects. The `auto_start=true` flag attempts synchronous start; on failure the status becomes `error` but the instance is still created.
 
 ## New API Endpoints
 
@@ -237,7 +166,7 @@ POST   /api/hierarchy/commander/brief    # Send commander briefing (SSE stream)
 ### Sidebar Evolution
 ```
 eyrie
-├── hierarchy          # NEW: tree view (coordinator > projects > agents)
+├── hierarchy          # NEW: tree view (commander > projects > agents)
 ├── projects           # NEW: project list
 ├── {legacy agents}    # Existing agents (backward compatible)
 ├── personas
@@ -260,52 +189,11 @@ eyrie
 
 ## Discovery Integration
 
-Modify `internal/discovery/discovery.go` to scan instances:
-
-```go
-// After scanning cfg.Discovery.ConfigPaths, also scan instances
-instanceDir := filepath.Join(home, ".eyrie", "instances")
-entries, err := os.ReadDir(instanceDir)
-if err != nil {
-    // Log and continue — instance dir may not exist yet
-    slog.Debug("cannot read instances dir", "error", err)
-}
-for _, entry := range entries {
-    if !entry.IsDir() { continue }
-    // Read instance.json to get framework, name, port
-    // Validate and parse each instance.json (skip corrupt files with warning)
-    // Verify framework config file exists inside instance dir
-    // Scan the framework config using instance.Name (not hardcoded framework names)
-    // Check returned agent pointer is non-nil before dereferencing
-}
-```
+Modify `internal/discovery/discovery.go` to scan `~/.eyrie/instances/` after the normal config path scan. For each instance directory: read `instance.json` for framework/name/port, validate and skip corrupt files with a warning, verify the framework config exists, and scan it using the instance name. Errors are logged but non-fatal (instance dir may not exist yet).
 
 ## Manager Integration
 
-Add to `internal/manager/manager.go`:
-
-```go
-func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
-    switch framework {
-    case "zeroclaw":
-        switch action {
-        case ActionStart:  return run(ctx, "zeroclaw", "daemon", "--config", configPath)
-        case ActionStop:   return run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
-        case ActionRestart:
-            if stopErr := killByConfigDir(configDir); stopErr != nil {
-                log("eyrie: zeroclaw stop (config-dir %s): %v", configDir, stopErr)
-            }
-            return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
-        default: return fmt.Errorf("unknown action %q for zeroclaw", action)
-        }
-    case "openclaw":
-        return run(ctx, "openclaw", "gateway", string(action), "--config", configPath)
-    case "hermes":
-        return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
-    default: return fmt.Errorf("unknown framework %q", framework)
-    }
-}
-```
+Add an `ExecuteWithConfig()` function to `internal/manager/manager.go` that accepts a framework name, config path, and lifecycle action. It dispatches to the appropriate CLI command per framework (e.g., `zeroclaw daemon --config`, `openclaw gateway start --config`). This allows instances with custom config paths to be managed alongside legacy agents.
 
 ## Files to Create
 
@@ -327,7 +215,6 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 | `internal/instance/instance_test.go` | Unit tests for instance store and provisioner |
 | `internal/instance/provisioner_test.go` | Provisioner integration tests |
 | `internal/server/middleware.go` | Rate limiting and logging middleware |
-| `internal/server/auth.go` | Token-based authentication middleware (future) |
 | `cmd/eyrie/instance.go` | CLI commands for instance management |
 
 ## Files to Modify
@@ -347,7 +234,7 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 ## Implementation Notes
 
 ### ID Generation
-Instance and Project IDs use full UUIDs (not truncated) to ensure collision resistance.
+Instance and Project IDs are generated as full UUIDs by default to ensure collision resistance. However, `validateID()` in `store.go` accepts any string matching `^[a-zA-Z0-9_-]+$` (alphanumerics, hyphens, underscores), so custom slug IDs are also valid. This allows human-friendly IDs in testing or manual creation while UUIDs remain the default for programmatic creation.
 
 ### Storage Safety
 - All JSON writes in the store modules should use atomic write patterns (write to .tmp then rename)
@@ -356,12 +243,12 @@ Instance and Project IDs use full UUIDs (not truncated) to ensure collision resi
 - Persona IDs are validated in `persona/store.go` via `id != filepath.Base(id)` check (rejects path separators, `.`, `..`) plus non-empty check; returns `"invalid persona ID %q"` on failure
 - Consider migrating to SQLite/BoltDB for transactional guarantees if corruption becomes an issue
 
-### Coordinator Uniqueness
+### Commander Uniqueness
 - The `handleSetCommander` endpoint rejects requests that provide both `instance_id` and `agent_name`
-- Only one coordinator is stored in `coordinator.json` at a time; setting a new one replaces the old
-- `coordinator.json` schema: `{"instance_id": "string (optional)", "agent_name": "string (optional)"}` — exactly one field must be set; stored at `~/.eyrie/commander.json`
-- Migration: if `coordinator.json` does not exist, the hierarchy page shows a setup wizard; no migration is needed since the file is created on first commander assignment
-- The hierarchy page shows a setup wizard when no coordinator is configured
+- Only one commander is stored in `commander.json` at a time; setting a new one replaces the old
+- `commander.json` schema: `{"instance_id": "string (optional)", "agent_name": "string (optional)"}` — exactly one field must be set; stored at `~/.eyrie/commander.json`
+- Migration: if `commander.json` does not exist, the hierarchy page shows a setup wizard; no migration is needed since the file is created on first commander assignment
+- The hierarchy page shows a setup wizard when no commander is configured
 
 ### API Security (Future Work)
 - Per-instance API tokens (token issuance at instance creation) — OpenClaw instances already get auth tokens via `inst.AuthToken`
@@ -375,7 +262,7 @@ Instance and Project IDs use full UUIDs (not truncated) to ensure collision resi
 - Server handlers distinguish 404 (not found) from 500 (internal error) using sentinel errors (`instance.ErrNotFound`, `project.ErrNotFound`, `persona.ErrNotFound`) and `errors.Is()` — no string matching
 - Provisioning validation errors use sentinels (`instance.ErrNameExists`, `instance.ErrRequiredField`, `instance.ErrUnsupportedFramework`) → HTTP 400; all other errors → HTTP 500 with slog.Error
 - Discovery errors are logged but non-fatal (degraded discovery is better than no discovery)
-- Instance provisioning errors clean up partially-created directories via `os.RemoveAll(instDir)` at each failure point in `Provision()`; provisioning is safe to retry with the same name after cleanup since the name uniqueness check runs at the start
+- Instance provisioning uses a deferred cleanup guarded by a success flag: on entry, `success := false` with `defer func() { if !success { os.RemoveAll(instDir) } }()`, and `success = true` set just before the normal return. This ensures any early return or new error path triggers cleanup automatically without ad-hoc `os.RemoveAll` calls at each failure point. Provisioning is safe to retry with the same name after cleanup since the name uniqueness check runs at the start
 
 ### Process Monitoring (Instance struct fields)
 - PID, LastSeen, HealthStatus, RestartCount are tracked on Instance

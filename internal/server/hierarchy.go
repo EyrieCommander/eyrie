@@ -580,6 +580,7 @@ func commanderPath() string {
 		home = os.Getenv("HOME")
 	}
 	if home == "" {
+		slog.Warn("neither UserHomeDir nor HOME is set; falling back to os.TempDir() for commander.json — persistence is not guaranteed")
 		home = os.TempDir()
 	}
 	return filepath.Join(home, ".eyrie", "commander.json")

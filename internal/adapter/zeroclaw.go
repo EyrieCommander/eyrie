@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -1031,6 +1032,9 @@ func (z *ZeroClawAdapter) loadEnrichedMessages(sessionKey string) []ChatMessage 
 		if json.Unmarshal(scanner.Bytes(), &msg) == nil {
 			messages = append(messages, msg)
 		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Warn("error reading enriched messages", "session", sessionKey, "error", err)
 	}
 	return messages
 }

@@ -374,10 +374,14 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		format = "yaml"
 	}
 
-	// If config is a raw string (from the text editor), write it directly
-	// to preserve formatting and types. Passing it through an encoder
-	// would corrupt integers to floats and arrays to strings.
+	// If config is a raw string (from the text editor), validate format
+	// before writing to prevent saving malformed config that could break
+	// the agent on next start.
 	if rawStr, ok := body.Config.(string); ok {
+		if valErr := config.ValidateRawFormat(format, rawStr); valErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid %s config: %v", format, valErr)})
+			return
+		}
 		if err := config.WriteRawAtomic(configPath, rawStr); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to write config: %v", err)})
 			return

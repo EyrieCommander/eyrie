@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -90,8 +91,36 @@ func node22BinDir() string {
 	if len(v22Dirs) == 0 {
 		return ""
 	}
-	sort.Strings(v22Dirs)
+	// Sort by semantic version (numeric comparison) instead of lexicographic
+	// to avoid issues like v22.2.0 sorting after v22.10.0.
+	sort.Slice(v22Dirs, func(i, j int) bool {
+		return compareNodeVersions(v22Dirs[i], v22Dirs[j]) < 0
+	})
 	return filepath.Join(nvmDir, v22Dirs[len(v22Dirs)-1], "bin")
+}
+
+// compareNodeVersions compares two Node.js version directory names (e.g. "v22.2.0", "v22.10.1")
+// by their numeric components. Returns negative if a < b, 0 if equal, positive if a > b.
+func compareNodeVersions(a, b string) int {
+	partsA := strings.Split(strings.TrimPrefix(a, "v"), ".")
+	partsB := strings.Split(strings.TrimPrefix(b, "v"), ".")
+	maxLen := len(partsA)
+	if len(partsB) > maxLen {
+		maxLen = len(partsB)
+	}
+	for i := 0; i < maxLen; i++ {
+		var na, nb int
+		if i < len(partsA) {
+			na, _ = strconv.Atoi(partsA[i])
+		}
+		if i < len(partsB) {
+			nb, _ = strconv.Atoi(partsB[i])
+		}
+		if na != nb {
+			return na - nb
+		}
+	}
+	return 0
 }
 
 // node22Env returns a copy of os.Environ() with Node 22 prepended to PATH,

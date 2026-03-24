@@ -717,11 +717,9 @@ export function ChatPanel({
       const sess = await createSession(agentName, name);
       setSessions((prev) => [...prev, { key: sess.key, title: sess.title }]);
       setActiveGroupName(name);
-    } catch {
-      const key =
-        framework === "openclaw" ? `agent:main:${name}` : name;
-      setSessions((prev) => [...prev, { key, title: name }]);
-      setActiveGroupName(name);
+    } catch (err) {
+      console.error("Failed to create session:", err);
+      // Don't add a local session or activate it — the creation failed
     }
   };
 
@@ -1052,17 +1050,30 @@ export function groupPartsIntoRuns(parts: ChatPart[]): PartRun[] {
 }
 
 export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const failCount = tools.filter((t) => t.error).length;
+
+  // Single tool: render one PartToolCallCard directly (no outer header)
+  // to avoid showing the tool name twice.
+  if (tools.length === 1) {
+    return (
+      <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
+        <PartToolCallCard
+          part={tools[0]}
+          defaultExpanded
+          headerStyle="outer"
+        />
+      </div>
+    );
+  }
+
   const names = tools.map((t) => t.name).filter(Boolean);
   const uniqueNames = [...new Set(names)];
   const summary =
-    tools.length === 1
-      ? tools[0].name ?? "tool"
-      : `${tools.length} tools` +
-        (uniqueNames.length <= 3
-          ? `: ${uniqueNames.join(", ")}`
-          : "");
+    `${tools.length} tools` +
+    (uniqueNames.length <= 3
+      ? `: ${uniqueNames.join(", ")}`
+      : "");
 
   return (
     <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
@@ -1103,22 +1114,30 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
 export function PartToolCallCard({
   part,
   defaultExpanded = false,
+  headerStyle = "inner",
 }: {
   part: ChatPart;
   defaultExpanded?: boolean;
+  /** "outer" uses the bolder top-level card styling (for single-tool runs) */
+  headerStyle?: "inner" | "outer";
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
+  const isOuter = headerStyle === "outer";
+
   return (
-    <div className="border-b border-border/30 last:border-b-0 text-[11px]">
+    <div className={isOuter ? "text-[11px]" : "border-b border-border/30 last:border-b-0 text-[11px]"}>
       <button
         onClick={(e) => {
           e.stopPropagation();
           setExpanded(!expanded);
         }}
-        className="flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-surface-hover/30"
+        className={isOuter
+          ? "flex w-full items-center gap-2 px-3 py-1.5 text-left"
+          : "flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-surface-hover/30"
+        }
       >
-        <span className="font-mono text-text-secondary">{part.name}</span>
+        <span className={isOuter ? "font-mono text-text" : "font-mono text-text-secondary"}>{part.name}</span>
         {part.args && (
           <span className="font-mono text-text-muted truncate max-w-[300px]">
             {toolCallSummary(part.name || "", part.args)}
@@ -1136,7 +1155,7 @@ export function PartToolCallCard({
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-border/30 px-3 py-2 space-y-1.5 bg-surface/50">
+        <div className={`${isOuter ? "border-t border-border/50" : "border-t border-border/30"} px-3 py-2 space-y-1.5 bg-surface/50`}>
           {part.args && Object.keys(part.args).length > 0 && (
             <div>
               <span className="text-text-muted">args: </span>

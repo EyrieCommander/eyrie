@@ -191,8 +191,8 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
       </div>
 
       {tab === "status" && <OverviewTab agent={agent} framework={framework} onConfigChange={() => {
-        // Refresh agent data after config change
-        window.location.reload();
+        // Refresh agent data after config change (targeted re-fetch, not full page reload)
+        if (onRefresh) onRefresh();
       }} />}
       {tab === "chat" && (
         <ChatPanel alive={agent.alive} framework={agent.framework} agentName={agent.name} />
@@ -225,9 +225,14 @@ function OverviewTab({
   const health = agent.health;
   const status = agent.status;
 
-  // Find editable fields from framework schema
+  // Find editable fields from framework schema.
+  // Try exact key match first, then fall back to suffix match
+  // (e.g., "model" matches "default_model" for ZeroClaw).
   const getEditableField = (key: string) => {
-    return framework?.config_schema?.common_fields.find(f => f.key === key);
+    const fields = framework?.config_schema?.common_fields;
+    if (!fields) return undefined;
+    return fields.find(f => f.key === key)
+      ?? fields.find(f => f.key.endsWith("_" + key) || f.key.endsWith("." + key));
   };
 
   return (
@@ -614,9 +619,11 @@ function EditableInfoCard({
   const [editValue, setEditValue] = useState(value);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     setEditValue(value);
+    setSaved(false);
   }, [value]);
 
   const handleSave = async () => {
@@ -626,40 +633,35 @@ function EditableInfoCard({
       setSaving(true);
       setError(null);
 
-      // Fetch current config
+      // Fetch current config as raw text
       const config = await fetchAgentConfig(agentName);
-      let parsed: any;
 
-      try {
-        if (config.format === "json") {
-          parsed = JSON.parse(config.content);
-        } else if (config.format === "toml") {
-          // For TOML, we need to parse it (using a simple approach for now)
-          // This is a simplified parser - real TOML parsing would be more complex
-          parsed = parseTOMLSimple(config.content);
-        } else {
-          throw new Error(`Unsupported config format: ${config.format}`);
+      let updated: string;
+      if (config.format === "json") {
+        // JSON: parse, modify, re-stringify (lossless for JSON)
+        const parsed = JSON.parse(config.content);
+        const parts = field.key.split(".");
+        let current = parsed;
+        for (let i = 0; i < parts.length - 1; i++) {
+          if (!current[parts[i]]) current[parts[i]] = {};
+          current = current[parts[i]];
         }
-      } catch (err) {
-        throw new Error(`Failed to parse config: ${err instanceof Error ? err.message : "unknown error"}`);
+        current[parts[parts.length - 1]] = field.type === "number" ? Number(editValue) : editValue;
+        updated = JSON.stringify(parsed, null, 2);
+      } else if (config.format === "toml") {
+        // TOML: targeted string replacement to preserve formatting and types
+        updated = replaceTomlValue(config.content, field.key, editValue, field.type);
+      } else {
+        throw new Error(`Unsupported config format: ${config.format}`);
       }
 
-      // Update the field value
-      const parts = field.key.split(".");
-      let current = parsed;
-      for (let i = 0; i < parts.length - 1; i++) {
-        if (!current[parts[i]]) {
-          current[parts[i]] = {};
-        }
-        current = current[parts[i]];
-      }
-      current[parts[parts.length - 1]] = editValue;
-
-      // Save the updated config
-      await updateAgentConfig(agentName, parsed);
+      // Send as raw string so backend writes it directly (no re-encoding)
+      await updateAgentConfig(agentName, updated);
 
       setEditing(false);
-      onSave();
+      setSaved(true);
+      // Don't call onSave() (which reloads the page) — the runtime status
+      // won't reflect config changes until the agent is restarted.
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");
     } finally {
@@ -747,9 +749,14 @@ function EditableInfoCard({
         </div>
       ) : (
         <div className="mt-1.5 flex items-center justify-between group">
-          <p className="text-lg font-semibold text-text">
-            {value}
-          </p>
+          <div>
+            <p className="text-lg font-semibold text-text">
+              {saved ? editValue : value}
+            </p>
+            {saved && (
+              <p className="text-[10px] text-green mt-0.5">saved — restart agent to apply</p>
+            )}
+          </div>
           <button
             onClick={() => setEditing(true)}
             className="opacity-0 group-hover:opacity-100 transition-opacity p-1 hover:bg-bg-muted
@@ -764,64 +771,63 @@ function EditableInfoCard({
   );
 }
 
-// Simple TOML parser for reading config values
-function parseTOMLSimple(content: string): any {
-  const result: any = {};
-  let currentSection: any = result;
-  const sectionPath: string[] = [];
-
+// Replace a single value in raw TOML text without re-parsing the whole file.
+// For top-level keys (e.g., "model"), finds the line before any [section].
+// For nested keys (e.g., "gateway.port"), finds the key within its section.
+function replaceTomlValue(content: string, fieldKey: string, newValue: string, fieldType?: string): string {
+  const parts = fieldKey.split(".");
   const lines = content.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
 
-    // Skip comments and empty lines
-    if (!trimmed || trimmed.startsWith("#")) continue;
+  // Format the replacement value
+  const formatted = fieldType === "number" ? newValue : `"${newValue}"`;
 
-    // Section headers [section] or [section.subsection]
-    if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
-      const section = trimmed.slice(1, -1);
-      const parts = section.split(".");
-
-      currentSection = result;
-      sectionPath.length = 0;
-
-      for (const part of parts) {
-        if (!currentSection[part]) {
-          currentSection[part] = {};
-        }
-        currentSection = currentSection[part];
-        sectionPath.push(part);
+  if (parts.length === 1) {
+    // Top-level key: replace the first matching `key = value` line
+    const key = parts[0];
+    const re = new RegExp(`^(\\s*${escapeRegex(key)}\\s*=\\s*).*$`);
+    for (let i = 0; i < lines.length; i++) {
+      // Stop at first section header — key must be in the global scope
+      if (lines[i].trim().startsWith("[")) break;
+      if (re.test(lines[i])) {
+        lines[i] = lines[i].replace(re, `$1${formatted}`);
+        return lines.join("\n");
       }
-      continue;
     }
+  } else {
+    // Nested key: find [section] then the key within it
+    const section = parts.slice(0, -1).join(".");
+    const key = parts[parts.length - 1];
+    const sectionHeader = `[${section}]`;
+    const re = new RegExp(`^(\\s*${escapeRegex(key)}\\s*=\\s*).*$`);
+    let inSection = false;
 
-    // Key-value pairs
-    const eqIndex = trimmed.indexOf("=");
-    if (eqIndex > 0) {
-      const key = trimmed.slice(0, eqIndex).trim();
-      let value = trimmed.slice(eqIndex + 1).trim();
-
-      // Remove quotes from strings
-      if ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1);
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+      if (trimmed === sectionHeader) {
+        inSection = true;
+        continue;
       }
-
-      // Try to parse as number
-      const num = Number(value);
-      if (!isNaN(num) && value !== "") {
-        currentSection[key] = num;
-      } else if (value === "true") {
-        currentSection[key] = true;
-      } else if (value === "false") {
-        currentSection[key] = false;
-      } else {
-        currentSection[key] = value;
+      // Exit section when a new section starts
+      if (inSection && trimmed.startsWith("[")) break;
+      if (inSection && re.test(lines[i])) {
+        lines[i] = lines[i].replace(re, `$1${formatted}`);
+        return lines.join("\n");
       }
     }
   }
 
-  return result;
+  // Field not found — append it (top-level or to section)
+  if (parts.length === 1) {
+    // Prepend to file (before first section)
+    const firstSection = lines.findIndex((l) => l.trim().startsWith("["));
+    const insertAt = firstSection === -1 ? lines.length : firstSection;
+    lines.splice(insertAt, 0, `${parts[0]} = ${formatted}`);
+  }
+  return lines.join("\n");
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function ActionButton({

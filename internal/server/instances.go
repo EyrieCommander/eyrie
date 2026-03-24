@@ -248,6 +248,11 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, mgrAction); err != nil {
+		// Persist the error status so the instance reflects the failure
+		inst.Status = "error"
+		if updateErr := store.UpdateStatus(inst.ID, "error"); updateErr != nil {
+			slog.Warn("failed to persist error status", "instance", inst.ID, "error", updateErr)
+		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}

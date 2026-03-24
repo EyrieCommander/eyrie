@@ -124,7 +124,7 @@ export default function Sidebar({ agents, projects }: { agents: AgentInfo[]; pro
           </button>
         </div>
 
-        {agentsExpanded && (
+        {agentsExpanded && agents.length > 0 && (
           <div className="ml-4 border-l border-border pl-2 space-y-px">
             {agents.map((agent) => {
               const isActive = activeAgent === agent.name;

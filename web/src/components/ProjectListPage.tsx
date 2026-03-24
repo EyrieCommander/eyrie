@@ -30,13 +30,20 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
   // Derived default captain name from project name
   const defaultCaptainName = `captain-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
 
+  const [fetchCaptainError, setFetchCaptainError] = useState("");
+
   // Fetch existing captain instances when entering step 2
   useEffect(() => {
     if (step === 2) {
+      setFetchCaptainError("");
       fetchInstances().then((all) => {
         // Show captains that are unassigned OR stopped (user might want to restart one)
         setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("Failed to fetch instances:", err);
+        setFetchCaptainError(err instanceof Error ? err.message : "Failed to load captain instances");
+        setExistingCaptains([]);
+      });
     }
   }, [step]);
 
@@ -215,6 +222,9 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
             ) : (
               <div className="space-y-3">
                 <p className="text-xs text-text-muted">select an existing captain</p>
+                {fetchCaptainError && (
+                  <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{fetchCaptainError}</div>
+                )}
                 <div className="space-y-1.5 max-h-48 overflow-y-auto">
                   {existingCaptains.length === 0 ? (
                     <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">

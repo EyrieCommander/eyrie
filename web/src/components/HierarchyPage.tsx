@@ -312,7 +312,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
           </button>
           <div className="text-xs font-medium text-text-secondary">select an agent to be your commander</div>
           <div className="space-y-1.5">
-            {agents.length === 0 && (
+            {runningAgents.length === 0 && (
               loadError ? (
                 <div className="flex items-center justify-between rounded border border-red/30 bg-red/5 px-4 py-3">
                   <span className="text-xs text-red">failed to discover agents</span>

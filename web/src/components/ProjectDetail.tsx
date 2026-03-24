@@ -384,6 +384,7 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
 
   // Load chat history and poll for new messages
   useEffect(() => {
@@ -409,6 +410,7 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
 
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       streamControllerRef.current?.abort();
     };
   }, []);
@@ -489,7 +491,9 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
     // Brief the captain first (fetches API ref, saves TOOLS.md), then start the chat
     const { sessionReady } = streamCaptainBriefing(projectId, () => {});
     sessionReady.then(() => {
+      if (!mountedRef.current) return;
       const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
+        if (!mountedRef.current) return;
         if (event.type === "message" && event.message) {
           setMessages((prev) => [...prev, event.message!]);
         } else if (event.type === "done") {
@@ -502,6 +506,7 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
       streamControllerRef.current = controller;
     }).catch((err) => {
       console.error("Captain briefing failed:", err);
+      if (!mountedRef.current) return;
       setSending(false);
       setChatError("failed to brief captain");
     });
@@ -693,6 +698,7 @@ export default function ProjectDetail() {
   const [commanderStatus, setCommanderStatus] = useState("");
   const [startingAgent, setStartingAgent] = useState("");
   const hasLoadedRef = useRef(false);
+  const pollRef = useRef<{ interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null }>({ interval: null, timeout: null });
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -733,6 +739,14 @@ export default function ProjectDetail() {
   useEffect(() => {
     refresh();
   }, [refresh]);
+
+  // Cleanup pollRef on unmount
+  useEffect(() => {
+    return () => {
+      if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+      if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
+    };
+  }, []);
 
   // Poll while any instance is provisioning
   useEffect(() => {
@@ -875,14 +889,22 @@ export default function ProjectDetail() {
 
         if (stoppedAgents.length > 0) {
           const pollUntilRunning = () => {
+            // Clear any existing poll to prevent overlapping intervals
+            if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+            if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
+
             const poll = setInterval(async () => {
               await refresh();
             }, 2000);
+            pollRef.current.interval = poll;
             // Stop polling after 30s as a safety net
-            setTimeout(() => {
+            const timeout = setTimeout(() => {
               clearInterval(poll);
+              pollRef.current.interval = null;
+              pollRef.current.timeout = null;
               setStartingAgent("");
             }, 30000);
+            pollRef.current.timeout = timeout;
           };
 
           return (

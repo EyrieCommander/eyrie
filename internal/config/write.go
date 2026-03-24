@@ -227,6 +227,30 @@ func CoerceJSONNumbers(v interface{}) {
 	}
 }
 
+// ValidateRawFormat checks that a raw config string is syntactically valid
+// for the given format (toml, json, yaml). Returns nil on success.
+func ValidateRawFormat(format, content string) error {
+	switch format {
+	case "toml":
+		var v any
+		if _, err := toml.Decode(content, &v); err != nil {
+			return err
+		}
+	case "json":
+		if !json.Valid([]byte(content)) {
+			return fmt.Errorf("invalid JSON syntax")
+		}
+	case "yaml", "yml":
+		var v any
+		if err := yaml.Unmarshal([]byte(content), &v); err != nil {
+			return err
+		}
+	default:
+		return fmt.Errorf("unsupported config format: %s", format)
+	}
+	return nil
+}
+
 // WriteConfigAtomic writes config file atomically based on format
 func WriteConfigAtomic(path string, format string, data interface{}) error {
 	switch format {

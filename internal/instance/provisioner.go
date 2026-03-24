@@ -104,6 +104,15 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		inst.CreatedBy = "user"
 	}
 
+	// Deferred cleanup: remove instance directory on any failure.
+	// Set success = true just before returning the instance to skip cleanup.
+	success := false
+	defer func() {
+		if !success {
+			os.RemoveAll(instDir)
+		}
+	}()
+
 	// Create directory structure
 	dirs := []string{
 		instDir,
@@ -113,7 +122,6 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	}
 	for _, d := range dirs {
 		if err := os.MkdirAll(d, 0o755); err != nil {
-			os.RemoveAll(instDir)
 			return nil, fmt.Errorf("failed to create directory %s: %w", d, err)
 		}
 	}
@@ -134,27 +142,24 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 
 	// Render identity files
 	if err := p.renderIdentityFiles(workspaceDir, req.HierarchyRole, pers, tc); err != nil {
-		os.RemoveAll(instDir)
 		return nil, fmt.Errorf("failed to render identity files: %w", err)
 	}
 
 	// Generate framework config
 	if err := p.generateConfig(&inst, pers, req.Model); err != nil {
-		os.RemoveAll(instDir)
 		return nil, fmt.Errorf("failed to generate config: %w", err)
 	}
 
 	// Save instance metadata
 	data, err := marshalIndent(inst)
 	if err != nil {
-		os.RemoveAll(instDir)
 		return nil, fmt.Errorf("failed to marshal instance metadata: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(instDir, "instance.json"), data, 0o644); err != nil {
-		os.RemoveAll(instDir)
 		return nil, fmt.Errorf("failed to save instance metadata: %w", err)
 	}
 
+	success = true
 	return &inst, nil
 }
 
