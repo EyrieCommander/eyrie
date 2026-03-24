@@ -1,7 +1,7 @@
 BINARY_NAME := eyrie
 BUILD_DIR := bin
 VERSION := 0.1.0
-LDFLAGS := -ldflags "-X github.com/natalie/eyrie/internal/config.Version=$(VERSION)"
+LDFLAGS := -ldflags "-X github.com/Audacity88/eyrie/internal/config.Version=$(VERSION)"
 
 .PHONY: build dev dev-go dev-web clean test lint web install
 

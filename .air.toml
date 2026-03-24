@@ -4,7 +4,7 @@ tmp_dir = "tmp"
 [build]
   bin = "./bin/eyrie"
   args_bin = ["dashboard", "--no-open"]
-  cmd = "go build -ldflags \"-X github.com/natalie/eyrie/internal/config.Version=dev\" -o ./bin/eyrie ./cmd/eyrie"
+  cmd = "go build -ldflags \"-X github.com/Audacity88/eyrie/internal/config.Version=dev\" -o ./bin/eyrie ./cmd/eyrie"
   delay = 500
   exclude_dir = ["tmp", "web", "bin", "node_modules", ".git"]
   exclude_regex = ["_test\\.go$"]

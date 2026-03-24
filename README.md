@@ -18,13 +18,13 @@ Eyrie gives you a single CLI and web dashboard to discover, monitor, and control
 ## Install
 
 ```bash
-go install github.com/natalie/eyrie/cmd/eyrie@latest
+go install github.com/Audacity88/eyrie/cmd/eyrie@latest
 ```
 
 Or build from source:
 
 ```bash
-git clone https://github.com/natalie/eyrie.git
+git clone https://github.com/Audacity88/eyrie.git
 cd eyrie
 make build
 ```
@@ -109,7 +109,7 @@ Two presentation layers share the same adapter and discovery core:
 
 Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for setup instructions, coding conventions, and the PR process.
 
-If you're not sure where to start, check the [open issues](https://github.com/natalie/eyrie/issues) for anything tagged `good first issue` or `help wanted`.
+If you're not sure where to start, check the [open issues](https://github.com/Audacity88/eyrie/issues) for anything tagged `good first issue` or `help wanted`.
 
 ## License
 
