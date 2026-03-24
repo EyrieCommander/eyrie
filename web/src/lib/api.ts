@@ -71,6 +71,12 @@ export function streamLogs(
       });
     }
   };
+  // When the server closes the stream (e.g. after sending historical logs
+  // for an offline agent), stop reconnecting.
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) return;
+    es.close();
+  };
   return () => es.close();
 }
 
@@ -706,11 +712,79 @@ export function streamCaptainBriefing(
   return { controller, sessionReady };
 }
 
+// --- Project Intake (1:1 with commander) ---
+
+export async function fetchProjectIntake(projectId: string): Promise<ProjectChatMessage[]> {
+  const res = await fetch(`${BASE}/api/projects/${projectId}/intake`);
+  if (!res.ok) {
+    throw new Error(`fetchProjectIntake failed: ${res.status} ${res.url}`);
+  }
+  return res.json();
+}
+
+export function streamProjectIntake(
+  projectId: string,
+  message: string,
+  onEvent: (event: ProjectChatEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/projects/${projectId}/intake`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: body.error || res.statusText });
+        return;
+      }
+      const reader = res.body!.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (!done) {
+          buffer += decoder.decode(value, { stream: true });
+        } else {
+          buffer += decoder.decode();
+        }
+        const lines = buffer.split("\n");
+        buffer = lines.pop()!;
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
+          }
+        }
+        if (done) {
+          if (buffer.trim()) {
+            for (const line of buffer.split("\n")) {
+              if (line.startsWith("data: ")) {
+                try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
+              }
+            }
+          }
+          break;
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({ type: "error", error: e instanceof Error ? e.message : "Intake failed" });
+      }
+    }
+  })();
+  return controller;
+}
+
 // --- Project Chat ---
 
 export async function fetchProjectChat(projectId: string): Promise<ProjectChatMessage[]> {
   const res = await fetch(`${BASE}/api/projects/${projectId}/chat`);
-  if (!res.ok) return [];
+  if (!res.ok) {
+    throw new Error(`fetchProjectChat failed: ${res.status} ${res.url}`);
+  }
   return res.json();
 }
 
@@ -759,7 +833,17 @@ export function streamProjectChat(
             try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
           }
         }
-        if (done) break;
+        if (done) {
+          // Process any remaining data in the buffer
+          if (buffer.trim()) {
+            for (const line of buffer.split("\n")) {
+              if (line.startsWith("data: ")) {
+                try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
+              }
+            }
+          }
+          break;
+        }
       }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {

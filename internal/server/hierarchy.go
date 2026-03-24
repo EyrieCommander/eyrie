@@ -9,9 +9,13 @@ import (
 	"path/filepath"
 	"strings"
 
+	"log/slog"
+	"time"
+
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/project"
 )
 
@@ -228,15 +232,39 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	// ZeroClaw where the CLI always uses the active session).
 	const briefingSessionName = "eyrie-commander-briefing"
 	var sessionKey string
+	alreadyBriefed := false
 
-	// Clean up any existing briefing session first
+	// Check if the briefing session already exists — if so, skip re-briefing.
+	// Don't check for messages; the session may exist but the response may still
+	// be streaming (race with React StrictMode double-fire).
 	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
 		for _, sess := range sessions {
 			if sess.Title == briefingSessionName {
-				_ = agent.ResetSession(r.Context(), sess.Key)
+				sessionKey = sess.Key
+				alreadyBriefed = true
+				break
 			}
 		}
 	}
+
+	if alreadyBriefed {
+		// Session exists with content — just return the session key
+		flusher, ok := startSSE(w)
+		if !ok {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+			return
+		}
+		sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
+		data, _ := json.Marshal(sessionEvent)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		doneEvent := map[string]string{"type": "done", "content": ""}
+		data, _ = json.Marshal(doneEvent)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+		return
+	}
+
+	// Create new briefing session
 	sess, err := agent.CreateSession(r.Context(), briefingSessionName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "eyrie: failed to create briefing session on %s: %v\n", agentName, err)
@@ -307,7 +335,7 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find the captain agent
+	// Find the captain agent — auto-start if it's a stopped instance
 	disc := s.runDiscovery(r.Context())
 	var found *discovery.AgentResult
 	for i := range disc.Agents {
@@ -318,8 +346,39 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if found == nil || !found.Alive {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "captain agent not found or not running"})
-		return
+		// Try to auto-start if it's a provisioned instance
+		instStore, instErr := instance.NewStore()
+		if instErr == nil {
+			if inst, getErr := instStore.Get(proj.OrchestratorID); getErr == nil {
+				slog.Info("auto-starting captain for briefing", "instance", inst.Name)
+				if startErr := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); startErr != nil {
+					slog.Warn("failed to auto-start captain", "instance", inst.Name, "error", startErr)
+					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "captain is stopped and failed to start: " + startErr.Error()})
+					return
+				}
+				_ = instStore.UpdateStatus(inst.ID, "starting")
+				// Wait for agent to become reachable (poll discovery)
+				for attempt := 0; attempt < 10; attempt++ {
+					time.Sleep(time.Second)
+					disc = s.runDiscovery(r.Context())
+					for i := range disc.Agents {
+						a := disc.Agents[i].Agent
+						if a.Name == proj.OrchestratorID || a.InstanceID == proj.OrchestratorID {
+							found = &disc.Agents[i]
+							break
+						}
+					}
+					if found != nil && found.Alive {
+						break
+					}
+					found = nil
+				}
+			}
+		}
+		if found == nil || !found.Alive {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "captain agent not found or not running"})
+			return
+		}
 	}
 
 	agent := discovery.NewAgent(found.Agent)
@@ -394,15 +453,16 @@ func composeCaptainBriefing(proj *project.Project) string {
 		b.WriteString(fmt.Sprintf("**Description:** %s\n\n", proj.Description))
 	}
 
-	b.WriteString(`As Captain, your responsibilities are:
+	b.WriteString(`As Captain, you are the project lead. You own planning, execution, and coordination for this project.
 
-1. Talk with your user to understand the project requirements in detail
+**Your responsibilities:**
+1. Discuss requirements with your user in detail
 2. Break the project goal into concrete tasks and milestones
-3. Propose a team of Talons (specialist agents) — describe what roles you need and why
-4. Coordinate your Talons once they're assigned to you
-5. Track progress and report status to your user
+3. Create Talon agents (specialists) when you need them — you have full authority to staff your team
+4. Coordinate your Talons and track progress
+5. Report status to your user and the Commander
 
-**Important:** You do NOT create agents yourself. When you've determined what Talons you need, present your proposed team to your user. The Commander will review and provision the agents, then assign them to your project. You'll be notified when they're ready.
+**Creating Talons:** You can create Talon agents directly via the Eyrie API. Review available personas and frameworks, then use ` + "`POST /api/instances`" + ` to provision them. Lighter frameworks (like ZeroClaw) are ideal for Talons that need to run efficiently in parallel.
 
 ## Getting started
 
@@ -414,17 +474,19 @@ Use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1
 2. Check your project details and any assigned agents:
    exec: curl -s http://127.0.0.1:7200/api/projects/` + proj.ID + `
 
-3. Review available personas (these are the kinds of Talons you can request):
+3. Review available personas and frameworks (for when you create Talons):
    exec: curl -s http://127.0.0.1:7200/api/registry/personas
+   exec: curl -s http://127.0.0.1:7200/api/registry/frameworks
 
 Save the API reference to your TOOLS.md under an "## Eyrie API" heading.
 
-You will be added to a group chat with your user and the Commander. When the chat starts, the Commander will introduce the project and hand off to you. At that point, discuss requirements with the user and propose:
-- An initial plan with milestones
-- What Talon agents would be useful (roles, personas, frameworks)
-- What to focus on first
+You will be in a group chat with your user and the Commander. The Commander will brief you on the mission — this might happen immediately (if the project goals are clear) or after a brief conversation with the user. **Respond with [PASS] until the Commander explicitly hands off to you.**
 
-Do NOT introduce yourself now — just save the reference and wait for the group chat to begin.`)
+Once the Commander briefs you and hands off, take over immediately. Introduce yourself, confirm your understanding of the mission, then start driving the project — discuss requirements, propose a plan, and identify what Talons you need.
+
+The Commander oversees all projects. You report to the Commander. But day-to-day, this project is yours to run.
+
+Do NOT introduce yourself now — just save the API reference and wait for the group chat.`)
 
 	return b.String()
 }
@@ -451,11 +513,36 @@ func composeBriefing() string {
 
 As Commander, you oversee all of your user's projects. Eyrie organizes agents into a hierarchy:
 
-- **Commander** (you): oversees all projects, creates Captains and Talons, tracks progress across everything.
-- **Captain**: leads a single project, coordinates its Talons, tracks project progress, reports back to you.
+- **Commander** (you): oversees all projects, creates projects and assigns Captains, tracks progress across everything. You are the user's primary point of contact.
+- **Captain**: leads a single project, creates and coordinates its Talons, owns all planning and execution. Reports to you.
 - **Talon**: a specialist agent focused on a specific role (researcher, developer, writer, etc.).
 
-You create both Captains and Talons. Captains manage their Talons day-to-day but don't create new ones. When creating agents, consider your user's needs and the framework characteristics: heavier frameworks (like OpenClaw) are best for Commanders and Captains who need rich tool access; lighter frameworks (like ZeroClaw) are ideal for Talons that need to run efficiently in parallel.
+**Your prime responsibility for each project is to understand its goals clearly and track its progress on a global level.** You are the keeper of cross-project context and user intent.
+
+**Your responsibilities:**
+- Understand what the user wants to build and why — goals, motivation, constraints
+- Track progress across all projects and priorities
+- Brief Captains with clear missions when project chats start
+- Use your memories actively — always check for prior conversations, user preferences, and context from other projects that might be relevant
+
+**Not your job** (delegate to Captains):
+- Detailed project planning, milestones, and task breakdown
+- Creating Talons — Captains staff their own teams
+- Day-to-day project coordination
+
+## In project chat
+
+When a project chat starts, a Captain has already been assigned. Before responding:
+
+1. **Check your memories** for any prior context — previous conversations with this user, related projects, stated preferences, or background that's relevant
+2. **Assess the project info** (name, goal, description provided at creation)
+3. **Decide your approach:**
+   - If the goals are **clear enough** (specific goal, good description, and/or you have context from memory): briefly welcome the user, then immediately brief the Captain on the mission and hand off
+   - If the goals are **vague** (generic name, empty description, no prior context): ask the user focused questions to understand what they want and why — keep it brief (1-3 questions), then brief the Captain and hand off
+
+When briefing the Captain, include: what the user wants to accomplish, their motivation, any constraints or preferences, and what the captain should focus on first.
+
+Do NOT plan the project or propose milestones — that's the Captain's job.
 
 ## Getting started
 
@@ -473,7 +560,7 @@ First, use the exec tool to run curl commands against the Eyrie API at http://12
 
 Next: use your "edit" tool to save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
 
-Then: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on and what team of agents would be most useful.`
+Then: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on.`
 }
 
 // commanderRef stores either an instance ID or a legacy agent name.

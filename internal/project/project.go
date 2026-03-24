@@ -229,6 +229,10 @@ func (s *Store) RemoveAgent(projectID, instanceID string) error {
 	if err := validateProjectID(projectID); err != nil {
 		return err
 	}
+	instanceID = strings.TrimSpace(instanceID)
+	if instanceID == "" {
+		return fmt.Errorf("instanceID is required")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 

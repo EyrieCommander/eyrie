@@ -3,12 +3,14 @@ package server
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 
 	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/persona"
+	"github.com/Audacity88/eyrie/internal/project"
 )
 
 func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
@@ -95,9 +97,10 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Auto-start if requested
+	var autoStartErr error
 	if req.AutoStart {
-		if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); err != nil {
-			slog.Warn("auto-start failed", "instance", inst.Name, "error", err)
+		if autoStartErr = manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); autoStartErr != nil {
+			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
 			inst.Status = "error"
 		} else {
 			// Set to "starting" — discovery will confirm "running" once the agent is alive
@@ -108,6 +111,26 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Auto-link captain to project: if a captain is created for a project,
+	// set the project's orchestrator_id so it appears as the project captain.
+	if req.HierarchyRole == "captain" && req.ProjectID != "" {
+		if projStore, pErr := project.NewStore(); pErr == nil {
+			if proj, pErr := projStore.Get(req.ProjectID); pErr == nil {
+				proj.OrchestratorID = inst.ID
+				if pErr := projStore.Save(*proj); pErr != nil {
+					slog.Warn("failed to auto-link captain to project", "project", req.ProjectID, "error", pErr)
+				}
+			}
+		}
+	}
+
+	if req.AutoStart && inst.Status == "error" {
+		writeJSON(w, http.StatusCreated, map[string]any{
+			"instance": inst,
+			"warning":  fmt.Sprintf("auto-start failed: %v", autoStartErr),
+		})
+		return
+	}
 	writeJSON(w, http.StatusCreated, inst)
 }
 
@@ -229,8 +252,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Update status
-	newStatus := "running"
+	// Update status — use "starting" for start/restart; discovery will confirm "running"
+	newStatus := "starting"
 	if action == "stop" {
 		newStatus = "stopped"
 	}

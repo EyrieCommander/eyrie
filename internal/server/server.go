@@ -53,8 +53,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions", s.handleCreateSession)
 	s.mux.HandleFunc("GET /api/agents/{name}/sessions/{session}/messages", s.handleAgentMessages)
 	s.mux.HandleFunc("POST /api/agents/{name}/chat", s.handleAgentChat)
-	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}", s.handleResetSession)
-	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}/purge", s.handleDeleteSession)
+	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}", s.handleDeleteSession)
+	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/reset", s.handleResetSession)
 	s.mux.HandleFunc("DELETE /api/agents/{name}/sessions/{session}/destroy", s.handleDestroySession)
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/hide", s.handleHideSession)
 	s.mux.HandleFunc("POST /api/agents/{name}/sessions/{session}/unhide", s.handleUnhideSession)
@@ -89,6 +89,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE /api/projects/{id}/agents/{instanceId}", s.handleRemoveProjectAgent)
 	s.mux.HandleFunc("GET /api/projects/{id}/chat", s.handleProjectChatMessages)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat", s.handleProjectChatSend)
+	s.mux.HandleFunc("GET /api/projects/{id}/intake", s.handleProjectIntakeMessages)
+	s.mux.HandleFunc("POST /api/projects/{id}/intake", s.handleProjectIntake)
 
 	// Hierarchy endpoints
 	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
