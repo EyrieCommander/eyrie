@@ -29,7 +29,7 @@ func DefaultCatalogURL() string {
 	}
 	// Source path is distinct from cache path (~/.eyrie/cache/personas.json)
 	p := filepath.Join(home, ".eyrie", "personas.json")
-	u := url.URL{Scheme: "file", Path: p}
+	u := url.URL{Scheme: "file", Path: filepath.ToSlash(p)}
 	return u.String()
 }
 
@@ -75,7 +75,19 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 			return nil, fmt.Errorf("parse catalog URL: %w", parseErr)
 		}
 		localPath := filepath.FromSlash(u.Path)
-		data, err := os.ReadFile(localPath)
+		f, err := os.Open(localPath)
+		if err != nil {
+			return nil, fmt.Errorf("read local persona catalog: %w", err)
+		}
+		defer f.Close()
+		fi, err := f.Stat()
+		if err != nil {
+			return nil, fmt.Errorf("read local persona catalog: %w", err)
+		}
+		if fi.Size() > maxPersonaCatalogSize {
+			return nil, fmt.Errorf("local persona catalog exceeds %d byte limit", maxPersonaCatalogSize)
+		}
+		data, err := io.ReadAll(io.LimitReader(f, maxPersonaCatalogSize))
 		if err != nil {
 			return nil, fmt.Errorf("read local persona catalog: %w", err)
 		}

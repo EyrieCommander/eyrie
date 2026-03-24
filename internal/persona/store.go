@@ -111,7 +111,10 @@ func (s *Store) Delete(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if err := os.Remove(s.path(id)); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(s.path(id)); err != nil {
+		if os.IsNotExist(err) {
+			return fmt.Errorf("persona %q: %w", id, ErrNotFound)
+		}
 		return err
 	}
 	return nil

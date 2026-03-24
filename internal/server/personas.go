@@ -91,6 +91,7 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	var body struct {
 		PersonaID string `json:"persona_id"`
 	}
@@ -152,6 +153,7 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	var p persona.Persona
 	if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid persona data"})
@@ -188,18 +190,12 @@ func (s *Server) handleDeletePersona(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify persona exists before deleting so we can return 404 for missing IDs
-	if _, err := store.Get(id); err != nil {
+	if err := store.Delete(id); err != nil {
 		if errors.Is(err, persona.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("persona %q not found", id)})
 		} else {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to check persona: %v", err)})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to delete persona: %v", err)})
 		}
-		return
-	}
-
-	if err := store.Delete(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to delete persona: %v", err)})
 		return
 	}
 
