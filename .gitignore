@@ -11,3 +11,4 @@ internal/server/static/
 backup/
 .nvmrc
 .cursor/
+COMMANDS.sh
