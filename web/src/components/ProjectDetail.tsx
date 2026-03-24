@@ -2,8 +2,9 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { ArrowLeft, Plus, Trash2, Briefcase, ChevronRight, Crown } from "lucide-react";
 import { MessageSquare, Send } from "lucide-react";
-import type { Project, AgentInstance, AgentInfo, Persona, ProjectChatMessage } from "../lib/types";
-import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, fetchHierarchy, createInstance, deleteProject, updateProject, streamCaptainBriefing, fetchProjectChat, streamProjectChat } from "../lib/api";
+import type { Project, AgentInstance, AgentInfo, Persona, ProjectChatMessage, ChatPart } from "../lib/types";
+import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
+import { fetchProjects, fetchInstances, fetchAgents, fetchPersonas, fetchHierarchy, createInstance, deleteProject, updateProject, streamCaptainBriefing, fetchProjectChat, streamProjectChat, agentAction, instanceAction } from "../lib/api";
 
 function InstanceRow({ instance, onClick }: { instance: AgentInstance; onClick: () => void }) {
   const isProvisioning = instance.status === "created" || instance.status === "provisioning" || instance.status === "starting";
@@ -57,6 +58,7 @@ function SetCaptainDialog({
   const [mode, setMode] = useState<"create" | "existing">("create");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [startingCaptain, setStartingCaptain] = useState("");
 
   // Create new form — default name derived from project
   const defaultName = `captain-${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
@@ -64,11 +66,15 @@ function SetCaptainDialog({
   const [framework, setFramework] = useState("openclaw");
   const [captainInstances, setCaptainInstances] = useState<AgentInstance[]>([]);
 
-  useEffect(() => {
+  const refreshInstances = useCallback(() => {
     fetchInstances().then((all) => {
-      setCaptainInstances(all.filter((i) => i.hierarchy_role === "captain" && !i.project_id));
+      setCaptainInstances(all.filter((i) => i.hierarchy_role === "captain"));
     }).catch((err) => { console.error("Failed to fetch instances:", err); });
   }, []);
+
+  useEffect(() => {
+    refreshInstances();
+  }, [refreshInstances]);
 
   const handleCreate = async () => {
     const effectiveName = name.trim() || defaultName;
@@ -174,20 +180,49 @@ function SetCaptainDialog({
                   no captain instances available
                 </div>
               ) : (
-                captainInstances.map((inst) => (
-                  <button
-                    key={inst.id}
-                    onClick={() => handleSelectExisting(inst.id)}
-                    disabled={saving}
-                    className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50 disabled:opacity-50"
-                  >
-                    <span className={`h-1.5 w-1.5 rounded-full ${inst.status === "running" ? "bg-green" : "bg-text-muted"}`} />
-                    <div className="flex-1">
-                      <span className="font-medium text-text">{inst.display_name}</span>
-                      <span className="ml-2 text-text-muted">{inst.framework} · :{inst.port}</span>
+                captainInstances.map((inst) => {
+                  const isStopped = inst.status !== "running";
+                  return (
+                    <div
+                      key={inst.id}
+                      className="flex items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-xs transition-all hover:border-green/50 hover:bg-surface-hover/50"
+                    >
+                      <button
+                        onClick={() => handleSelectExisting(inst.id)}
+                        disabled={saving}
+                        className="flex flex-1 items-center gap-3 text-left disabled:opacity-50"
+                      >
+                        <span className={`h-1.5 w-1.5 rounded-full ${isStopped ? "bg-text-muted" : "bg-green"}`} />
+                        <div className="flex-1">
+                          <span className="font-medium text-text">{inst.display_name}</span>
+                          <span className="ml-2 text-text-muted">{inst.framework} · :{inst.port}</span>
+                          {inst.project_id && (
+                            <span className="ml-2 text-[10px] text-text-muted">(assigned)</span>
+                          )}
+                        </div>
+                      </button>
+                      {isStopped && (
+                        <button
+                          disabled={startingCaptain === inst.id}
+                          onClick={async () => {
+                            setStartingCaptain(inst.id);
+                            try {
+                              await instanceAction(inst.id, "start");
+                              setTimeout(refreshInstances, 2000);
+                            } catch (e) {
+                              setError(e instanceof Error ? e.message : "failed to start captain");
+                            } finally {
+                              setStartingCaptain("");
+                            }
+                          }}
+                          className="shrink-0 rounded bg-green px-2 py-0.5 text-[10px] font-medium text-white hover:bg-green/80 disabled:opacity-50"
+                        >
+                          {startingCaptain === inst.id ? "starting..." : "start"}
+                        </button>
+                      )}
                     </div>
-                  </button>
-                ))
+                  );
+                })
               )}
             </div>
             <div className="flex items-center justify-between">
@@ -324,7 +359,7 @@ function AddAgentDialog({
 
 const ROLE_COLORS: Record<string, string> = {
   user: "text-green",
-  commander: "text-accent",
+  commander: "text-purple",
   captain: "text-yellow-400",
   talon: "text-blue-400",
   system: "text-text-muted",
@@ -334,18 +369,32 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState("");
   const [streamingSender, setStreamingSender] = useState<string | null>(null);
+  const [streamingRole, setStreamingRole] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
+  const [streamingToolCalls, setStreamingToolCalls] = useState<ChatPart[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const streamControllerRef = useRef<AbortController | null>(null);
 
-  // Load chat history
+  // Load chat history and poll for new messages
   useEffect(() => {
     fetchProjectChat(projectId).then(setMessages).catch(() => {});
-  }, [projectId]);
+    const interval = setInterval(() => {
+      if (sending) return;
+      fetchProjectChat(projectId).then((msgs) => {
+        setMessages((prev) => {
+          if (msgs.length !== prev.length) return msgs;
+          return prev;
+        });
+      }).catch(() => {});
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [projectId, sending]);
 
   // Auto-scroll
   useEffect(() => {
@@ -354,39 +403,108 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
     }
   }, [messages, streamingContent]);
 
+  useEffect(() => {
+    return () => {
+      streamControllerRef.current?.abort();
+    };
+  }, []);
+
   const handleSend = useCallback(() => {
     const msg = input.trim();
     if (!msg || sending) return;
     setInput("");
     setSending(true);
+    setChatError("");
     setStreamingContent("");
     setStreamingSender(null);
+    setStreamingToolCalls([]);
 
     const controller = streamProjectChat(projectId, msg, (event) => {
       if (event.type === "message" && event.message) {
         setMessages((prev) => [...prev, event.message!]);
         setStreamingContent("");
         setStreamingSender(null);
+        setStreamingRole(null);
+        setStreamingToolCalls([]);
       } else if (event.type === "agent_event" && event.event) {
         if (event.event.type === "delta") {
           setStreamingSender(event.sender || null);
+          setStreamingRole(event.role || null);
           setStreamingContent((prev) => prev + (event.event!.content || ""));
+        } else if (event.event.type === "tool_start") {
+          setStreamingSender(event.sender || null);
+          setStreamingRole(event.role || null);
+          setStreamingToolCalls((prev) => [...prev, {
+            type: "tool_call",
+            id: event.event!.tool_id,
+            name: event.event!.tool,
+          }]);
+        } else if (event.event.type === "tool_result") {
+          setStreamingToolCalls((prev) => {
+            const updated = [...prev];
+            for (let i = updated.length - 1; i >= 0; i--) {
+              if ((event.event!.tool_id && updated[i].id === event.event!.tool_id) ||
+                  (!event.event!.tool_id && updated[i].name === event.event!.tool && !updated[i].output)) {
+                updated[i] = { ...updated[i], output: event.event!.output };
+                break;
+              }
+            }
+            return updated;
+          });
+        } else if (event.event.type === "error") {
+          const agentName = event.sender || "agent";
+          const errContent = event.event.content || "unknown error";
+          setMessages((prev) => [...prev, {
+            id: `err-${Date.now()}`,
+            sender: agentName,
+            role: event.role || "system",
+            content: `error: ${errContent}`,
+            timestamp: new Date().toISOString(),
+          }]);
+          setStreamingContent("");
+          setStreamingSender(null);
+          setStreamingRole(null);
         }
       } else if (event.type === "done") {
         setSending(false);
         setStreamingContent("");
         setStreamingSender(null);
+        setStreamingRole(null);
+        setStreamingToolCalls([]);
       } else if (event.type === "error") {
         setSending(false);
+        setChatError(event.error || "failed to send message");
       }
     });
-
-    // Cleanup on unmount
-    return () => controller.abort();
+    streamControllerRef.current = controller;
   }, [input, sending, projectId]);
 
+  const startProjectChat = useCallback(() => {
+    setSending(true);
+    setChatError("");
+    // Brief the captain first (fetches API ref, saves TOOLS.md), then start the chat
+    const { sessionReady } = streamCaptainBriefing(projectId, () => {});
+    sessionReady.then(() => {
+      const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
+        if (event.type === "message" && event.message) {
+          setMessages((prev) => [...prev, event.message!]);
+        } else if (event.type === "done") {
+          setSending(false);
+        } else if (event.type === "error") {
+          setSending(false);
+          setChatError(event.error || "failed to start chat");
+        }
+      });
+      streamControllerRef.current = controller;
+    }).catch((err) => {
+      console.error("Captain briefing failed:", err);
+      setSending(false);
+      setChatError("failed to brief captain");
+    });
+  }, [projectId]);
+
   return (
-    <div className="flex flex-col h-[500px]">
+    <div className="flex flex-col resize-y overflow-hidden" style={{ height: "calc(100vh - 300px)", minHeight: "300px", maxHeight: "calc(100vh - 120px)" }}>
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
         {messages.length === 0 && !sending && (
@@ -394,60 +512,87 @@ function ProjectChat({ projectId, participants }: { projectId: string; participa
             <p className="text-xs text-text-muted">
               start the project chat to bring the team together
             </p>
+            {chatError && (
+              <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red max-w-sm mx-auto">
+                {chatError}
+              </div>
+            )}
             <button
-              onClick={() => {
-                setSending(true);
-                // Brief the captain first, then initialize the chat
-                const { sessionReady } = streamCaptainBriefing(projectId, () => {});
-                sessionReady.then(() => {
-                  // Send the initialization message
-                  const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
-                    if (event.type === "message" && event.message) {
-                      setMessages((prev) => [...prev, event.message!]);
-                    } else if (event.type === "done") {
-                      setSending(false);
-                    } else if (event.type === "error") {
-                      setSending(false);
-                    }
-                  });
-                  return () => controller.abort();
-                }).catch((err) => {
-                  console.error("Captain briefing failed:", err);
-                  setSending(false);
-                });
-              }}
+              onClick={startProjectChat}
               disabled={sending}
               className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
             >
-              {sending ? "initializing..." : "start project chat"}
+              start project chat
             </button>
           </div>
         )}
-        {messages.map((msg) => (
-          <div key={msg.id} className="text-xs">
-            <div className="flex items-baseline gap-2">
-              <span className={`font-bold ${ROLE_COLORS[msg.role] || "text-text"}`}>
-                {msg.role === "user" ? "you" : msg.role}
-              </span>
-              {msg.role !== "user" && msg.sender !== msg.role && (
-                <span className="text-[10px] text-text-muted">({msg.sender})</span>
+        {messages.map((msg) => {
+          const parts = msg.parts ?? [];
+          const toolParts = parts.filter((p) => p.type === "tool_call");
+          const hasParts = toolParts.length > 0;
+          return (
+            <div key={msg.id} className="text-xs">
+              <div className="flex items-baseline gap-2">
+                <span className={`font-bold ${ROLE_COLORS[msg.role] || "text-text"}`}>
+                  {msg.role === "user" ? "you" : msg.role}
+                </span>
+                {msg.role !== "user" && msg.sender !== msg.role && (
+                  <span className="text-[10px] text-text-muted">({msg.sender})</span>
+                )}
+                <span className="text-[10px] text-text-muted">
+                  {new Date(msg.timestamp).toLocaleTimeString()}
+                </span>
+                {hasParts && (
+                  <span className="text-[10px] text-accent/60">
+                    [{toolParts.length} tool{toolParts.length > 1 ? "s" : ""}]
+                  </span>
+                )}
+              </div>
+              {hasParts && (
+                <div className="mt-1 space-y-1">
+                  {toolParts.map((tc, i) => (
+                    <PartToolCallCard key={`${msg.id}-tc-${i}`} part={tc} />
+                  ))}
+                </div>
               )}
-              <span className="text-[10px] text-text-muted">
-                {new Date(msg.timestamp).toLocaleTimeString()}
-              </span>
+              <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
             </div>
-            <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
+          );
+        })}
+        {sending && !streamingContent && !streamingSender && streamingToolCalls.length === 0 && (
+          <div className="text-xs py-1 text-text-muted animate-pulse">
+            <span className={`font-bold ${ROLE_COLORS["commander"]}`}>agent</span>{" "}
+            thinking...
           </div>
-        ))}
-        {streamingSender && streamingContent && (
+        )}
+        {streamingSender && (
           <div className="text-xs">
             <div className="flex items-baseline gap-2">
-              <span className={`font-bold ${ROLE_COLORS["captain"] || "text-text"}`}>
-                {streamingSender}
+              <span className={`font-bold ${ROLE_COLORS[streamingRole || "captain"] || "text-text"}`}>
+                {streamingRole || "agent"}
               </span>
-              <span className="text-[10px] text-text-muted">typing...</span>
+              {streamingSender !== streamingRole && (
+                <span className="text-[10px] text-text-muted">({streamingSender})</span>
+              )}
             </div>
-            <div className="mt-0.5 text-text whitespace-pre-wrap">{streamingContent}</div>
+            {streamingToolCalls.length > 0 && (
+              <div className="mt-1 space-y-1">
+                {streamingToolCalls.map((tc, i) => (
+                  <div key={`stc-${i}`} className="rounded border border-border bg-surface px-2 py-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-accent text-[10px] font-mono">{tc.name}</span>
+                      {!tc.output && <span className="text-[10px] text-text-muted animate-pulse">running...</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+            {streamingContent && (
+              <div className="mt-0.5 text-text whitespace-pre-wrap">
+                {streamingContent}
+                <StreamingCursor />
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -541,11 +686,14 @@ export default function ProjectDetail() {
   const [loadError, setLoadError] = useState("");
   const [tab, setTab] = useState<"team" | "chat">("chat");
   const [commanderName, setCommanderName] = useState("");
+  const [commanderStatus, setCommanderStatus] = useState("");
+  const [startingAgent, setStartingAgent] = useState("");
+  const hasLoadedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     if (!id) return;
     try {
-      if (!project) setLoading(true);
+      if (!hasLoadedRef.current) setLoading(true);
       setLoadError("");
       const [projects, allInstances, allAgents, hierarchy] = await Promise.all([
         fetchProjects(),
@@ -555,6 +703,7 @@ export default function ProjectDetail() {
       ]);
       if (hierarchy?.commander) {
         setCommanderName(hierarchy.commander.name);
+        setCommanderStatus(hierarchy.commander.status);
       }
       const p = projects.find((p) => p.id === id);
       setProject(p ?? null);
@@ -568,6 +717,7 @@ export default function ProjectDetail() {
         );
         setInstances(projectInstances);
       }
+      hasLoadedRef.current = true;
     } catch (err) {
       console.error("Failed to load project data:", err);
       setLoadError(err instanceof Error ? err.message : "Failed to load project");
@@ -677,17 +827,125 @@ export default function ProjectDetail() {
       </div>
 
       {/* Chat tab */}
-      {tab === "chat" && (
-        <ProjectChat
-          projectId={project.id}
-          participants={[
-            ...(commanderName ? [{ name: commanderName, role: "commander" }] : []),
-            ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
-            ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
-            ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
-          ]}
-        />
-      )}
+      {tab === "chat" && (() => {
+        if (!commanderName) {
+          return (
+            <div className="py-10 text-center space-y-3">
+              <p className="text-xs text-text-muted">no commander set up yet</p>
+              <button
+                onClick={() => navigate("/hierarchy")}
+                className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80"
+              >
+                set up commander
+              </button>
+            </div>
+          );
+        }
+
+        if (!hasCaptain) {
+          return (
+            <div className="py-10 text-center space-y-3">
+              <p className="text-xs text-text-muted">assign a captain to start the project chat</p>
+              <button
+                onClick={() => setTab("team")}
+                className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80"
+              >
+                assign captain
+              </button>
+            </div>
+          );
+        }
+
+        // Check which required agents are stopped
+        const stoppedAgents: { name: string; role: string; isInstance: boolean; id: string }[] = [];
+        if (commanderStatus !== "running") {
+          const cmdInst = instances.find((i) => i.name === commanderName);
+          stoppedAgents.push({ name: commanderName, role: "commander", isInstance: !!cmdInst, id: cmdInst?.id || commanderName });
+        }
+        if (captainInstance && captainInstance.status !== "running") {
+          stoppedAgents.push({ name: captainInstance.display_name || captainInstance.name, role: "captain", isInstance: true, id: captainInstance.id });
+        }
+        if (captainAgent && !captainAgent.alive) {
+          stoppedAgents.push({ name: captainAgent.name, role: "captain", isInstance: false, id: captainAgent.name });
+        }
+
+        if (stoppedAgents.length > 0) {
+          const pollUntilRunning = () => {
+            const poll = setInterval(async () => {
+              await refresh();
+            }, 2000);
+            // Stop polling after 30s as a safety net
+            setTimeout(() => clearInterval(poll), 30000);
+          };
+
+          return (
+            <div className="py-10 text-center space-y-4">
+              <p className="text-xs text-text-muted">
+                these agents need to be running before starting the chat
+              </p>
+              <div className="flex flex-col items-center gap-2">
+                {stoppedAgents.map((a) => (
+                  <div key={a.id} className="flex items-center gap-3 rounded border border-border bg-surface px-4 py-2 text-xs">
+                    <span className={`h-1.5 w-1.5 rounded-full ${startingAgent === a.id || startingAgent === "all" ? "bg-yellow-400 animate-pulse" : "bg-text-muted"}`} />
+                    <span className="font-medium text-text">{a.name}</span>
+                    <span className="text-text-muted">{a.role}</span>
+                    <button
+                      disabled={!!startingAgent}
+                      onClick={async () => {
+                        setStartingAgent(a.id);
+                        try {
+                          if (a.isInstance) await instanceAction(a.id, "start");
+                          else await agentAction(a.id, "start");
+                          pollUntilRunning();
+                        } catch (e) {
+                          setLoadError(e instanceof Error ? e.message : "failed to start agent");
+                          setStartingAgent("");
+                        }
+                      }}
+                      className="rounded bg-green px-2 py-0.5 text-[10px] font-medium text-white hover:bg-green/80 disabled:opacity-50"
+                    >
+                      {startingAgent === a.id || startingAgent === "all" ? "starting..." : "start"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+              {stoppedAgents.length > 1 && (
+                <button
+                  disabled={!!startingAgent}
+                  onClick={async () => {
+                    setStartingAgent("all");
+                    try {
+                      for (const a of stoppedAgents) {
+                        if (a.isInstance) await instanceAction(a.id, "start");
+                        else await agentAction(a.id, "start");
+                      }
+                      pollUntilRunning();
+                    } catch (e) {
+                      setLoadError(e instanceof Error ? e.message : "failed to start agents");
+                      setStartingAgent("");
+                    }
+                  }}
+                  className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+                >
+                  {startingAgent === "all" ? "starting..." : "start all"}
+                </button>
+              )}
+            </div>
+          );
+        }
+
+        return (
+          <ProjectChat
+            projectId={project.id}
+            participants={[
+              { name: commanderName, role: "commander" },
+              ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
+              ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
+              ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
+            ]}
+          />
+        );
+      })()}
 
       {/* Team tab */}
       {tab !== "chat" && <>
