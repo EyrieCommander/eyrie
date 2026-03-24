@@ -23,7 +23,7 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	discoveryCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	agent, err := s.findAgent(discoveryCtx, name)
+	agent, err := s.findAgentAnyState(discoveryCtx, name)
 	cancel()
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -87,7 +87,7 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	agent, err := s.findAgent(ctx, name)
+	agent, err := s.findAgentAnyState(ctx, name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -137,7 +137,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	agent, err := s.findAgent(ctx, name)
+	agent, err := s.findAgentAnyState(ctx, name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return

@@ -43,14 +43,17 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			CommanderCapable: discovery.NewAgent(ar.Agent).Capabilities().CommanderCapable,
 		}
 
+		agent := discovery.NewAgent(ar.Agent)
 		if ar.Alive {
-			agent := discovery.NewAgent(ar.Agent)
 			if health, err := agent.Health(ctx); err == nil {
 				aj.Health = health
 			}
-			if status, err := agent.Status(ctx); err == nil {
-				aj.Status = status
+		}
+		if status, err := agent.Status(ctx); err == nil {
+			if ar.Alive && status.Provider != "" {
+				status.ProviderStatus = adapter.ProbeProvider(ctx, status.Provider)
 			}
+			aj.Status = status
 		}
 
 		agents = append(agents, aj)
@@ -64,7 +67,7 @@ func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
 
-	agent, err := s.findAgent(ctx, name)
+	agent, err := s.findAgentAnyState(ctx, name)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
 		return
@@ -456,6 +459,19 @@ func (s *Server) findAgent(ctx context.Context, name string) (adapter.Agent, err
 			if !ar.Alive {
 				return nil, fmt.Errorf("agent %q is not running", name)
 			}
+			return discovery.NewAgent(ar.Agent), nil
+		}
+	}
+	return nil, fmt.Errorf("agent %q not found", name)
+}
+
+// findAgentAnyState returns an adapter for the named agent regardless of
+// whether it is currently running. This is used by endpoints that can serve
+// data from persistent sources (log files, config files, chat history).
+func (s *Server) findAgentAnyState(ctx context.Context, name string) (adapter.Agent, error) {
+	result := s.runDiscovery(ctx)
+	for _, ar := range result.Agents {
+		if ar.Agent.Name == name {
 			return discovery.NewAgent(ar.Agent), nil
 		}
 	}
