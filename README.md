@@ -2,18 +2,28 @@
 
 A unified management interface for the Claw family of AI agent frameworks.
 
-Eyrie gives you a single CLI and web dashboard to discover, monitor, and control all your Claw agents — OpenClaw, ZeroClaw, PicoClaw, NanoClaw, IronClaw, and others — regardless of which framework they run on.
+Eyrie gives you a single CLI and web dashboard to discover, monitor, and control all your Claw agents — ZeroClaw, OpenClaw, Hermes, and others — regardless of which framework they run on.
 
 ## Features
 
 - **Auto-discovery** of running Claw instances on localhost
-- **Unified status view**: health, RAM, uptime, provider, connected channels
+- **Unified status view**: health, uptime, provider status, connected channels
 - **Start, stop, restart** any agent from one place
 - **Log tailing** per agent in real time
-- **Live activity stream**: see agent sessions, tool calls, LLM requests as they happen
-- **Conversation history**: browse sessions and chat messages (OpenClaw)
+- **Chat**: talk to any agent from the dashboard with streaming responses and live tool call visibility
+- **Session management**: browse, rename, reset, and delete conversation sessions
+- **Streaming tool events**: see tool calls with arguments and output as they happen (supports ZeroClaw with [claude-max-api-proxy](https://github.com/nichochar/claude-max-api-proxy))
+- **Framework installation**: install new agent frameworks (ZeroClaw, OpenClaw, Hermes) from the dashboard or CLI
+- **Agent provisioning**: create new agent instances with custom personas and configuration
+- **Provider health probing**: verify LLM provider connectivity from the status view
 - **Web dashboard** for visual monitoring (served from the same binary)
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
+
+### In development
+
+- **Project orchestration**: organize agents into project teams with commander/captain/talon hierarchy
+- **Project chat**: multi-agent group conversations with @mention routing
+- **Persona catalog**: browse and install agent personalities from a registry
 
 ## Install
 
@@ -36,19 +46,16 @@ make build
 eyrie status
 
 # Get detailed info on a specific agent
-eyrie status openclaw
+eyrie status zeroclaw
 
 # Tail logs from an agent
 eyrie logs zeroclaw
 
-# Watch agent activity (tool calls, LLM requests, sessions)
-eyrie activity zeroclaw
-
-# View conversation history (OpenClaw)
-eyrie history openclaw
-
 # Start the web dashboard
 eyrie dashboard
+
+# Install a new framework
+eyrie install hermes
 ```
 
 ## CLI Commands
@@ -57,7 +64,7 @@ eyrie dashboard
 |---------|-------------|
 | `eyrie status` | Show all discovered agents and their health |
 | `eyrie status <name>` | Detailed status for one agent |
-| `eyrie start <name>` | Start an agent (delegates to framework CLI) |
+| `eyrie start <name>` | Start an agent |
 | `eyrie stop <name>` | Stop an agent |
 | `eyrie restart <name>` | Restart an agent |
 | `eyrie logs <name>` | Tail logs in terminal |
@@ -66,6 +73,7 @@ eyrie dashboard
 | `eyrie config <name>` | View agent configuration |
 | `eyrie discover` | Run discovery and show results |
 | `eyrie dashboard` | Start web dashboard |
+| `eyrie install` | List or install available frameworks |
 | `eyrie version` | Version info |
 
 ## Configuration
@@ -93,7 +101,7 @@ Eyrie uses an adapter pattern: each Claw framework gets a dedicated adapter that
 
 Two presentation layers share the same adapter and discovery core:
 
-- **CLI** (`eyrie status`, `eyrie logs`, `eyrie activity`, `eyrie history`) — one-shot commands with streaming or tabular output
+- **CLI** (`eyrie status`, `eyrie logs`, etc.) — one-shot commands with streaming or tabular output
 - **Web dashboard** (`eyrie dashboard`) — React SPA served from the embedded binary
 
 ### Framework capabilities
@@ -101,9 +109,30 @@ Two presentation layers share the same adapter and discovery core:
 | Feature | ZeroClaw | OpenClaw |
 |---------|----------|----------|
 | Log streaming | SSE `/api/events` | WebSocket `logs.tail` |
-| Activity events | SSE (agent_start, tool_call, llm_request, etc.) | WebSocket `agent`/`chat` events |
-| Session list | Not supported | WebSocket `sessions.list` |
-| Chat history | Not supported | WebSocket `chat.history` |
+| Chat | WebSocket gateway | WebSocket RPC |
+| Session management | SQLite + gateway API | WebSocket `sessions.list` |
+| Tool call streaming | via claude-max-api-proxy SSE | WebSocket events |
+| Lifecycle (start/stop) | `zeroclaw daemon` | `openclaw` CLI |
+| Config format | TOML | JSON |
+
+## Development
+
+```bash
+# Full-stack development (Go + React hot reload)
+make dev
+
+# Backend only
+make dev-go
+
+# Frontend only
+make dev-web
+
+# Production build
+make build
+
+# Install to ~/.local/bin
+make install
+```
 
 ## Contributing
 
