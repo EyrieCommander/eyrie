@@ -1,0 +1,14 @@
+bin/
+tmp/
+web/node_modules/
+web/dist/
+internal/server/static/
+*.exe
+*.dll
+*.so
+*.dylib
+.DS_Store
+backup/
+.nvmrc
+.cursor/
+COMMANDS.sh
