@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 	"nhooyr.io/websocket"
 )
@@ -107,31 +108,86 @@ func (z *ZeroClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 		GatewayPort int             `json:"gateway_port"`
 	}
 
-	if err := z.getJSON(ctx, "/api/status", &resp); err != nil {
-		return nil, err
+	if err := z.getJSON(ctx, "/api/status", &resp); err == nil {
+		var channels []string
+		for name, enabled := range resp.Channels {
+			if enabled {
+				channels = append(channels, name)
+			}
+		}
+
+		return &AgentStatus{
+			Provider:    resp.Provider,
+			Model:       resp.Model,
+			Channels:    channels,
+			GatewayPort: resp.GatewayPort,
+		}, nil
 	}
 
-	var channels []string
-	for name, enabled := range resp.Channels {
-		if enabled {
-			channels = append(channels, name)
+	// Fall back to parsing config file when agent is offline
+	return z.statusFromConfig()
+}
+
+// statusFromConfig extracts provider, model, and channels from the TOML config file.
+func (z *ZeroClawAdapter) statusFromConfig() (*AgentStatus, error) {
+	if z.configPath == "" {
+		return nil, fmt.Errorf("no config path available")
+	}
+
+	data, err := os.ReadFile(z.configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read config: %w", err)
+	}
+
+	as := &AgentStatus{}
+	content := string(data)
+
+	// Parse model (e.g. model = "provider/model-name")
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if strings.HasPrefix(trimmed, "model") && strings.Contains(trimmed, "=") {
+			val := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[1])
+			val = strings.Trim(val, "\"'")
+			as.Model = val
+			if idx := strings.Index(val, "/"); idx > 0 {
+				as.Provider = val[:idx]
+			}
 		}
 	}
 
-	return &AgentStatus{
-		Provider:    resp.Provider,
-		Model:       resp.Model,
-		Channels:    channels,
-		GatewayPort: resp.GatewayPort,
-	}, nil
+	// Parse channels (look for [channels.X] sections)
+	for _, line := range strings.Split(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[channels.") {
+			name := strings.TrimPrefix(trimmed, "[channels.")
+			name = strings.TrimSuffix(name, "]")
+			if name != "" {
+				as.Channels = append(as.Channels, name)
+			}
+		}
+	}
+
+	return as, nil
 }
 
 func (z *ZeroClawAdapter) Config(ctx context.Context) (*AgentConfig, error) {
 	body, err := z.getRaw(ctx, "/api/config")
-	if err != nil {
-		return nil, err
+	if err == nil {
+		return &AgentConfig{Raw: body, Format: "toml"}, nil
 	}
-	return &AgentConfig{Raw: body, Format: "toml"}, nil
+
+	// Fall back to reading config file directly when agent is offline
+	if z.configPath != "" {
+		data, readErr := os.ReadFile(z.configPath)
+		if readErr == nil {
+			return &AgentConfig{Raw: string(data), Format: "toml"}, nil
+		}
+	}
+
+	return nil, err
 }
 
 func (z *ZeroClawAdapter) Start(ctx context.Context) error {
@@ -147,7 +203,8 @@ func (z *ZeroClawAdapter) Restart(ctx context.Context) error {
 }
 
 // TailLogs emits historical log entries from the daemon log file, then
-// connects to the ZeroClaw SSE event stream for live entries.
+// connects to the ZeroClaw SSE event stream for live entries. If the agent
+// is not running, historical logs are still returned before closing.
 func (z *ZeroClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error) {
 	// Pre-read historical entries before creating the channel
 	var history []LogEntry
@@ -155,40 +212,50 @@ func (z *ZeroClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 		history = readHistoricalLogs(zeroclawLogPath(z.configPath), defaultHistoryLines, parseZeroClawLogLine)
 	}
 
-	// Connect to live stream before returning so callers get an immediate error on auth failure
+	// Try to connect to live stream
 	req, err := http.NewRequestWithContext(ctx, "GET", z.baseURL+"/api/events", nil)
-	if err != nil {
+	if err != nil && len(history) == 0 {
 		return nil, fmt.Errorf("creating SSE request: %w", err)
 	}
-	if z.token != "" {
-		req.Header.Set("Authorization", "Bearer "+z.token)
-	}
-	req.Header.Set("Accept", "text/event-stream")
 
-	client := &http.Client{}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to SSE: %w", err)
+	var resp *http.Response
+	if err == nil {
+		if z.token != "" {
+			req.Header.Set("Authorization", "Bearer "+z.token)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+
+		client := &http.Client{}
+		resp, err = client.Do(req)
+		if err == nil && resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			resp = nil
+		}
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, fmt.Errorf("SSE returned status %d", resp.StatusCode)
+	// If we can't connect but have history, serve history only
+	if resp == nil && len(history) == 0 {
+		return nil, fmt.Errorf("agent is not running and no historical logs found")
 	}
 
 	ch := make(chan LogEntry, 64)
 	go func() {
-		// Emit history first, then hand off to the live SSE reader
 		for _, entry := range history {
 			select {
 			case ch <- entry:
 			case <-ctx.Done():
-				resp.Body.Close()
+				if resp != nil {
+					resp.Body.Close()
+				}
 				close(ch)
 				return
 			}
 		}
-		z.readSSE(ctx, resp.Body, ch)
+		if resp != nil {
+			z.readSSE(ctx, resp.Body, ch)
+		} else {
+			close(ch)
+		}
 	}()
 	return ch, nil
 }
@@ -735,7 +802,11 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		wsURL += "?" + encoded
 	}
 
-	conn, _, err := websocket.Dial(ctx, wsURL, nil)
+	// Use a short dial timeout so we fail fast if the agent is unreachable,
+	// rather than blocking until the parent request context is canceled.
+	dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
+	conn, _, err := websocket.Dial(dialCtx, wsURL, nil)
+	dialCancel()
 	if err != nil {
 		return nil, fmt.Errorf("connecting to ZeroClaw WS: %w", err)
 	}
@@ -746,8 +817,14 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		defer close(ch)
 		defer conn.CloseNow()
 
+		// Use a long-lived context for the WS read loop. The parent ctx may
+		// be tied to an HTTP request that can be cancelled by the client, but
+		// we want to finish reading the agent's response so it gets captured.
+		readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer readCancel()
+
 		// Phase 1: Wait for session_start frame with timeout
-		startCtx, startCancel := context.WithTimeout(ctx, 10*time.Second)
+		startCtx, startCancel := context.WithTimeout(readCtx, 10*time.Second)
 		defer startCancel()
 		sessionStarted := false
 		for !sessionStarted {
@@ -755,7 +832,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 			if err != nil {
 				select {
 				case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("waiting for session_start: %v", err)}:
-				case <-ctx.Done():
+				case <-readCtx.Done():
 				}
 				return
 			}
@@ -775,10 +852,10 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 			"content": message,
 		}
 		outgoing, _ := json.Marshal(msg)
-		if err := conn.Write(ctx, websocket.MessageText, outgoing); err != nil {
+		if err := conn.Write(readCtx, websocket.MessageText, outgoing); err != nil {
 			select {
 			case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("sending message: %v", err)}:
-			case <-ctx.Done():
+			case <-readCtx.Done():
 			}
 			return
 		}
@@ -794,11 +871,11 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		// Phase 3: Read response frames, collecting tool calls
 		var toolCalls []ChatPart
 		for {
-			_, data, err := conn.Read(ctx)
+			_, data, err := conn.Read(readCtx)
 			if err != nil {
 				select {
 				case ch <- ChatEvent{Type: "error", Error: fmt.Sprintf("connection read: %v", err)}:
-				case <-ctx.Done():
+				case <-readCtx.Done():
 				}
 				return
 			}
@@ -809,6 +886,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 			}
 
 			frameType, _ := frame["type"].(string)
+			fmt.Fprintf(os.Stderr, "eyrie: ws frame type=%q\n", frameType)
 			var ev ChatEvent
 
 			switch frameType {
@@ -863,7 +941,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 				z.saveEnrichedMessage(sessionKey, &assistantMsg)
 				select {
 				case ch <- ev:
-				case <-ctx.Done():
+				case <-readCtx.Done():
 				}
 				return
 			case "error":
@@ -871,7 +949,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 				ev = ChatEvent{Type: "error", Error: msg}
 				select {
 				case ch <- ev:
-				case <-ctx.Done():
+				case <-readCtx.Done():
 				}
 				return
 			default:
@@ -880,7 +958,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 
 			select {
 			case ch <- ev:
-			case <-ctx.Done():
+			case <-readCtx.Done():
 				return
 			}
 		}
@@ -967,7 +1045,7 @@ func (z *ZeroClawAdapter) CreateSession(_ context.Context, name string) (*Sessio
 	// This makes session IDs human-readable in the ZeroClaw backend.
 	sessionID := name
 	if sessionID == "" {
-		sessionID = fmt.Sprintf("%d", time.Now().UnixMilli())
+		sessionID = uuid.New().String()
 	}
 	return &Session{Key: sessionID, Title: name}, nil
 }

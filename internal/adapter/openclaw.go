@@ -31,9 +31,11 @@ type OpenClawAdapter struct {
 	configPath string
 
 	// Cached RPC connection to reduce WS open/close churn
-	cachedConn   *websocket.Conn
-	cachedConnAt time.Time
-	connMu       sync.Mutex
+	cachedConn            *websocket.Conn
+	cachedConnAt          time.Time
+	cachedConnRef         int  // number of active users of cachedConn
+	cachedConnInvalidated bool // set when invalidate is deferred due to ref > 0
+	connMu                sync.Mutex
 }
 
 func NewOpenClawAdapter(id, name, host string, port int, token, configPath string) *OpenClawAdapter {
@@ -181,7 +183,8 @@ func (o *OpenClawAdapter) Restart(ctx context.Context) error {
 	return runCLI(ctx, "openclaw", "gateway", "restart")
 }
 
-// TailLogs subscribes to the OpenClaw logs.tail RPC stream.
+// TailLogs subscribes to the OpenClaw logs.tail RPC stream. If the agent
+// is not running, historical logs are still returned before closing.
 func (o *OpenClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error) {
 	var history []LogEntry
 	if o.configPath != "" {
@@ -189,18 +192,23 @@ func (o *OpenClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 	}
 
 	conn, err := o.dial(ctx)
-	if err != nil {
+	if err != nil && len(history) == 0 {
 		return nil, err
 	}
 
-	req := rpcRequest{
-		Method: "logs.tail",
-		Params: map[string]any{"sinceMs": 60000},
-	}
-	payload, _ := json.Marshal(req)
-	if err := conn.Write(ctx, websocket.MessageText, payload); err != nil {
-		conn.Close(websocket.StatusNormalClosure, "")
-		return nil, fmt.Errorf("sending logs.tail: %w", err)
+	// If connected, send the tail request
+	if err == nil {
+		req := rpcRequest{
+			Method: "logs.tail",
+			Params: map[string]any{"sinceMs": 60000},
+		}
+		payload, _ := json.Marshal(req)
+		if writeErr := conn.Write(ctx, websocket.MessageText, payload); writeErr != nil {
+			conn.Close(websocket.StatusNormalClosure, "")
+			conn = nil
+		}
+	} else {
+		conn = nil
 	}
 
 	ch := make(chan LogEntry, 64)
@@ -209,12 +217,18 @@ func (o *OpenClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 			select {
 			case ch <- entry:
 			case <-ctx.Done():
-				conn.Close(websocket.StatusNormalClosure, "")
+				if conn != nil {
+					conn.Close(websocket.StatusNormalClosure, "")
+				}
 				close(ch)
 				return
 			}
 		}
-		o.readLogStream(ctx, conn, ch)
+		if conn != nil {
+			o.readLogStream(ctx, conn, ch)
+		} else {
+			close(ch)
+		}
 	}()
 	return ch, nil
 }
@@ -1156,10 +1170,10 @@ func (o *OpenClawAdapter) ResetSession(ctx context.Context, sessionKey string) e
 
 // DestroySession completely removes a session — deletes the JSONL transcript
 // and removes the entry from sessions.json. Works for both active and archived sessions.
-func (o *OpenClawAdapter) DestroySession(_ context.Context, sessionKey string) error {
+func (o *OpenClawAdapter) DestroySession(ctx context.Context, sessionKey string) error {
 	// For archived sessions, just delete the file
 	if strings.HasPrefix(sessionKey, "archive:") {
-		return o.DeleteSession(context.Background(), sessionKey)
+		return o.DeleteSession(ctx, sessionKey)
 	}
 
 	agentsDir := o.agentsDir()
@@ -1401,18 +1415,23 @@ connected:
 
 // getCachedConn returns a reusable WS connection, creating one if needed.
 // Connections are reused for up to 30 seconds to batch consecutive RPC calls.
+// Callers must call releaseCachedConn when done using the returned connection.
 func (o *OpenClawAdapter) getCachedConn(ctx context.Context) (*websocket.Conn, error) {
 	o.connMu.Lock()
 	defer o.connMu.Unlock()
 
 	const maxAge = 30 * time.Second
 	if o.cachedConn != nil && time.Since(o.cachedConnAt) < maxAge {
+		o.cachedConnRef++
 		return o.cachedConn, nil
 	}
-	// Close stale connection
+	// Close stale connection only if no other users hold a reference
 	if o.cachedConn != nil {
-		o.cachedConn.Close(websocket.StatusNormalClosure, "")
+		if o.cachedConnRef == 0 {
+			o.cachedConn.Close(websocket.StatusNormalClosure, "")
+		}
 		o.cachedConn = nil
+		o.cachedConnInvalidated = false
 	}
 	conn, err := o.dial(ctx)
 	if err != nil {
@@ -1420,15 +1439,39 @@ func (o *OpenClawAdapter) getCachedConn(ctx context.Context) (*websocket.Conn, e
 	}
 	o.cachedConn = conn
 	o.cachedConnAt = time.Now()
+	o.cachedConnRef = 1
 	return conn, nil
+}
+
+// releaseCachedConn decrements the reference count on the cached connection.
+// If the connection was marked for invalidation and this is the last user,
+// the connection is closed and cleared.
+func (o *OpenClawAdapter) releaseCachedConn() {
+	o.connMu.Lock()
+	defer o.connMu.Unlock()
+	if o.cachedConnRef > 0 {
+		o.cachedConnRef--
+	}
+	if o.cachedConnRef == 0 && o.cachedConnInvalidated {
+		if o.cachedConn != nil {
+			o.cachedConn.Close(websocket.StatusNormalClosure, "")
+			o.cachedConn = nil
+		}
+		o.cachedConnInvalidated = false
+	}
 }
 
 func (o *OpenClawAdapter) invalidateCachedConn() {
 	o.connMu.Lock()
 	defer o.connMu.Unlock()
 	if o.cachedConn != nil {
-		o.cachedConn.Close(websocket.StatusNormalClosure, "")
-		o.cachedConn = nil
+		if o.cachedConnRef == 0 {
+			o.cachedConn.Close(websocket.StatusNormalClosure, "")
+			o.cachedConn = nil
+			o.cachedConnInvalidated = false
+		} else {
+			o.cachedConnInvalidated = true
+		}
 	}
 }
 
@@ -1441,6 +1484,7 @@ func (o *OpenClawAdapter) rpcCall(ctx context.Context, method string, params map
 	if err != nil {
 		return nil, err
 	}
+	defer o.releaseCachedConn()
 
 	req := newRPCRequest(method, params)
 	payload, _ := json.Marshal(req)

@@ -2,6 +2,7 @@ package adapter
 
 import (
 	"context"
+	"net/http"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -82,13 +83,71 @@ type HealthStatus struct {
 }
 
 type AgentStatus struct {
-	Provider    string   `json:"provider"`
-	Model       string   `json:"model"`
-	Channels    []string `json:"channels"`
-	Skills      int      `json:"skills"`
-	LastTask    *time.Time `json:"last_task,omitempty"`
-	Errors24h   int      `json:"errors_24h"`
-	GatewayPort int      `json:"gateway_port"`
+	Provider       string   `json:"provider"`
+	Model          string   `json:"model"`
+	Channels       []string `json:"channels"`
+	Skills         int      `json:"skills"`
+	LastTask       *time.Time `json:"last_task,omitempty"`
+	Errors24h      int      `json:"errors_24h"`
+	GatewayPort    int      `json:"gateway_port"`
+	ProviderStatus string   `json:"provider_status,omitempty"` // "ok", "error", or "" (unknown/not checked)
+}
+
+// ProbeProvider checks whether the LLM provider is reachable by hitting its
+// /v1/models endpoint. It understands "custom:<url>" format and well-known
+// provider names. Returns "ok", "error", or "" if the URL can't be determined.
+func ProbeProvider(ctx context.Context, provider string) string {
+	baseURL := providerBaseURL(provider)
+	if baseURL == "" {
+		return ""
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
+	if err != nil {
+		return "error"
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "error"
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+		return "ok"
+	}
+	return "error"
+}
+
+// providerBaseURL extracts an OpenAI-compatible base URL from a provider string.
+// Handles "custom:http://host:port/v1" and well-known providers.
+func providerBaseURL(provider string) string {
+	// Custom provider: "custom:http://127.0.0.1:3456/v1"
+	if strings.HasPrefix(provider, "custom:") {
+		u := strings.TrimPrefix(provider, "custom:")
+		u = strings.TrimRight(u, "/")
+		// Ensure it ends with /v1
+		if !strings.HasSuffix(u, "/v1") {
+			u += "/v1"
+		}
+		return u
+	}
+
+	// Well-known providers
+	switch {
+	case strings.Contains(provider, "openrouter"):
+		return "https://openrouter.ai/api/v1"
+	case strings.Contains(provider, "openai"):
+		return "https://api.openai.com/v1"
+	case strings.Contains(provider, "anthropic"):
+		// Anthropic doesn't have /v1/models, skip
+		return ""
+	}
+
+	return ""
 }
 
 type AgentConfig struct {

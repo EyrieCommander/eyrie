@@ -2,7 +2,6 @@ import { Link } from "react-router-dom";
 import {
   Activity,
   Server,
-  Radio,
   Clock,
   Cpu,
   MemoryStick,
@@ -33,9 +32,12 @@ function formatBytes(bytes: number): string {
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
-export default function AgentCard({ agent }: AgentCardProps) {
-  const alive = agent.alive;
+function providerDotColor(agent: AgentInfo): string {
+  if (!agent.alive || !agent.status?.provider_status) return "bg-text-muted/30";
+  return agent.status.provider_status === "ok" ? "bg-green" : "bg-yellow";
+}
 
+export default function AgentCard({ agent }: AgentCardProps) {
   return (
     <Link
       to={`/agents/${agent.name}`}
@@ -44,7 +46,7 @@ export default function AgentCard({ agent }: AgentCardProps) {
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <div
-            className={`h-2.5 w-2.5 rounded-full ${alive ? "bg-green" : "bg-red"}`}
+            className={`h-2.5 w-2.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
           />
           <div>
             <h3 className="text-base font-semibold text-text">{agent.name}</h3>
@@ -57,7 +59,7 @@ export default function AgentCard({ agent }: AgentCardProps) {
       <div className="mt-4 grid grid-cols-2 gap-3 text-sm">
         <div className="flex items-center gap-2 text-text-muted">
           <Activity className="h-4 w-4" />
-          <span>{alive ? "Running" : "Stopped"}</span>
+          <span>{agent.alive ? "Running" : "Stopped"}</span>
         </div>
         <div className="flex items-center gap-2 text-text-muted">
           <Server className="h-4 w-4" />
@@ -86,8 +88,8 @@ export default function AgentCard({ agent }: AgentCardProps) {
       {agent.status && (
         <div className="mt-3 flex flex-wrap gap-2">
           {agent.status.provider && (
-            <span className="inline-flex items-center gap-1 rounded-md bg-accent/10 px-2 py-0.5 text-xs text-accent">
-              <Radio className="h-3 w-3" />
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-accent/10 px-2 py-0.5 text-xs text-accent">
+              <span className={`h-1.5 w-1.5 rounded-full ${providerDotColor(agent)}`} />
               {agent.status.provider}
             </span>
           )}

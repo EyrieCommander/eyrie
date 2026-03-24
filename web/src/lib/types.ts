@@ -31,6 +31,7 @@ export interface AgentStatus {
   skills: number;
   errors_24h: number;
   gateway_port: number;
+  provider_status?: string; // "ok", "error", or undefined (unknown)
 }
 
 export interface LogEntry {
@@ -262,4 +263,5 @@ export interface ProjectChatMessage {
   content: string;
   timestamp: string;
   mention?: string;
+  parts?: ChatPart[];
 }

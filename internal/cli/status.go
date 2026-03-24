@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/spf13/cobra"
@@ -50,8 +51,8 @@ func runStatus(cmd *cobra.Command, args []string) error {
 
 func showStatusTable(ctx context.Context, result discovery.Result) error {
 	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(w, "AGENT\tFRAMEWORK\tSTATUS\tPORT\tUPTIME\tPROVIDER")
-	fmt.Fprintln(w, "─────\t─────────\t──────\t────\t──────\t────────")
+	fmt.Fprintln(w, "AGENT\tFRAMEWORK\tSTATUS\tPROVIDER\tPORT\tUPTIME")
+	fmt.Fprintln(w, "─────\t─────────\t──────\t────────\t────\t──────")
 
 	for _, ar := range result.Agents {
 		status := "● stopped"
@@ -65,20 +66,28 @@ func showStatusTable(ctx context.Context, result discovery.Result) error {
 				uptime = formatDuration(health.Uptime)
 			}
 			if st, err := agent.Status(ctx); err == nil {
-				provider = st.Provider
-				if provider == "" {
-					provider = "-"
+				name := st.Provider
+				if name == "" {
+					name = "-"
+				}
+				switch adapter.ProbeProvider(ctx, st.Provider) {
+				case "ok":
+					provider = "● " + name
+				case "error":
+					provider = "▲ " + name
+				default:
+					provider = name
 				}
 			}
 		}
 
-		fmt.Fprintf(w, "%s\t%s\t%s\t%d\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%d\t%s\n",
 			ar.Agent.Name,
 			ar.Agent.Framework,
 			status,
+			provider,
 			ar.Agent.Port,
 			uptime,
-			provider,
 		)
 	}
 
@@ -132,7 +141,15 @@ func showDetailedStatus(ctx context.Context, name string, result discovery.Resul
 
 	if status, err := agent.Status(ctx); err == nil {
 		if status.Provider != "" {
-			fmt.Printf("Provider: %s\n", status.Provider)
+			ps := adapter.ProbeProvider(ctx, status.Provider)
+			switch ps {
+			case "ok":
+				fmt.Printf("Provider: %s (ok)\n", status.Provider)
+			case "error":
+				fmt.Printf("Provider: %s (unreachable)\n", status.Provider)
+			default:
+				fmt.Printf("Provider: %s\n", status.Provider)
+			}
 		}
 		if status.Model != "" {
 			fmt.Printf("Model: %s\n", status.Model)
