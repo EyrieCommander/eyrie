@@ -166,7 +166,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
       <div>
         <div className="flex items-center gap-3">
           <span
-            className={`h-3 w-3 rounded-full ${actionPending ? "bg-yellow-400 animate-pulse" : agent.alive ? "bg-green" : "bg-red"}`}
+            className={`h-3 w-3 rounded-full ${actionPending ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
           />
           <h2 className="text-xl font-bold">{agent.name}</h2>
           <span className="rounded border border-border-strong bg-surface-hover px-2 py-0.5 text-[11px] text-text-secondary">

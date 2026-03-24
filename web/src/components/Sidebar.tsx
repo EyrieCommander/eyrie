@@ -139,7 +139,7 @@ export default function Sidebar({ agents, projects }: { agents: AgentInfo[]; pro
                   }`}
                 >
                   <span
-                    className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
+                    className={`h-1.5 w-1.5 rounded-full ${!agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
                   />
                   {agent.name}
                 </Link>

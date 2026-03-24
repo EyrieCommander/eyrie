@@ -46,7 +46,7 @@ export default function AgentCard({ agent }: AgentCardProps) {
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <div
-            className={`h-2.5 w-2.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
+            className={`h-2.5 w-2.5 rounded-full ${!agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
           />
           <div>
             <h3 className="text-base font-semibold text-text">{agent.name}</h3>
