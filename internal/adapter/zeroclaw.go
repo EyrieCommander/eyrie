@@ -143,19 +143,32 @@ func (z *ZeroClawAdapter) statusFromConfig() (*AgentStatus, error) {
 	as := &AgentStatus{}
 	content := string(data)
 
-	// Parse model (e.g. model = "provider/model-name")
+	// Parse default_model and default_provider from the global (pre-section) scope.
+	// Only match exact key names to avoid false hits on nested keys like
+	// [linkedin.image.flux] model = "fal-ai/flux/schnell".
 	for _, line := range strings.Split(content, "\n") {
 		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") {
+			break // stop at first section — top-level keys are above all sections
+		}
 		if strings.HasPrefix(trimmed, "#") {
 			continue
 		}
-		if strings.HasPrefix(trimmed, "model") && strings.Contains(trimmed, "=") {
-			val := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[1])
-			val = strings.Trim(val, "\"'")
+		parts := strings.SplitN(trimmed, "=", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		key := strings.TrimSpace(parts[0])
+		val := strings.TrimSpace(parts[1])
+		val = strings.Trim(val, "\"'")
+		switch key {
+		case "default_model":
 			as.Model = val
 			if idx := strings.Index(val, "/"); idx > 0 {
 				as.Provider = val[:idx]
 			}
+		case "default_provider":
+			as.Provider = val
 		}
 	}
 

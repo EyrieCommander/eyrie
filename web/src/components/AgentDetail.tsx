@@ -20,6 +20,7 @@ import type {
 import {
   agentAction,
   fetchAgentConfig,
+  fetchAgentModels,
   type AgentConfig,
   streamLogs,
   updateAgentConfig,
@@ -620,11 +621,22 @@ function EditableInfoCard({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [providerModels, setProviderModels] = useState<string[] | null>(null);
 
   useEffect(() => {
     setEditValue(value);
     setSaved(false);
   }, [value]);
+
+  // Fetch available models from the provider when editing a model field
+  const isModelField = field?.key.endsWith("model") || field?.key.endsWith("default_model");
+  useEffect(() => {
+    if (editing && isModelField) {
+      fetchAgentModels(agentName).then((models) => {
+        setProviderModels(models.length > 0 ? models : null);
+      }).catch(() => setProviderModels(null));
+    }
+  }, [editing, isModelField, agentName]);
 
   const handleSave = async () => {
     if (!field) return;
@@ -713,6 +725,21 @@ function EditableInfoCard({
               className="w-full px-3 py-1.5 bg-bg-subtle border border-border rounded text-sm text-fg
                 focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
             />
+          ) : isModelField && providerModels ? (
+            <select
+              value={editValue}
+              onChange={(e) => setEditValue(e.target.value)}
+              disabled={saving}
+              className="w-full px-3 py-1.5 bg-bg-subtle border border-border rounded text-sm text-fg
+                focus:outline-none focus:ring-2 focus:ring-accent/50 disabled:opacity-50"
+            >
+              {!providerModels.includes(editValue) && (
+                <option value={editValue}>{editValue}</option>
+              )}
+              {providerModels.map((m) => (
+                <option key={m} value={m}>{m}</option>
+              ))}
+            </select>
           ) : (
             <input
               type="text"

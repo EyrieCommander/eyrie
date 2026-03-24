@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/adapter"
@@ -60,6 +61,79 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, agents)
+}
+
+// handleAgentModels returns available models from the agent's LLM provider.
+// It reads the provider URL from the agent's config and queries its /v1/models endpoint.
+func (s *Server) handleAgentModels(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	agent, err := s.findAgentAnyState(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	st, err := agent.Status(ctx)
+	if err != nil || st == nil || st.Provider == "" {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+
+	// Extract base URL from provider string.
+	// Formats: "custom:http://host:port/v1" or "openrouter" (named provider).
+	providerURL := ""
+	if after, ok := strings.CutPrefix(st.Provider, "custom:"); ok {
+		providerURL = strings.TrimRight(after, "/")
+		// Remove trailing /v1 if present — we'll add /v1/models
+		providerURL = strings.TrimSuffix(providerURL, "/v1")
+	} else {
+		// Named providers — map to their known API base
+		switch st.Provider {
+		case "openrouter":
+			providerURL = "https://openrouter.ai/api"
+		case "openai":
+			providerURL = "https://api.openai.com"
+		case "anthropic":
+			// Anthropic doesn't have a /v1/models endpoint
+			writeJSON(w, http.StatusOK, []string{})
+			return
+		default:
+			writeJSON(w, http.StatusOK, []string{})
+			return
+		}
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", providerURL+"/v1/models", nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+	defer resp.Body.Close()
+
+	var result struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		writeJSON(w, http.StatusOK, []string{})
+		return
+	}
+
+	models := make([]string, 0, len(result.Data))
+	for _, m := range result.Data {
+		models = append(models, m.ID)
+	}
+	writeJSON(w, http.StatusOK, models)
 }
 
 func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {

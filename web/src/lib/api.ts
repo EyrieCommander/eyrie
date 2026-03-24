@@ -55,6 +55,12 @@ export async function agentAction(
   if (!res.ok) throw new Error(`Failed to ${action} agent: ${res.statusText}`);
 }
 
+export async function fetchAgentModels(name: string): Promise<string[]> {
+  const res = await fetch(`${BASE}/api/agents/${name}/models`);
+  if (!res.ok) return [];
+  return res.json();
+}
+
 export function streamLogs(
   name: string,
   onEntry: (entry: LogEntry) => void,

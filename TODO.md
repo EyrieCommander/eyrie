@@ -31,11 +31,14 @@
 5. **Cross-agent message sync** — after an agent responds in project chat, forward its response to other agents' sessions
 6. **Daily sync cron** — captains report to commander, commander reports to user
 
+### Dashboard improvements:
+- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token. Currently requires manual terminal work.
+- [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state in the chat tab instead of a raw 500 error. Offer one-click re-pair.
+
 ### ZeroClaw PRs:
 - **#4275 (named sessions)**: Merged ✅ (our #4267 was superseded)
-- **#4350 (streaming tool events)**: Open, all checks pass (3 tests, clippy clean)
-- **feature/named-sessions** branch: can be deleted (superseded)
-- **feature/streaming-tool-events** branch: active, rebased on 0.5.9
+- **#4350 (streaming tool events)**: Closed — superseded by upstream #4175
+- **#4584 (proxy tool event parsing)**: Open, rebased on #4175. 4 files: StreamEvent::PreExecutedToolResult, parse_proxy_tool_event, turn_streamed forwarding
 
 ---
 

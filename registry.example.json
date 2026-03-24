@@ -46,7 +46,7 @@
             "description": "host address for gateway to bind to"
           },
           {
-            "key": "provider",
+            "key": "default_provider",
             "label": "LLM provider",
             "type": "select",
             "options": ["openrouter", "anthropic", "openai"],
@@ -55,7 +55,7 @@
             "description": "which LLM provider to use"
           },
           {
-            "key": "model",
+            "key": "default_model",
             "label": "model",
             "type": "text",
             "default": "moonshotai/kimi-k2.5",
