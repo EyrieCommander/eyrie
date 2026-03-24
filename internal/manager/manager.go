@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -63,7 +64,65 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 }
 
 func executeOpenClaw(ctx context.Context, action LifecycleAction) error {
-	return run(ctx, "openclaw", "gateway", string(action))
+	return runWithNode22(ctx, "openclaw", "gateway", string(action))
+}
+
+// node22BinDir finds the nvm-managed Node.js v22 bin directory.
+// OpenClaw requires Node 22 — newer versions crash on older macOS due to
+// missing libc++ symbols. Returns "" if no v22 installation is found.
+func node22BinDir() string {
+	home := os.Getenv("HOME")
+	if home == "" {
+		return ""
+	}
+	nvmDir := filepath.Join(home, ".nvm", "versions", "node")
+	entries, err := os.ReadDir(nvmDir)
+	if err != nil {
+		return ""
+	}
+	// Collect all v22.x.x directories and pick the latest
+	var v22Dirs []string
+	for _, e := range entries {
+		if e.IsDir() && strings.HasPrefix(e.Name(), "v22.") {
+			v22Dirs = append(v22Dirs, e.Name())
+		}
+	}
+	if len(v22Dirs) == 0 {
+		return ""
+	}
+	sort.Strings(v22Dirs)
+	return filepath.Join(nvmDir, v22Dirs[len(v22Dirs)-1], "bin")
+}
+
+// node22Env returns a copy of os.Environ() with Node 22 prepended to PATH,
+// or nil if no v22 installation is found.
+func node22Env() []string {
+	binDir := node22BinDir()
+	if binDir == "" {
+		return nil
+	}
+	env := os.Environ()
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + binDir + string(os.PathListSeparator) + e[5:]
+			break
+		}
+	}
+	return env
+}
+
+// runWithNode22 runs a command with Node.js v22 at the front of PATH.
+// Falls back to the default PATH if no v22 installation is found.
+func runWithNode22(ctx context.Context, command string, args ...string) error {
+	cmd := exec.CommandContext(ctx, command, args...)
+	if env := node22Env(); env != nil {
+		cmd.Env = env
+	}
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return nil
 }
 
 func executeHermes(ctx context.Context, action LifecycleAction) error {
@@ -117,12 +176,24 @@ func run(ctx context.Context, command string, args ...string) error {
 	return nil
 }
 
+// runDetachedWithNode22 is like runDetached but prepends Node.js v22 to PATH.
+func runDetachedWithNode22(ctx context.Context, logDir string, command string, args ...string) error {
+	return runDetachedWithEnv(ctx, logDir, node22Env(), command, args...)
+}
+
 // runDetached starts a process in the background (for daemons that don't exit).
 // If logDir is non-empty, stdout and stderr are redirected to {logDir}/daemon.stdout.log.
 // Returns once the process has started successfully.
-func runDetached(_ context.Context, logDir string, command string, args ...string) error {
+func runDetached(ctx context.Context, logDir string, command string, args ...string) error {
+	return runDetachedWithEnv(ctx, logDir, nil, command, args...)
+}
+
+func runDetachedWithEnv(_ context.Context, logDir string, env []string, command string, args ...string) error {
 	cmd := exec.Command(command, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if env != nil {
+		cmd.Env = env
+	}
 
 	var logFile *os.File
 	if logDir != "" {
@@ -160,18 +231,18 @@ func runDetached(_ context.Context, logDir string, command string, args ...strin
 // killByConfigDir finds and kills all processes that were started with --config-dir pointing
 // to the given directory. This is more reliable than "zeroclaw service stop" for processes
 // started via runDetached (which don't register with launchd/systemd).
-func killByConfigDir(configDir string) error {
+func killByConfigDir(configDir string) (found bool, err error) {
 	// Escape regex metacharacters in configDir to avoid injection
 	escaped := regexp.QuoteMeta(configDir)
 	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s(\\s|$)", escaped))
 	if err := cmd.Run(); err != nil {
 		// pkill exit code 1 means "no processes matched" — not an error
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("pkill for config-dir %s: %w", configDir, err)
+		return false, fmt.Errorf("pkill for config-dir %s: %w", configDir, err)
 	}
-	return nil
+	return true, nil
 }
 
 // ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
@@ -185,19 +256,21 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 		logDir := filepath.Join(configDir, "logs")
 		switch action {
 		case ActionStart:
-			_ = killByConfigDir(configDir) // Clean up any stale process first
+			_, _ = killByConfigDir(configDir) // Clean up any stale process first
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		case ActionStop:
-			return killByConfigDir(configDir)
+			_, err := killByConfigDir(configDir)
+			return err
 		case ActionRestart:
-			if stopErr := killByConfigDir(configDir); stopErr != nil {
+			if _, stopErr := killByConfigDir(configDir); stopErr != nil {
 				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw stop (config-dir %s): %v\n", configDir, stopErr)
 			}
 			// Wait for old process to exit before starting a new one
 			for i := 0; i < 10; i++ {
 				time.Sleep(100 * time.Millisecond)
-				if err := killByConfigDir(configDir); err == nil {
-					break // no matching process found (pkill returns nil on exit code 1)
+				found, err := killByConfigDir(configDir)
+				if err != nil || !found {
+					break // no matching process found, safe to start new one
 				}
 			}
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
@@ -207,9 +280,9 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 	case "openclaw":
 		if action == ActionStart || action == ActionRestart {
 			ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
-			return runDetached(ctx, ocLogDir, "openclaw", "gateway", string(action), "--config", configPath)
+			return runDetachedWithNode22(ctx, ocLogDir, "openclaw", "gateway", string(action), "--config", configPath)
 		}
-		return run(ctx, "openclaw", "gateway", string(action), "--config", configPath)
+		return runWithNode22(ctx, "openclaw", "gateway", string(action), "--config", configPath)
 	case "hermes":
 		if action == ActionStart || action == ActionRestart {
 			hLogDir := filepath.Join(filepath.Dir(configPath), "logs")

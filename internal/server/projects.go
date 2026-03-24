@@ -275,6 +275,9 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	existing, err := cs.Messages(projectID, 1)
+	if err != nil {
+		slog.Warn("failed to check existing messages", "project", projectID, "error", err)
+	}
 	firstMessage := err == nil && len(existing) == 0
 
 	// Parse @mentions
@@ -602,7 +605,12 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 	}
 	proj, err := store.Get(projectID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		} else {
+			slog.Error("failed to load project", "id", projectID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		}
 		return
 	}
 
@@ -650,8 +658,11 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if this is the first intake message
-	intakeMessages, _ := cs.IntakeMessages(projectID, 1)
-	firstIntake := len(intakeMessages) == 0
+	intakeMessages, intakeErr := cs.IntakeMessages(projectID, 1)
+	firstIntake := intakeErr == nil && len(intakeMessages) == 0
+	if intakeErr != nil {
+		slog.Warn("failed to check intake messages", "project", projectID, "error", intakeErr)
+	}
 
 	// Save user message
 	userMsg := project.ChatMessage{

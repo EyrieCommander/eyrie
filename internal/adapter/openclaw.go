@@ -1425,11 +1425,15 @@ func (o *OpenClawAdapter) getCachedConn(ctx context.Context) (*websocket.Conn, e
 		o.cachedConnRef++
 		return o.cachedConn, nil
 	}
-	// Close stale connection only if no other users hold a reference
+	// Connection is stale or nil
 	if o.cachedConn != nil {
-		if o.cachedConnRef == 0 {
-			o.cachedConn.Close(websocket.StatusNormalClosure, "")
+		if o.cachedConnRef > 0 {
+			// Other users still hold this connection — reuse it rather
+			// than orphaning it. The TTL is a soft optimization.
+			o.cachedConnRef++
+			return o.cachedConn, nil
 		}
+		o.cachedConn.Close(websocket.StatusNormalClosure, "")
 		o.cachedConn = nil
 		o.cachedConnInvalidated = false
 	}

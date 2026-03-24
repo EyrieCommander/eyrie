@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sync"
@@ -54,8 +55,13 @@ func (cs *ChatStore) chatPath(projectID string) string {
 	return filepath.Join(cs.dir, projectID, "chat.jsonl")
 }
 
+
+
 // Append adds a message to the project's shared conversation.
 func (cs *ChatStore) Append(projectID string, msg ChatMessage) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -88,6 +94,9 @@ func (cs *ChatStore) Append(projectID string, msg ChatMessage) error {
 // Messages returns all messages in a project's conversation, optionally
 // limited to the last N messages.
 func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error) {
+	if err := validateProjectID(projectID); err != nil {
+		return nil, err
+	}
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -105,9 +114,11 @@ func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		var msg ChatMessage
-		if json.Unmarshal(scanner.Bytes(), &msg) == nil {
-			messages = append(messages, msg)
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			slog.Warn("skipping malformed chat line", "project", projectID, "error", err)
+			continue
 		}
+		messages = append(messages, msg)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading chat file: %w", err)
@@ -125,6 +136,9 @@ func (cs *ChatStore) intakePath(projectID string) string {
 
 // AppendIntake adds a message to the project's intake conversation (1:1 with commander).
 func (cs *ChatStore) AppendIntake(projectID string, msg ChatMessage) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 
@@ -152,6 +166,9 @@ func (cs *ChatStore) AppendIntake(projectID string, msg ChatMessage) error {
 
 // IntakeMessages returns all messages in a project's intake conversation.
 func (cs *ChatStore) IntakeMessages(projectID string, limit int) ([]ChatMessage, error) {
+	if err := validateProjectID(projectID); err != nil {
+		return nil, err
+	}
 	cs.mu.RLock()
 	defer cs.mu.RUnlock()
 
@@ -169,9 +186,11 @@ func (cs *ChatStore) IntakeMessages(projectID string, limit int) ([]ChatMessage,
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for scanner.Scan() {
 		var msg ChatMessage
-		if json.Unmarshal(scanner.Bytes(), &msg) == nil {
-			messages = append(messages, msg)
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			slog.Warn("skipping malformed intake line", "project", projectID, "error", err)
+			continue
 		}
+		messages = append(messages, msg)
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("reading intake file: %w", err)

@@ -493,7 +493,7 @@ export function ChatPanel({
     });
 
     return () => {
-      mounted = true; // keep same behavior
+      mounted = false;
       controller.abort();
       delete (window as any)[briefKey];
     };
@@ -745,7 +745,7 @@ export function ChatPanel({
     >
       {/* Session group bar */}
       {groups.length > 0 && (
-        <div className="flex items-center gap-1 overflow-x-auto rounded-t border border-b-0 border-border bg-bg-sidebar px-3 py-2">
+        <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide rounded-t border border-b-0 border-border bg-bg-sidebar px-3 py-2">
           {groups.map((g) => (
             <div key={g.name} className="group/tab relative shrink-0">
               <button
@@ -1065,7 +1065,7 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
           : "");
 
   return (
-    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px]">
+    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
       <button
         onClick={(e) => {
           e.stopPropagation();
@@ -1163,7 +1163,7 @@ export function ToolCallCard({ tc }: { tc: ToolCall }) {
   const [expanded, setExpanded] = useState(false);
 
   return (
-    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px]">
+    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"

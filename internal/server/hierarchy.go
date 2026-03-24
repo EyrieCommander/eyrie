@@ -359,7 +359,12 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 				_ = instStore.UpdateStatus(inst.ID, "starting")
 				// Wait for agent to become reachable (poll discovery)
 				for attempt := 0; attempt < 10; attempt++ {
-					time.Sleep(time.Second)
+					select {
+					case <-time.After(time.Second):
+					case <-r.Context().Done():
+						writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "request cancelled while waiting for captain to start"})
+						return
+					}
 					disc = s.runDiscovery(r.Context())
 					for i := range disc.Agents {
 						a := disc.Agents[i].Agent

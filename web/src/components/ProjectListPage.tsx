@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Briefcase, ChevronRight } from "lucide-react";
 import type { Project, AgentInstance } from "../lib/types";
-import { fetchProjects, fetchInstances, createProject, createInstance, updateProject, instanceAction } from "../lib/api";
+import { fetchProjects, fetchInstances, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
 
 function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -57,7 +57,13 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
           project_id: proj.id,
           auto_start: true,
         });
-        await updateProject(proj.id, { orchestrator_id: inst.id });
+        try {
+          await updateProject(proj.id, { orchestrator_id: inst.id });
+        } catch (updateErr) {
+          // Clean up orphaned captain instance
+          try { await deleteInstance(inst.id); } catch { /* best effort */ }
+          throw updateErr;
+        }
       } else if (selectedCaptainId) {
         await updateProject(proj.id, { orchestrator_id: selectedCaptainId });
       }
@@ -76,12 +82,21 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
     setStartingCaptain(id);
     try {
       await instanceAction(id, "start");
-      // Refresh the list after a moment
-      setTimeout(async () => {
+      // Poll until instance status updates (max 15s)
+      for (let i = 0; i < 15; i++) {
+        await new Promise((r) => setTimeout(r, 1000));
         const all = await fetchInstances();
-        setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
-        setStartingCaptain("");
-      }, 2000);
+        const target = all.find((inst) => inst.id === id);
+        if (target && target.status === "running") {
+          setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
+          setStartingCaptain("");
+          return;
+        }
+      }
+      // Timeout — refresh anyway
+      const all = await fetchInstances();
+      setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
+      setStartingCaptain("");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start captain");
       setStartingCaptain("");

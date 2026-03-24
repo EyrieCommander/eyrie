@@ -72,7 +72,8 @@ func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	// Fall back to catalog
 	catalog, err := persona.NewCatalogClient("")
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to initialize persona catalog: " + err.Error()})
+		slog.Error("failed to initialize persona catalog", "id", id, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to initialize persona catalog"})
 		return
 	}
 	reg, err := catalog.Fetch(r.Context())

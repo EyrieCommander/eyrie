@@ -229,12 +229,14 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 	parentConfigDir := config.ExpandHome("~/.zeroclaw")
 	parentConfigPath := filepath.Join(parentConfigDir, "config.toml")
 	if apiKey := readTOMLField(parentConfigPath, "api_key"); apiKey != "" {
-		cfg["api_key"] = apiKey
-		// Copy the secret key so the encrypted api_key can be decrypted
+		// Copy the secret key so the encrypted api_key can be decrypted.
+		// Only set api_key in the config after confirming the secret key was written.
 		srcSecret := filepath.Join(parentConfigDir, ".secret_key")
 		dstSecret := filepath.Join(filepath.Dir(inst.ConfigPath), ".secret_key")
 		if secretData, err := os.ReadFile(srcSecret); err == nil {
-			_ = os.WriteFile(dstSecret, secretData, 0o600)
+			if err := os.WriteFile(dstSecret, secretData, 0o600); err == nil {
+				cfg["api_key"] = apiKey
+			}
 		}
 	}
 

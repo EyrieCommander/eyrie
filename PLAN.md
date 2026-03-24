@@ -212,7 +212,7 @@ POST   /api/hierarchy/commander/brief    # Send commander briefing (SSE stream)
 ```
 ~/.eyrie/
 ├── config.toml               # Existing
-├── coordinator.json           # Which instance is THE coordinator
+├── commander.json             # Which instance is THE commander
 ├── projects/
 │   └── <project-id>.json
 ├── instances/
@@ -292,8 +292,10 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
         case ActionStart:  return run(ctx, "zeroclaw", "daemon", "--config", configPath)
         case ActionStop:   return run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
         case ActionRestart:
-            _ = run(ctx, "zeroclaw", "service", "stop", "--config", configPath)
-            return run(ctx, "zeroclaw", "daemon", "--config", configPath)
+            if stopErr := killByConfigDir(configDir); stopErr != nil {
+                log("eyrie: zeroclaw stop (config-dir %s): %v", configDir, stopErr)
+            }
+            return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
         default: return fmt.Errorf("unknown action %q for zeroclaw", action)
         }
     case "openclaw":
@@ -335,7 +337,7 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 | `internal/persona/schema.go` | Add IdentityTemplate, MemorySeeds, HierarchyRole fields |
 | `internal/discovery/discovery.go` | Scan ~/.eyrie/instances/ for instance configs |
 | `internal/discovery/config.go` | Accept name override for instance configs |
-| `internal/manager/manager.go` | Add ExecuteInstance() with --config flag |
+| `internal/manager/manager.go` | Add ExecuteWithConfig() with --config flag |
 | `internal/server/server.go` | Register instance, project, hierarchy routes |
 | `web/src/lib/types.ts` | Add Instance, Project, HierarchyTree types |
 | `web/src/lib/api.ts` | Add instance + project API functions |

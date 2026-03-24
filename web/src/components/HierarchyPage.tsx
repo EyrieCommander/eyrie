@@ -131,6 +131,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
   const [savingStatus, setSavingStatus] = useState("");
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [loadingAgents, setLoadingAgents] = useState(true);
 
   // "new" form state
   const [name, setName] = useState("atlas");
@@ -164,6 +165,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
     }
 
     setLoadError(errors.length > 0 ? errors.join("; ") : null);
+    setLoadingAgents(false);
   }, []);
 
   useEffect(() => {
@@ -265,7 +267,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
               <div className="mt-0.5 text-xs text-text-muted">
                 {runningAgents.length > 0
                   ? `promote one of your ${runningAgents.length} running agent${runningAgents.length !== 1 ? "s" : ""} to commander`
-                  : loadError ? "failed to discover agents" : "discovering running agents..."}
+                  : loadError ? "failed to discover agents" : loadingAgents ? "discovering running agents..." : "no running agents found"}
               </div>
             </div>
             {runningAgents.length > 0 ? (
@@ -321,10 +323,14 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
                     retry
                   </button>
                 </div>
-              ) : (
+              ) : loadingAgents ? (
                 <div className="flex items-center gap-3 rounded border border-border bg-surface px-4 py-3 opacity-50">
                   <span className="h-1.5 w-1.5 rounded-full bg-text-muted animate-pulse" />
                   <span className="text-xs text-text-muted">discovering agents...</span>
+                </div>
+              ) : (
+                <div className="rounded border border-border bg-surface px-4 py-3 text-center text-xs text-text-muted">
+                  no running agents found
                 </div>
               )
             )}

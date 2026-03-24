@@ -26,7 +26,7 @@
 ### Next steps (in order):
 1. **Test project chat end-to-end** — test intake flow → group chat → captain takes over
 2. **Fix captain not responding to briefing** — captain receives briefing but doesn't respond (may be a ZeroClaw tool execution issue with the kimi model)
-3. **Captain creating talons via API** — captains now own talon creation via `POST /api/instances`
+3. **Captain creating talons via API** — captain will create talons via `POST /api/instances`
 4. **OpenClaw observe-group** — use `requireMention: true` for OpenClaw agents in project chat so they silently observe without wasting LLM calls
 5. **Cross-agent message sync** — after an agent responds in project chat, forward its response to other agents' sessions
 6. **Daily sync cron** — captains report to commander, commander reports to user
@@ -68,14 +68,14 @@
 
 ## Bugs
 
-- [ ] **Config editor corrupts TOML**: Serializes full schema, converting integers to floats, arrays to strings. Breaks `scanZeroClawConfig` parsing and agent discovery.
-- [ ] **OpenClaw log noise**: Empty `[info]` lines appear every 30 seconds from HTTP health probe. Low priority but noisy.
+- [x] **Config editor corrupts TOML**: Fixed — raw text editor writes directly to disk (`WriteRawAtomic`); inline field editor coerces JSON `float64` back to `int64` before TOML encoding (`CoerceJSONNumbers`).
 - [ ] **Discovery timing**: Newly created instances show "Agent not found" for a few seconds before discovery picks them up. Added yellow provisioning state but race window still exists.
+- [ ] **DestroySession TOCTOU**: `DestroySession` in `openclaw.go` reads, modifies, and rewrites `sessions.json` without file locking. If OpenClaw writes to the file concurrently, Eyrie's write clobbers it. Fix with `flock` around the read-modify-write, or add a `sessions.destroy` RPC to OpenClaw and call that instead of doing file surgery.
 
 ## UI
 
 - [x] **Extract shared chat component**: ChatPanel.tsx extracted from AgentDetail. ProjectChat imports shared sub-components (PartToolCallCard, StreamingCursor).
-- [ ] **Background commander briefing**: Move commander briefing to a background task when assigned on the hierarchy page (no redirect to agent chat). The briefing is just bootstrapping (fetch API ref, save TOOLS.md) — the user doesn't need to watch it. Project chat page becomes the single conversation surface.
+- [ ] **Background commander briefing**: Move commander briefing to a background task when assigned on the hierarchy page (no redirect to agent chat). The briefing bootstraps the commander (fetch API ref, save TOOLS.md) — the user doesn't need to watch it.
 - [ ] **Hierarchy page**: Show agent status (running/stopped) with live refresh
 - [ ] **Project detail**: Add activity timeline showing what each agent is doing
 - [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept)

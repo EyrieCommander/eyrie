@@ -90,7 +90,11 @@ function SetCaptainDialog({
       });
       await updateProject(projectId, { orchestrator_id: inst.id });
       // Brief the captain on the project (fire and forget — it runs in background)
-      streamCaptainBriefing(projectId, () => {});
+      streamCaptainBriefing(projectId, (ev) => {
+        if (ev.type === "error") {
+          console.error("Captain briefing failed:", ev.error);
+        }
+      });
       onDone();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to create captain");
@@ -875,7 +879,10 @@ export default function ProjectDetail() {
               await refresh();
             }, 2000);
             // Stop polling after 30s as a safety net
-            setTimeout(() => clearInterval(poll), 30000);
+            setTimeout(() => {
+              clearInterval(poll);
+              setStartingAgent("");
+            }, 30000);
           };
 
           return (
@@ -973,10 +980,12 @@ export default function ProjectDetail() {
             />
             <button
               onClick={() => {
-                const { sessionReady } = streamCaptainBriefing(project.id, () => {});
-                sessionReady.then(() => {
-                  navigate(`/agents/${captainInstance.name}/chat?brief=captain`);
+                const { sessionReady } = streamCaptainBriefing(project.id, (ev) => {
+                  if (ev.type === "error") console.error("Captain briefing error:", ev.error);
                 });
+                sessionReady
+                  .then(() => navigate(`/agents/${captainInstance.name}/chat?brief=captain`))
+                  .catch((e) => console.error("Captain briefing session failed:", e));
               }}
               className="ml-4 text-xs text-green hover:text-green/80 transition-colors"
             >

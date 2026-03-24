@@ -164,6 +164,69 @@ func WriteYAMLAtomic(path string, data interface{}) error {
 	return nil
 }
 
+// WriteRawAtomic writes a raw string to a file atomically.
+// Used when the config is already in its target format (e.g., raw TOML text
+// from the editor) and should be preserved as-is without re-encoding.
+func WriteRawAtomic(path string, content string) error {
+	absPath, err := filepath.Abs(ExpandHome(path))
+	if err != nil {
+		return fmt.Errorf("failed to resolve path: %w", err)
+	}
+
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	tempFile, err := os.CreateTemp(dir, ".eyrie-config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("failed to create temp file: %w", err)
+	}
+	tempPath := tempFile.Name()
+	defer func() {
+		if err != nil {
+			os.Remove(tempPath)
+		}
+	}()
+
+	if _, err = tempFile.WriteString(content); err != nil {
+		tempFile.Close()
+		return fmt.Errorf("failed to write config: %w", err)
+	}
+	if err = tempFile.Close(); err != nil {
+		return fmt.Errorf("failed to close temp file: %w", err)
+	}
+	if err = os.Rename(tempPath, absPath); err != nil {
+		return fmt.Errorf("failed to rename temp file: %w", err)
+	}
+	return nil
+}
+
+// CoerceJSONNumbers recursively walks a value decoded from JSON and converts
+// float64 values that are whole numbers (e.g., 42617.0) to int64 (42617).
+// This prevents the TOML encoder from writing "port = 42617.0" when the
+// original config had "port = 42617".
+func CoerceJSONNumbers(v interface{}) {
+	switch val := v.(type) {
+	case map[string]interface{}:
+		for k, child := range val {
+			if f, ok := child.(float64); ok && f == float64(int64(f)) {
+				val[k] = int64(f)
+			} else {
+				CoerceJSONNumbers(child)
+			}
+		}
+	case []interface{}:
+		for i, child := range val {
+			if f, ok := child.(float64); ok && f == float64(int64(f)) {
+				val[i] = int64(f)
+			} else {
+				CoerceJSONNumbers(child)
+			}
+		}
+	}
+}
+
 // WriteConfigAtomic writes config file atomically based on format
 func WriteConfigAtomic(path string, format string, data interface{}) error {
 	switch format {

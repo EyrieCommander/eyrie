@@ -241,7 +241,7 @@ export interface CommanderInfo {
   framework: string;
   port: number;
   status: string;
-  hierarchy_role: string;
+  hierarchy_role: HierarchyRole;
   legacy: boolean;
 }
 

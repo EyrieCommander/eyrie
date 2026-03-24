@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"time"
 
@@ -23,8 +24,8 @@ func main() {
 	if sessionID == "" {
 		sessionID = "test-ws"
 	}
-	url := fmt.Sprintf("ws://127.0.0.1:42617/ws/chat?token=%s&session_id=%s", token, sessionID)
-	conn, _, err := websocket.Dial(ctx, url, nil)
+	wsURL := fmt.Sprintf("ws://127.0.0.1:42617/ws/chat?token=%s&session_id=%s", url.QueryEscape(token), url.QueryEscape(sessionID))
+	conn, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
 		fmt.Println("dial error:", err)
 		return

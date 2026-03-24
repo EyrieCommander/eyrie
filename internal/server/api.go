@@ -374,6 +374,24 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 		format = "yaml"
 	}
 
+	// If config is a raw string (from the text editor), write it directly
+	// to preserve formatting and types. Passing it through an encoder
+	// would corrupt integers to floats and arrays to strings.
+	if rawStr, ok := body.Config.(string); ok {
+		if err := config.WriteRawAtomic(configPath, rawStr); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to write config: %v", err)})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "configuration saved successfully"})
+		return
+	}
+
+	// Config is a parsed object (from inline field editors).
+	// JSON decoding converts all numbers to float64, which corrupts
+	// integer fields when re-encoded to TOML (e.g., port = 42617.0).
+	// Fix by converting whole-number floats back to int64.
+	config.CoerceJSONNumbers(body.Config)
+
 	// Write config atomically
 	if err := config.WriteConfigAtomic(configPath, format, body.Config); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to write config: %v", err)})

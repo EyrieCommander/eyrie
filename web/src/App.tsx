@@ -23,7 +23,10 @@ export default function App() {
       setError(null);
       const [agentData, projectData] = await Promise.all([
         fetchAgents(),
-        fetchProjects().catch(() => [] as Project[]),
+        fetchProjects().catch((e) => {
+          console.error("Failed to fetch projects:", e);
+          return [] as Project[];
+        }),
       ]);
       setAgents(agentData);
       setProjects(projectData);

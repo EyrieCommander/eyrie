@@ -70,12 +70,16 @@ func showStatusTable(ctx context.Context, result discovery.Result) error {
 				if name == "" {
 					name = "-"
 				}
-				switch adapter.ProbeProvider(ctx, st.Provider) {
-				case "ok":
-					provider = "● " + name
-				case "error":
-					provider = "▲ " + name
-				default:
+				if st.Provider != "" {
+					switch adapter.ProbeProvider(ctx, st.Provider) {
+					case "ok":
+						provider = "● " + name
+					case "error":
+						provider = "▲ " + name
+					default:
+						provider = name
+					}
+				} else {
 					provider = name
 				}
 			}
