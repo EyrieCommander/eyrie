@@ -17,15 +17,13 @@ import (
 
 // TemplateContext is passed to identity file templates when rendering.
 type TemplateContext struct {
-	Name         string
-	DisplayName  string
-	Role         string
-	Description  string
-	ProjectName  string
-	ProjectGoal  string
-	ParentAgent  string
-	EyrieURL     string
-	Framework    string
+	Name        string
+	DisplayName string
+	Role        string
+	Description string
+	ParentAgent string
+	EyrieURL    string
+	Framework   string
 }
 
 // Provisioner creates new agent instances with full workspace and config.
@@ -52,25 +50,23 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		return nil, fmt.Errorf("%q: %w", req.Framework, ErrUnsupportedFramework)
 	}
 
-	// Reserve name and port under lock, then release for I/O
+	// Reserve name and port under lock; hold until instance.json is persisted
+	// to prevent races where another Provision could allocate the same name/port.
 	p.store.mu.Lock()
+	defer p.store.mu.Unlock()
 	existing, err := p.store.listLocked()
 	if err != nil {
-		p.store.mu.Unlock()
 		return nil, fmt.Errorf("failed to list instances: %w", err)
 	}
 	for _, inst := range existing {
 		if inst.Name == req.Name {
-			p.store.mu.Unlock()
 			return nil, fmt.Errorf("instance name %q: %w", req.Name, ErrNameExists)
 		}
 	}
 	port, err := AllocatePort(existing)
 	if err != nil {
-		p.store.mu.Unlock()
 		return nil, fmt.Errorf("port allocation failed: %w", err)
 	}
-	p.store.mu.Unlock()
 
 	// Generate ID and paths
 	id := uuid.New().String()
@@ -196,17 +192,17 @@ func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, mode
 
 	switch inst.Framework {
 	case "zeroclaw":
-		return p.generateZeroClawConfig(*inst, provider, model)
+		return p.generateZeroClawConfig(inst, provider, model)
 	case "openclaw":
 		return p.generateOpenClawConfig(inst, provider, model)
 	case "hermes":
-		return p.generateHermesConfig(*inst, provider, model)
+		return p.generateHermesConfig(inst, provider, model)
 	default:
 		return fmt.Errorf("unsupported framework %q", inst.Framework)
 	}
 }
 
-func (p *Provisioner) generateZeroClawConfig(inst Instance, provider, model string) error {
+func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model string) error {
 	cfg := map[string]any{
 		"default_provider":    provider,
 		"default_model":       model,
@@ -227,7 +223,36 @@ func (p *Provisioner) generateZeroClawConfig(inst Instance, provider, model stri
 			"auto_save": true,
 		},
 	}
+
+	// Copy API key from parent ZeroClaw installation so provisioned instances
+	// can use the same provider without manual onboarding.
+	parentConfigDir := config.ExpandHome("~/.zeroclaw")
+	parentConfigPath := filepath.Join(parentConfigDir, "config.toml")
+	if apiKey := readTOMLField(parentConfigPath, "api_key"); apiKey != "" {
+		cfg["api_key"] = apiKey
+		// Copy the secret key so the encrypted api_key can be decrypted
+		srcSecret := filepath.Join(parentConfigDir, ".secret_key")
+		dstSecret := filepath.Join(filepath.Dir(inst.ConfigPath), ".secret_key")
+		if secretData, err := os.ReadFile(srcSecret); err == nil {
+			_ = os.WriteFile(dstSecret, secretData, 0o600)
+		}
+	}
+
 	return config.WriteTOMLAtomic(inst.ConfigPath, cfg)
+}
+
+// readTOMLField reads a single top-level string field from a TOML file.
+func readTOMLField(path, field string) string {
+	var raw map[string]any
+	if err := config.ParseTOMLFile(path, &raw); err != nil {
+		return ""
+	}
+	if val, ok := raw[field]; ok {
+		if s, ok := val.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 func (p *Provisioner) generateOpenClawConfig(inst *Instance, provider, model string) error {
@@ -247,7 +272,7 @@ func (p *Provisioner) generateOpenClawConfig(inst *Instance, provider, model str
 	return config.WriteJSONAtomic(inst.ConfigPath, cfg)
 }
 
-func (p *Provisioner) generateHermesConfig(inst Instance, provider, model string) error {
+func (p *Provisioner) generateHermesConfig(inst *Instance, provider, model string) error {
 	cfg := map[string]any{
 		"provider": provider,
 		"model":    model,

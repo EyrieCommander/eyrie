@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"sync"
 )
 
@@ -232,6 +233,10 @@ func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	if err := os.Chmod(tmpName, perm); err != nil {
 		os.Remove(tmpName)
 		return err
+	}
+	if runtime.GOOS == "windows" {
+		// os.Rename on Windows cannot replace an existing file
+		_ = os.Remove(path)
 	}
 	if err := os.Rename(tmpName, path); err != nil {
 		os.Remove(tmpName)
