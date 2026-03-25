@@ -71,7 +71,7 @@ export function SessionBar({
             value={newSessionName}
             onChange={(e) => onNewSessionNameChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") onCreateSession(newSessionName);
+              if (e.key === "Enter" && newSessionName.trim()) onCreateSession(newSessionName);
               if (e.key === "Escape") {
                 onSetCreating(false);
                 onNewSessionNameChange("");

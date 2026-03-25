@@ -116,12 +116,16 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 		return nil, fmt.Errorf("persona catalog returned status %d", resp.StatusCode)
 	}
 
-	// Reject known oversized responses early before reading
-	if resp.ContentLength > maxPersonaCatalogSize {
-		return nil, fmt.Errorf("persona catalog response too large (%d bytes, max %d)", resp.ContentLength, maxPersonaCatalogSize)
+	// Read body with a limit; read one extra byte to detect oversized responses
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxPersonaCatalogSize+1))
+	if err != nil {
+		return nil, fmt.Errorf("reading persona catalog: %w", err)
+	}
+	if int64(len(data)) > maxPersonaCatalogSize {
+		return nil, fmt.Errorf("persona catalog response too large (%d bytes, max %d)", len(data), maxPersonaCatalogSize)
 	}
 	var reg PersonaRegistry
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxPersonaCatalogSize)).Decode(&reg); err != nil {
+	if err := json.Unmarshal(data, &reg); err != nil {
 		return nil, fmt.Errorf("parse persona catalog: %w", err)
 	}
 	_ = c.saveCache(&reg)

@@ -9,34 +9,38 @@ export async function readSSEStream(
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (!done) {
-      buffer += decoder.decode(value, { stream: true });
-    } else {
-      buffer += decoder.decode();
-    }
-    const lines = buffer.split("\n");
-    buffer = lines.pop()!;
-    for (const line of lines) {
-      if (line.startsWith("data: ")) {
-        try {
-          onEvent(JSON.parse(line.slice(6)));
-        } catch {
-          // skip malformed SSE lines
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (!done) {
+        buffer += decoder.decode(value, { stream: true });
+      } else {
+        buffer += decoder.decode();
+      }
+      const lines = buffer.split("\n");
+      buffer = lines.pop()!;
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            onEvent(JSON.parse(line.slice(6)));
+          } catch {
+            // skip malformed SSE lines
+          }
         }
       }
-    }
-    if (done) {
-      // Process any trailing data left in buffer
-      if (buffer.startsWith("data: ")) {
-        try {
-          onEvent(JSON.parse(buffer.slice(6)));
-        } catch {
-          /* skip */
+      if (done) {
+        // Process any trailing data left in buffer
+        if (buffer.startsWith("data: ")) {
+          try {
+            onEvent(JSON.parse(buffer.slice(6)));
+          } catch {
+            /* skip */
+          }
         }
+        break;
       }
-      break;
     }
+  } finally {
+    reader.releaseLock();
   }
 }

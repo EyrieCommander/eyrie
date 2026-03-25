@@ -101,7 +101,8 @@ func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
 		PersonaID string `json:"persona_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed JSON: " + err.Error()})
+		slog.Debug("malformed persona install request", "error", err)
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "malformed JSON"})
 		return
 	}
 	if body.PersonaID == "" {

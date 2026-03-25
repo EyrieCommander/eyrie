@@ -35,7 +35,10 @@ func AtomicWrite(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	if runtime.GOOS == "windows" {
-		// os.Rename on Windows cannot replace an existing file.
+		// NOTE: On Windows, os.Rename cannot atomically replace an existing file.
+		// This two-step remove+rename has a TOCTOU race where another process could
+		// create the target between removal and rename. A proper fix would use
+		// MoveFileEx with MOVEFILE_REPLACE_EXISTING via golang.org/x/sys/windows.
 		_ = os.Remove(path)
 	}
 	if err := os.Rename(tmpName, path); err != nil {

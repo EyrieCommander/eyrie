@@ -310,13 +310,15 @@ func resolveInstanceName(id string, disc discovery.Result) string {
 
 func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []projectParticipant {
 	var participants []projectParticipant
+	seen := make(map[string]bool)
 
 	// Captain first (project lead, responds by default)
 	if proj.OrchestratorID != "" {
 		captainName := resolveInstanceName(proj.OrchestratorID, disc)
 		for _, ar := range disc.Agents {
 			if ar.Agent.Name == captainName {
-				if ar.Alive {
+				if ar.Alive && !seen[ar.Agent.Name] {
+					seen[ar.Agent.Name] = true
 					participants = append(participants, projectParticipant{
 						name: ar.Agent.Name, role: "captain", agent: ar.Agent,
 					})
@@ -335,7 +337,8 @@ func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []
 	if commanderName != "" {
 		for _, ar := range disc.Agents {
 			if ar.Agent.Name == commanderName {
-				if ar.Alive {
+				if ar.Alive && !seen[ar.Agent.Name] {
+					seen[ar.Agent.Name] = true
 					participants = append(participants, projectParticipant{
 						name: ar.Agent.Name, role: "commander", agent: ar.Agent,
 					})
@@ -349,9 +352,12 @@ func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []
 	for _, agentID := range proj.RoleAgentIDs {
 		for _, ar := range disc.Agents {
 			if (ar.Agent.Name == agentID || ar.Agent.InstanceID == agentID) && ar.Alive {
-				participants = append(participants, projectParticipant{
-					name: ar.Agent.Name, role: "talon", agent: ar.Agent,
-				})
+				if !seen[ar.Agent.Name] {
+					seen[ar.Agent.Name] = true
+					participants = append(participants, projectParticipant{
+						name: ar.Agent.Name, role: "talon", agent: ar.Agent,
+					})
+				}
 				break
 			}
 		}
@@ -399,7 +405,11 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Message string `json:"message"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Message == "" {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+	if body.Message == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message required"})
 		return
 	}

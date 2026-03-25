@@ -905,7 +905,6 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 			}
 
 			frameType, _ := frame["type"].(string)
-			fmt.Fprintf(os.Stderr, "eyrie: ws frame type=%q\n", frameType)
 			var ev ChatEvent
 
 			switch frameType {

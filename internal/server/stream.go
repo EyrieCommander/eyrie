@@ -79,7 +79,9 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for entry := range logCh {
-		sse.WriteEvent(entry)
+		if err := sse.WriteEvent(entry); err != nil {
+			return
+		}
 	}
 }
 
@@ -109,7 +111,9 @@ func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for event := range ch {
-		sse.WriteEvent(event)
+		if err := sse.WriteEvent(event); err != nil {
+			return
+		}
 	}
 }
 

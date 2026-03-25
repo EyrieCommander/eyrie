@@ -206,7 +206,7 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	for i := range disc.Agents {
 		a := disc.Agents[i].Agent
 		if (ref.AgentName != "" && a.Name == ref.AgentName) ||
-			(ref.InstanceID != "" && a.Name == ref.InstanceID) {
+			(ref.InstanceID != "" && a.InstanceID == ref.InstanceID) {
 			found = &disc.Agents[i]
 			break
 		}
@@ -293,6 +293,7 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 					if found != nil && found.Alive {
+						_ = instStore.UpdateStatus(inst.ID, instance.StatusRunning)
 						break
 					}
 					found = nil

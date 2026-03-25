@@ -16,6 +16,7 @@ export function matchToolResult(
   toolCalls: ToolCall[],
   event: { tool_id?: string; tool?: string; output?: string; success?: boolean },
 ): ToolCall[] {
+  if (!event.tool_id && !event.tool) return toolCalls;
   const updated = [...toolCalls];
   let idx = -1;
   for (let i = updated.length - 1; i >= 0; i--) {

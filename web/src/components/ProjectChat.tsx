@@ -74,6 +74,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     setStreamingToolCalls([]);
 
     const controller = streamProjectChat(projectId, msg, (event) => {
+      if (!mountedRef.current) return;
       if (event.type === "message" && event.message) {
         setMessages((prev) => [...prev, event.message!]);
         setStreamingContent("");
@@ -218,7 +219,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         })}
         {sending && !streamingContent && !streamingSender && streamingToolCalls.length === 0 && (
           <div className="text-xs py-1 text-text-muted animate-pulse">
-            <span className={`font-bold ${ROLE_COLORS["commander"]}`}>agent</span>{" "}
+            <span className={`font-bold ${ROLE_COLORS["captain"]}`}>captain</span>{" "}
             thinking...
           </div>
         )}
@@ -257,7 +258,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       {/* Input */}
       <div className="relative border-t border-border p-3 flex gap-2">
         {showMentions && (() => {
-          const filtered = participants.filter((p) => !mentionFilter || p.role.includes(mentionFilter) || p.name.includes(mentionFilter));
+          const filtered = participants.filter((p) => !mentionFilter || p.role.toLowerCase().includes(mentionFilter) || p.name.toLowerCase().includes(mentionFilter));
           if (filtered.length === 0) return null;
           return (
             <div className="absolute bottom-full left-3 mb-1 rounded border border-border bg-bg shadow-lg py-1 min-w-[160px]">
@@ -300,7 +301,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           onKeyDown={(e) => {
             if (e.key === "Escape") { setShowMentions(false); return; }
             if (showMentions) {
-              const filtered = participants.filter((p) => !mentionFilter || p.role.includes(mentionFilter) || p.name.includes(mentionFilter));
+              const filtered = participants.filter((p) => !mentionFilter || p.role.toLowerCase().includes(mentionFilter) || p.name.toLowerCase().includes(mentionFilter));
               if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((prev) => Math.min(prev + 1, filtered.length - 1)); return; }
               if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((prev) => Math.max(prev - 1, 0)); return; }
               if ((e.key === "Enter" || e.key === "Tab") && filtered.length > 0) {

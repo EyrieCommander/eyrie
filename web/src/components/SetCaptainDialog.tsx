@@ -161,7 +161,7 @@ export function SetCaptainDialog({
                         <span className={`h-1.5 w-1.5 rounded-full ${isStopped ? "bg-text-muted" : "bg-green"}`} />
                         <div className="flex-1">
                           <span className="font-medium text-text">{inst.display_name}</span>
-                          <span className="ml-2 text-text-muted">{inst.framework} · :{inst.port}</span>
+                          <span className="ml-2 text-text-muted">{inst.framework}{inst.port != null ? ` · :${inst.port}` : ""}</span>
                           {inst.project_id && (
                             <span className="ml-2 text-[10px] text-text-muted">(assigned)</span>
                           )}
