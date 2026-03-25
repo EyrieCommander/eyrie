@@ -1,5 +1,7 @@
 # Eyrie
 
+<img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
+
 A unified management interface for the Claw family of AI agent frameworks.
 
 Eyrie gives you a single CLI and web dashboard to discover, monitor, and control all your Claw agents — ZeroClaw, OpenClaw, Hermes, and others — regardless of which framework they run on.
