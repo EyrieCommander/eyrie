@@ -30,14 +30,7 @@ import {
 import ConfigEditor from "./ConfigEditor";
 import Terminal from "./Terminal";
 import { ChatPanel } from "./ChatPanel";
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return "-";
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
-}
+import { formatBytes } from "../lib/format";
 
 interface AgentDetailProps {
   agent: AgentInfo;
@@ -608,7 +601,7 @@ function EditableInfoCard({
   value,
   field,
   agentName,
-  onSave,
+  onSave: _onSave,
 }: {
   label: string;
   value: string;
@@ -681,7 +674,7 @@ function EditableInfoCard({
 
       setEditing(false);
       setSaved(true);
-      // Don't call onSave() (which reloads the page) — the runtime status
+      // Don't call _onSave() (which reloads the page) — the runtime status
       // won't reflect config changes until the agent is restarted.
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save");

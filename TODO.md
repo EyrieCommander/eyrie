@@ -96,3 +96,4 @@
 - [ ] **PicoClaw support**: Fourth framework option — lighter than ZeroClaw for simple Talon roles
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
 - [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)
+- [ ] **Server middleware layer**: Request logging, panic recovery, and rate limiting middleware — per PLAN.md `internal/server/middleware.go`. Currently all 52 routes are registered bare with no central error handling or observability.

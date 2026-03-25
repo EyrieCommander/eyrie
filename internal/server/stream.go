@@ -4,17 +4,53 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
 )
 
-func startSSE(w http.ResponseWriter) (http.Flusher, bool) {
+// SSEWriter wraps an http.ResponseWriter for Server-Sent Events.
+// It handles JSON marshaling, framing, and flushing in a single call.
+type SSEWriter struct {
+	w io.Writer
+	f http.Flusher
+}
+
+// NewSSEWriter sets SSE headers and returns a writer.
+// Returns an error if the ResponseWriter does not support flushing.
+func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	flusher, ok := w.(http.Flusher)
-	return flusher, ok
+	if !ok {
+		return nil, fmt.Errorf("streaming not supported")
+	}
+	return &SSEWriter{w: w, f: flusher}, nil
+}
+
+// WriteEvent marshals v as JSON and writes it as an SSE data frame.
+func (s *SSEWriter) WriteEvent(v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(s.w, "data: %s\n\n", data); err != nil {
+		return err
+	}
+	s.f.Flush()
+	return nil
+}
+
+// WriteDone sends a {"type":"done"} event.
+func (s *SSEWriter) WriteDone() {
+	s.WriteEvent(map[string]string{"type": "done"})
+}
+
+// WriteError sends a {"type":"error","error":"..."} event.
+func (s *SSEWriter) WriteError(msg string) {
+	s.WriteEvent(map[string]string{"type": "error", "error": msg})
 }
 
 // handleAgentLogs streams log entries as Server-Sent Events.
@@ -36,16 +72,14 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+	sse, err := NewSSEWriter(w)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	for entry := range logCh {
-		data, _ := json.Marshal(entry)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		sse.WriteEvent(entry)
 	}
 }
 
@@ -68,16 +102,14 @@ func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+	sse, err := NewSSEWriter(w)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	for event := range ch {
-		data, _ := json.Marshal(event)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		sse.WriteEvent(event)
 	}
 }
 

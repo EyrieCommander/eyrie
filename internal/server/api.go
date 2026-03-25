@@ -225,16 +225,14 @@ func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+	sse, err := NewSSEWriter(w)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
 	for ev := range eventCh {
-		data, _ := json.Marshal(ev)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
+		sse.WriteEvent(ev)
 	}
 }
 

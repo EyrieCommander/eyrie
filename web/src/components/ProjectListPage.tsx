@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Briefcase, ChevronRight } from "lucide-react";
-import type { Project, AgentInstance } from "../lib/types";
-import { fetchProjects, fetchInstances, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
+import type { AgentInstance } from "../lib/types";
+import { fetchInstances, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
+import { useData } from "../lib/DataContext";
 
 function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -324,28 +325,8 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
 
 export default function ProjectListPage() {
   const navigate = useNavigate();
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { projects, loading, error, refresh } = useData();
   const [showCreate, setShowCreate] = useState(false);
-  const [error, setError] = useState("");
-
-  const refresh = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError("");
-      const data = await fetchProjects();
-      setProjects(data);
-    } catch (err) {
-      console.error("Failed to fetch projects:", err);
-      setError(err instanceof Error ? err.message : "Failed to load projects");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
 
   return (
     <div className="space-y-6">

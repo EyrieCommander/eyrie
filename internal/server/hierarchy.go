@@ -1,15 +1,13 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
-
-	"log/slog"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/config"
@@ -82,7 +80,7 @@ func (s *Server) handleGetHierarchy(w http.ResponseWriter, r *http.Request) {
 		if c, ok := instByID[coordRef.InstanceID]; ok {
 			commander = &CommanderInfo{
 				ID: c.ID, Name: c.Name, DisplayName: c.DisplayName,
-				Framework: c.Framework, Port: c.Port, Status: c.Status,
+				Framework: c.Framework, Port: c.Port, Status: string(c.Status),
 				HierarchyRole: string(c.HierarchyRole),
 			}
 		}
@@ -223,95 +221,16 @@ func (s *Server) handleBriefCommander(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent := discovery.NewAgent(found.Agent)
-
-	// Gather context for the briefing: installed frameworks, available personas
 	briefing := composeBriefing()
 
-	// Create a dedicated briefing session and activate it so the agent
-	// uses it for the conversation (important for CLI-based frameworks like
-	// ZeroClaw where the CLI always uses the active session).
-	const briefingSessionName = "eyrie-commander-briefing"
-	var sessionKey string
-	alreadyBriefed := false
-
-	// Check if the briefing session already exists — if so, skip re-briefing.
-	// Don't check for messages; the session may exist but the response may still
-	// be streaming (race with React StrictMode double-fire).
-	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
-		for _, sess := range sessions {
-			if sess.Title == briefingSessionName {
-				sessionKey = sess.Key
-				alreadyBriefed = true
-				break
-			}
-		}
-	}
-
-	if alreadyBriefed {
-		// Session exists with content — just return the session key
-		flusher, ok := startSSE(w)
-		if !ok {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
-			return
-		}
-		sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
-		data, _ := json.Marshal(sessionEvent)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		doneEvent := map[string]string{"type": "done", "content": ""}
-		data, _ = json.Marshal(doneEvent)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-		return
-	}
-
-	// Create new briefing session
-	sess, err := agent.CreateSession(r.Context(), briefingSessionName)
+	sse, err := NewSSEWriter(w)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "eyrie: failed to create briefing session on %s: %v\n", agentName, err)
-		// Fall back to default session
-	} else {
-		sessionKey = sess.Key
-		// For ZeroClaw, activate the session so the CLI uses it
-		type sessionActivator interface {
-			ActivateSession(ctx context.Context, key string) error
-		}
-		if activator, ok := agent.(sessionActivator); ok {
-			if aErr := activator.ActivateSession(r.Context(), sessionKey); aErr != nil {
-				fmt.Fprintf(os.Stderr, "eyrie: failed to activate briefing session: %v\n", aErr)
-			}
-		}
-	}
-
-	// Stream the briefing as SSE so the frontend can show the response
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	eventCh, err := agent.StreamMessage(r.Context(), briefing, sessionKey)
-	if err != nil {
-		// SSE headers already sent — emit error as SSE event
-		errData, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", errData)
-		flusher.Flush()
-		return
-	}
-
-	// First, send the session key so frontend knows where to navigate
-	if sessionKey != "" {
-		sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
-		data, _ := json.Marshal(sessionEvent)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	// Then stream the agent's response
-	for ev := range eventCh {
-		data, _ := json.Marshal(ev)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
+	// resetExisting=false: idempotent — if already briefed, just return the session key
+	streamBriefing(r.Context(), agent, agentName, "eyrie-commander-briefing", briefing, sse, false)
 }
 
 // handleBriefCaptain sends a project-scoped briefing to a captain agent.
@@ -356,7 +275,7 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "captain is stopped and failed to start: " + startErr.Error()})
 					return
 				}
-				_ = instStore.UpdateStatus(inst.ID, "starting")
+				_ = instStore.UpdateStatus(inst.ID, instance.StatusStarting)
 				// Wait for agent to become reachable (poll discovery)
 				for attempt := 0; attempt < 10; attempt++ {
 					select {
@@ -387,62 +306,18 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 	}
 
 	agent := discovery.NewAgent(found.Agent)
-
-	// Compose captain briefing with project context
 	briefing := composeCaptainBriefing(proj)
-
-	// Create a dedicated briefing session
 	sessionName := fmt.Sprintf("project-%s-briefing", proj.Name)
-	var sessionKey string
 
-	// Clean up existing briefing session
-	if sessions, sErr := agent.Sessions(r.Context()); sErr == nil {
-		for _, sess := range sessions {
-			if sess.Title == sessionName {
-				_ = agent.ResetSession(r.Context(), sess.Key)
-			}
-		}
-	}
-	sess, cErr := agent.CreateSession(r.Context(), sessionName)
-	if cErr != nil {
-		fmt.Fprintf(os.Stderr, "eyrie: failed to create captain briefing session: %v\n", cErr)
-	} else {
-		sessionKey = sess.Key
-		type sessionActivator interface {
-			ActivateSession(ctx context.Context, key string) error
-		}
-		if activator, ok := agent.(sessionActivator); ok {
-			_ = activator.ActivateSession(r.Context(), sessionKey)
-		}
-	}
-
-	// Stream the briefing as SSE
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
-		return
-	}
-
-	eventCh, err := agent.StreamMessage(r.Context(), briefing, sessionKey)
+	sse, err := NewSSEWriter(w)
 	if err != nil {
-		errData, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", errData)
-		flusher.Flush()
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	if sessionKey != "" {
-		sessionEvent := map[string]string{"type": "session", "session_key": sessionKey}
-		data, _ := json.Marshal(sessionEvent)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-
-	for ev := range eventCh {
-		data, _ := json.Marshal(ev)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
+	// resetExisting=true: always re-brief the captain (project context may have changed)
+	agentName := proj.OrchestratorID
+	streamBriefing(r.Context(), agent, agentName, sessionName, briefing, sse, true)
 }
 
 func composeCaptainBriefing(proj *project.Project) string {

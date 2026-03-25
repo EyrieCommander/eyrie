@@ -323,9 +323,9 @@ func (s *Server) runInstallation(fw *registry.Framework, copyFrom string) {
 
 // streamInstallProgress streams the progress of an installation via SSE
 func (s *Server) streamInstallProgress(w http.ResponseWriter, r *http.Request, frameworkID string) {
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
+	sse, err := NewSSEWriter(w)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
@@ -351,14 +351,14 @@ func (s *Server) streamInstallProgress(w http.ResponseWriter, r *http.Request, f
 
 			// Send progress update if changed
 			if lastProgress == nil || progress.Phase != lastProgress.Phase || progress.Progress != lastProgress.Progress || progress.Status != lastProgress.Status {
-				sendSSE(w, flusher, progress)
+				sse.WriteEvent(progress)
 				lastProgress = progress
 			}
 
 			// Send new logs
 			logs := progress.getLogs()
 			for i := lastLogCount; i < len(logs); i++ {
-				sendSSELog(w, flusher, logs[i])
+				sse.WriteEvent(map[string]string{"type": "log", "message": logs[i]})
 			}
 			lastLogCount = len(logs)
 
@@ -370,28 +370,10 @@ func (s *Server) streamInstallProgress(w http.ResponseWriter, r *http.Request, f
 	}
 }
 
-// sendSSELog sends a log line via SSE
-func sendSSELog(w http.ResponseWriter, flusher http.Flusher, line string) {
-	log := map[string]string{
-		"type":    "log",
-		"message": line,
-	}
-	data, _ := json.Marshal(log)
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
-}
-
 // handleInstallStatus returns the status of all installations
 func (s *Server) handleInstallStatus(w http.ResponseWriter, r *http.Request) {
 	statuses := globalInstallState.getAll()
 	writeJSON(w, http.StatusOK, statuses)
-}
-
-// sendSSE sends an SSE event with install progress
-func sendSSE(w http.ResponseWriter, flusher http.Flusher, progress *installProgress) {
-	data, _ := json.Marshal(progress)
-	fmt.Fprintf(w, "data: %s\n\n", data)
-	flusher.Flush()
 }
 
 // installBinary installs the framework binary

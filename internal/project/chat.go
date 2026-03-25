@@ -79,7 +79,7 @@ func (cs *ChatStore) Append(projectID string, msg ChatMessage) error {
 		return fmt.Errorf("marshaling chat message: %w", err)
 	}
 
-	f, err := os.OpenFile(cs.chatPath(projectID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(cs.chatPath(projectID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening chat file: %w", err)
 	}
@@ -153,7 +153,7 @@ func (cs *ChatStore) AppendIntake(projectID string, msg ChatMessage) error {
 	if err != nil {
 		return fmt.Errorf("marshaling intake message: %w", err)
 	}
-	f, err := os.OpenFile(cs.intakePath(projectID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(cs.intakePath(projectID), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
 		return fmt.Errorf("opening intake file: %w", err)
 	}

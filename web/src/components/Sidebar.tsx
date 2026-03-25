@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, GitBranch, Settings, Users } from "lucide-react";
-import type { AgentInfo, Project } from "../lib/types";
+import { useData } from "../lib/DataContext";
 
 function parseAgentRoute(pathname: string) {
   const match = pathname.match(/^\/agents\/([^/]+?)(?:\/(status|chat|logs|config))?$/);
@@ -14,7 +14,8 @@ function parseProjectRoute(pathname: string) {
   return match ? match[1] : null;
 }
 
-export default function Sidebar({ agents, projects }: { agents: AgentInfo[]; projects: Project[] }) {
+export default function Sidebar() {
+  const { agents, projects } = useData();
   const { pathname } = useLocation();
   const activeAgent = useMemo(() => parseAgentRoute(pathname), [pathname]);
   const activeProject = useMemo(() => parseProjectRoute(pathname), [pathname]);

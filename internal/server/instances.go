@@ -101,10 +101,10 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	if req.AutoStart {
 		if autoStartErr = manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); autoStartErr != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
-			inst.Status = "error"
+			inst.Status = instance.StatusError
 		} else {
 			// Set to "starting" — discovery will confirm "running" once the agent is alive
-			inst.Status = "starting"
+			inst.Status = instance.StatusStarting
 		}
 		if err := store.UpdateStatus(inst.ID, inst.Status); err != nil {
 			slog.Warn("failed to persist auto-start status", "instance", inst.Name, "error", err)
@@ -124,7 +124,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.AutoStart && inst.Status == "error" {
+	if req.AutoStart && inst.Status == instance.StatusError {
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"instance": inst,
 			"warning":  fmt.Sprintf("auto-start failed: %v", autoStartErr),
@@ -263,8 +263,8 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 	if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, mgrAction); err != nil {
 		// Persist the error status so the instance reflects the failure
-		inst.Status = "error"
-		if updateErr := store.UpdateStatus(inst.ID, "error"); updateErr != nil {
+		inst.Status = instance.StatusError
+		if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {
 			slog.Warn("failed to persist error status", "instance", inst.ID, "error", updateErr)
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -272,13 +272,13 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Update status — use "starting" for start/restart; discovery will confirm "running"
-	newStatus := "starting"
+	newStatus := instance.StatusStarting
 	if action == "stop" {
-		newStatus = "stopped"
+		newStatus = instance.StatusStopped
 	}
 	if err := store.UpdateStatus(id, newStatus); err != nil {
 		slog.Warn("failed to persist instance status", "instance", id, "status", newStatus, "error", err)
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{"status": newStatus})
+	writeJSON(w, http.StatusOK, map[string]string{"status": string(newStatus)})
 }

@@ -1,8 +1,8 @@
-import { useEffect, useState, useCallback } from "react";
 import { Routes, Route, Navigate, useParams, useNavigate } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
-import type { AgentInfo, Project } from "./lib/types";
-import { fetchAgents, fetchProjects } from "./lib/api";
+import type { AgentInfo } from "./lib/types";
+import { formatUptime, formatBytes } from "./lib/format";
+import { DataProvider, useData } from "./lib/DataContext";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
 import InstallPage from "./components/InstallPage";
@@ -12,40 +12,19 @@ import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
 
 export default function App() {
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
-  const [projects, setProjects] = useState<Project[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  return (
+    <DataProvider>
+      <AppContent />
+    </DataProvider>
+  );
+}
 
-  const refresh = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      const [agentData, projectData] = await Promise.all([
-        fetchAgents(),
-        fetchProjects().catch((e) => {
-          console.error("Failed to fetch projects:", e);
-          return [] as Project[];
-        }),
-      ]);
-      setAgents(agentData);
-      setProjects(projectData);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fetch agents");
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 30000);
-    return () => clearInterval(interval);
-  }, [refresh]);
+function AppContent() {
+  const { agents, loading, error, refresh } = useData();
 
   return (
     <div className="flex h-screen overflow-hidden">
-      <Sidebar agents={agents} projects={projects} />
+      <Sidebar />
 
       <main className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl px-8 py-8">
@@ -72,7 +51,7 @@ export default function App() {
             />
             <Route
               path="/agents/:name/:tab?"
-              element={<AgentDetailRoute agents={agents} onRefresh={refresh} />}
+              element={<AgentDetailRoute />}
             />
             <Route path="/install" element={<InstallPage />} />
             <Route path="/personas" element={<PersonasPage />} />
@@ -81,25 +60,6 @@ export default function App() {
       </main>
     </div>
   );
-}
-
-function formatUptime(nanoseconds: number): string {
-  if (!nanoseconds) return "-";
-  const seconds = nanoseconds / 1e9;
-  const days = Math.floor(seconds / 86400);
-  const hours = Math.floor((seconds % 86400) / 3600);
-  const mins = Math.floor((seconds % 3600) / 60);
-  if (days > 0) return `${days}d ${hours}h`;
-  if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
-}
-
-function formatBytes(bytes: number): string {
-  if (!bytes) return "-";
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
-  if (bytes < 1024 * 1024 * 1024)
-    return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;
-  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}GB`;
 }
 
 function AgentList({
@@ -241,8 +201,9 @@ function StatCard({
   );
 }
 
-function AgentDetailRoute({ agents, onRefresh }: { agents: AgentInfo[]; onRefresh: () => Promise<void> }) {
+function AgentDetailRoute() {
   const { name } = useParams<{ name: string }>();
+  const { agents, refresh } = useData();
   const agent = agents.find((a) => a.name === name);
 
   if (!agent) {
@@ -255,5 +216,5 @@ function AgentDetailRoute({ agents, onRefresh }: { agents: AgentInfo[]; onRefres
     );
   }
 
-  return <AgentDetail agent={agent} onRefresh={onRefresh} />;
+  return <AgentDetail agent={agent} onRefresh={refresh} />;
 }

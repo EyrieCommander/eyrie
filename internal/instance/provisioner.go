@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/fileutil"
 	"github.com/Audacity88/eyrie/internal/persona"
 )
 
@@ -96,7 +97,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		Port:          port,
 		ConfigPath:    configPath,
 		WorkspacePath: workspaceDir,
-		Status:        "created",
+		Status:        StatusCreated,
 		CreatedAt:     time.Now(),
 		CreatedBy:     req.CreatedBy,
 	}
@@ -155,7 +156,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal instance metadata: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(instDir, "instance.json"), data, 0o644); err != nil {
+	if err := fileutil.AtomicWrite(filepath.Join(instDir, "instance.json"), data, 0o600); err != nil {
 		return nil, fmt.Errorf("failed to save instance metadata: %w", err)
 	}
 

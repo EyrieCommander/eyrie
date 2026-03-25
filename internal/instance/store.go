@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sync"
+
+	"github.com/Audacity88/eyrie/internal/fileutil"
 )
 
 // ErrNotFound is returned when an instance does not exist on disk.
@@ -67,10 +69,12 @@ func (s *Store) listLocked() ([]Instance, error) {
 		metaPath := filepath.Join(s.dir, entry.Name(), "instance.json")
 		data, err := os.ReadFile(metaPath)
 		if err != nil {
+			slog.Warn("skipping instance: failed to read metadata", "id", entry.Name(), "error", err)
 			continue
 		}
 		var inst Instance
 		if err := json.Unmarshal(data, &inst); err != nil {
+			slog.Warn("skipping instance: failed to parse metadata", "id", entry.Name(), "error", err)
 			continue
 		}
 		instances = append(instances, inst)
@@ -116,11 +120,15 @@ func (s *Store) Save(inst Instance) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(s.metaPath(inst.ID), data, 0o644)
+	return fileutil.AtomicWrite(s.metaPath(inst.ID), data, 0o600)
 }
 
 // UpdateStatus updates just the status field for an instance.
-func (s *Store) UpdateStatus(id, status string) error {
+// Returns an error if status is not a valid InstanceStatus.
+func (s *Store) UpdateStatus(id string, status InstanceStatus) error {
+	if !status.Valid() {
+		return fmt.Errorf("invalid instance status %q", status)
+	}
 	if err := validateID(id); err != nil {
 		return err
 	}
@@ -143,7 +151,7 @@ func (s *Store) UpdateStatus(id, status string) error {
 	if err != nil {
 		return err
 	}
-	return atomicWrite(s.metaPath(id), out, 0o644)
+	return fileutil.AtomicWrite(s.metaPath(id), out, 0o600)
 }
 
 // Delete removes an instance directory and all its contents.
@@ -208,39 +216,3 @@ func (s *Store) metaPath(id string) string {
 	return filepath.Join(s.dir, id, "instance.json")
 }
 
-// atomicWrite writes data to a temp file then renames to the target path.
-func atomicWrite(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	if err := os.Chmod(tmpName, perm); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	if runtime.GOOS == "windows" {
-		// os.Rename on Windows cannot replace an existing file
-		_ = os.Remove(path)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		os.Remove(tmpName)
-		return err
-	}
-	return nil
-}

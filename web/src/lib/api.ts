@@ -1,3 +1,4 @@
+import { readSSEStream } from "./sse";
 import type {
   AgentInfo,
   AgentInstance,
@@ -128,36 +129,7 @@ export function streamMessage(
         });
         return;
       }
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (!done) {
-          buffer += decoder.decode(value, { stream: true });
-        } else {
-          buffer += decoder.decode();
-        }
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              onEvent(JSON.parse(line.slice(6)));
-            } catch {
-              // skip malformed SSE lines
-            }
-          }
-        }
-        if (done) {
-          if (buffer.startsWith("data: ")) {
-            try {
-              onEvent(JSON.parse(buffer.slice(6)));
-            } catch { /* skip */ }
-          }
-          break;
-        }
-      }
+      await readSSEStream(res.body!, (data) => onEvent(data));
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         onEvent({
@@ -367,53 +339,13 @@ export function streamInstall(
         return;
       }
 
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-
-      for (;;) {
-        const { done, value } = await reader.read();
-
-        if (!done) {
-          buffer += decoder.decode(value, { stream: true });
+      await readSSEStream(res.body!, (data) => {
+        if (data.type === "log") {
+          onLog((data as InstallLogEvent).message);
         } else {
-          buffer += decoder.decode();
+          onProgress(data as InstallProgress);
         }
-
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(line.slice(6));
-              if (data.type === "log") {
-                onLog((data as InstallLogEvent).message);
-              } else {
-                onProgress(data as InstallProgress);
-              }
-            } catch {
-              // skip malformed SSE lines
-            }
-          }
-        }
-
-        if (done) {
-          if (buffer.startsWith("data: ")) {
-            try {
-              const data = JSON.parse(buffer.slice(6));
-              if (data.type === "log") {
-                onLog((data as InstallLogEvent).message);
-              } else {
-                onProgress(data as InstallProgress);
-              }
-            } catch {
-              /* skip */
-            }
-          }
-          break;
-        }
-      }
+      });
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         onProgress({
@@ -602,43 +534,12 @@ export function streamCommanderBriefing(
         resolveSession!("");
         return;
       }
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (!done) {
-          buffer += decoder.decode(value, { stream: true });
-        } else {
-          buffer += decoder.decode();
+      await readSSEStream(res.body!, (ev) => {
+        if (ev.type === "session" && ev.session_key) {
+          resolveSession!(ev.session_key); sessionResolved = true;
         }
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const ev = JSON.parse(line.slice(6));
-              if (ev.type === "session" && ev.session_key) {
-                resolveSession!(ev.session_key); sessionResolved = true;
-              }
-              onEvent(ev);
-            } catch { /* skip */ }
-          }
-        }
-        if (done) {
-          // Process any trailing data left in buffer
-          if (buffer.startsWith("data: ")) {
-            try {
-              const ev = JSON.parse(buffer.slice(6));
-              if (ev.type === "session" && ev.session_key) {
-                resolveSession!(ev.session_key); sessionResolved = true;
-              }
-              onEvent(ev);
-            } catch { /* skip */ }
-          }
-          break;
-        }
-      }
+        onEvent(ev);
+      });
       // Ensure promise settles even if no session event was received
       if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
     } catch (e) {
@@ -671,42 +572,12 @@ export function streamCaptainBriefing(
         resolveSession!("");
         return;
       }
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (!done) {
-          buffer += decoder.decode(value, { stream: true });
-        } else {
-          buffer += decoder.decode();
+      await readSSEStream(res.body!, (ev) => {
+        if (ev.type === "session" && ev.session_key) {
+          resolveSession!(ev.session_key); sessionResolved = true;
         }
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try {
-              const ev = JSON.parse(line.slice(6));
-              if (ev.type === "session" && ev.session_key) {
-                resolveSession!(ev.session_key); sessionResolved = true;
-              }
-              onEvent(ev);
-            } catch { /* skip */ }
-          }
-        }
-        if (done) {
-          if (buffer.startsWith("data: ")) {
-            try {
-              const ev = JSON.parse(buffer.slice(6));
-              if (ev.type === "session" && ev.session_key) {
-                resolveSession!(ev.session_key); sessionResolved = true;
-              }
-              onEvent(ev);
-            } catch { /* skip */ }
-          }
-          break;
-        }
-      }
+        onEvent(ev);
+      });
       if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
@@ -747,34 +618,7 @@ export function streamProjectIntake(
         onEvent({ type: "error", error: body.error || res.statusText });
         return;
       }
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (!done) {
-          buffer += decoder.decode(value, { stream: true });
-        } else {
-          buffer += decoder.decode();
-        }
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
-          }
-        }
-        if (done) {
-          if (buffer.trim()) {
-            for (const line of buffer.split("\n")) {
-              if (line.startsWith("data: ")) {
-                try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
-              }
-            }
-          }
-          break;
-        }
-      }
+      await readSSEStream(res.body!, (data) => onEvent(data));
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         onEvent({ type: "error", error: e instanceof Error ? e.message : "Intake failed" });
@@ -822,35 +666,7 @@ export function streamProjectChat(
         onEvent({ type: "error", error: body.error || res.statusText });
         return;
       }
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (!done) {
-          buffer += decoder.decode(value, { stream: true });
-        } else {
-          buffer += decoder.decode();
-        }
-        const lines = buffer.split("\n");
-        buffer = lines.pop()!;
-        for (const line of lines) {
-          if (line.startsWith("data: ")) {
-            try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
-          }
-        }
-        if (done) {
-          // Process any remaining data in the buffer
-          if (buffer.trim()) {
-            for (const line of buffer.split("\n")) {
-              if (line.startsWith("data: ")) {
-                try { onEvent(JSON.parse(line.slice(6))); } catch { /* skip */ }
-              }
-            }
-          }
-          break;
-        }
-      }
+      await readSSEStream(res.body!, (data) => onEvent(data));
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         onEvent({ type: "error", error: e instanceof Error ? e.message : "Chat failed" });

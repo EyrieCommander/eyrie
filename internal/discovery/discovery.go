@@ -68,7 +68,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		// Update instance status based on health probe
 		if instStore != nil && agent.InstanceID != "" {
 			if alive {
-				if err := instStore.UpdateStatus(agent.InstanceID, "running"); err != nil {
+				if err := instStore.UpdateStatus(agent.InstanceID, instance.StatusRunning); err != nil {
 					slog.Debug("failed to update instance status to running", "instance", agent.InstanceID, "error", err)
 				}
 			} else {
@@ -76,8 +76,8 @@ func Run(ctx context.Context, cfg config.Config) Result {
 				inst, err := instStore.Get(agent.InstanceID)
 				if err != nil {
 					slog.Debug("failed to get instance for status check", "instance", agent.InstanceID, "error", err)
-				} else if inst.Status != "starting" {
-					if err := instStore.UpdateStatus(agent.InstanceID, "stopped"); err != nil {
+				} else if inst.Status != instance.StatusStarting {
+					if err := instStore.UpdateStatus(agent.InstanceID, instance.StatusStopped); err != nil {
 						slog.Debug("failed to update instance status to stopped", "instance", agent.InstanceID, "error", err)
 					}
 				}

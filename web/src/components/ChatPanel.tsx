@@ -7,8 +7,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Plus, X } from "lucide-react";
-import type { ChatMessage, ChatPart, ChatEvent, Session } from "../lib/types";
+import type { ChatMessage, ChatEvent, Session } from "../lib/types";
 import {
   fetchSessions,
   fetchChatMessages,
@@ -21,22 +20,18 @@ import {
   hideSession,
 } from "../lib/api";
 
+import { type ToolCall, matchToolResult } from "../lib/chat-events";
+export type { ToolCall };
+
+import {
+  ToolCallCard,
+  MessageRow,
+  StreamingCursor,
+  SessionBar,
+  type SessionGroup,
+} from "./chat";
+
 // ── Types ───────────────────────────────────────────────────────────────
-
-export interface ToolCall {
-  tool: string;
-  toolId?: string;
-  args?: Record<string, unknown>;
-  output?: string;
-  success?: boolean;
-  done: boolean;
-}
-
-interface SessionGroup {
-  name: string;
-  current?: Session;
-  archived: Session[];
-}
 
 type FlatItem =
   | { kind: "spacer"; label: string; archiveKey?: string; currentKey?: string }
@@ -367,54 +362,11 @@ export function ChatPanel({
     }
   }, [totalMsgCount, sending, streamingContent, toolCalls]);
 
-  // ── Commander briefing ──────────────────────────────────────────────
+  // ── Unified chat event handler ────────────────────────────────────────
 
-  useEffect(() => {
-    if (briefMode !== "commander" || briefTriggered.current || !alive) return;
-    briefTriggered.current = true;
-    (window as any)[briefKey] = true;
-    setSearchParams({}, { replace: true });
-
-    let mounted = true;
-    setSending(true);
-    setStreamingContent("");
-    setToolCalls([]);
-
-    const { controller } = streamCommanderBriefing((ev) => {
-      if (!mounted) return;
-      const evType = ev.type as string;
-      switch (evType) {
-        case "session": {
-          const switchToBriefing = () => {
-            fetchSessions(agentName)
-              .then((resp) => {
-                if (!mounted) return;
-                const all = resp.sessions ?? [];
-                setSessions(all);
-                const gs = groupSessions(all);
-                const match = gs.find(
-                  (g) => g.name === "eyrie-commander-briefing",
-                );
-                if (match) {
-                  setActiveGroupName(match.name);
-                } else {
-                  setTimeout(() => {
-                    fetchSessions(agentName)
-                      .then((resp2) => {
-                        if (!mounted) return;
-                        const all2 = resp2.sessions ?? [];
-                        setSessions(all2);
-                        setActiveGroupName("eyrie-commander-briefing");
-                      })
-                      .catch(() => {});
-                  }, 1000);
-                }
-              })
-              .catch(() => {});
-          };
-          switchToBriefing();
-          break;
-        }
+  const handleChatEvent = useCallback(
+    (ev: ChatEvent, onDone: () => void) => {
+      switch (ev.type) {
         case "delta":
           setStreamingContent((prev) => prev + (ev.content ?? ""));
           break;
@@ -430,29 +382,7 @@ export function ChatPanel({
           ]);
           break;
         case "tool_result":
-          setToolCalls((prev) => {
-            const updated = [...prev];
-            let idx = -1;
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if (
-                ((ev.tool_id && updated[i].toolId === ev.tool_id) ||
-                  (!ev.tool_id && updated[i].tool === ev.tool)) &&
-                !updated[i].done
-              ) {
-                idx = i;
-                break;
-              }
-            }
-            if (idx >= 0) {
-              updated[idx] = {
-                ...updated[idx],
-                output: ev.output,
-                success: ev.success,
-                done: true,
-              };
-            }
-            return updated;
-          });
+          setToolCalls((prev) => matchToolResult(prev, ev));
           break;
         case "done": {
           const raw = ev.content ?? "";
@@ -469,6 +399,38 @@ export function ChatPanel({
           setStreamingContent("");
           setToolCalls([]);
           setSending(false);
+          onDone();
+          break;
+        }
+        case "error":
+          setChatError(ev.error ?? "Unknown error");
+          setStreamingContent("");
+          setToolCalls([]);
+          setSending(false);
+          break;
+      }
+    },
+    [],
+  );
+
+  // ── Commander briefing ──────────────────────────────────────────────
+
+  useEffect(() => {
+    if (briefMode !== "commander" || briefTriggered.current || !alive) return;
+    briefTriggered.current = true;
+    (window as any)[briefKey] = true;
+    setSearchParams({}, { replace: true });
+
+    let mounted = true;
+    setSending(true);
+    setStreamingContent("");
+    setToolCalls([]);
+
+    const { controller } = streamCommanderBriefing((ev) => {
+      if (!mounted) return;
+      const evType = ev.type as string;
+      if (evType === "session") {
+        const switchToBriefing = () => {
           fetchSessions(agentName)
             .then((resp) => {
               if (!mounted) return;
@@ -478,18 +440,53 @@ export function ChatPanel({
               const match = gs.find(
                 (g) => g.name === "eyrie-commander-briefing",
               );
-              if (match) setActiveGroupName(match.name);
+              if (match) {
+                setActiveGroupName(match.name);
+              } else {
+                setTimeout(() => {
+                  fetchSessions(agentName)
+                    .then((resp2) => {
+                      if (!mounted) return;
+                      const all2 = resp2.sessions ?? [];
+                      setSessions(all2);
+                      setActiveGroupName("eyrie-commander-briefing");
+                    })
+                    .catch(() => {});
+                }, 1000);
+              }
             })
             .catch(() => {});
-          break;
-        }
-        case "error":
-          setChatError(ev.error || "Briefing failed");
-          setSending(false);
-          briefTriggered.current = false;
-          delete (window as any)[briefKey];
-          break;
+        };
+        switchToBriefing();
+        return;
       }
+
+      // For "error" in briefing mode, also reset the briefing trigger
+      if (evType === "error") {
+        setChatError(ev.error || "Briefing failed");
+        setStreamingContent("");
+        setToolCalls([]);
+        setSending(false);
+        briefTriggered.current = false;
+        delete (window as any)[briefKey];
+        return;
+      }
+
+      handleChatEvent(ev as ChatEvent, () => {
+        // On done: refresh sessions to find the briefing session
+        fetchSessions(agentName)
+          .then((resp) => {
+            if (!mounted) return;
+            const all = resp.sessions ?? [];
+            setSessions(all);
+            const gs = groupSessions(all);
+            const match = gs.find(
+              (g) => g.name === "eyrie-commander-briefing",
+            );
+            if (match) setActiveGroupName(match.name);
+          })
+          .catch(() => {});
+      });
     });
 
     return () => {
@@ -497,7 +494,7 @@ export function ChatPanel({
       controller.abort();
       delete (window as any)[briefKey];
     };
-  }, [briefMode, alive, agentName, briefKey, setSearchParams]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [briefMode, alive, agentName, briefKey, setSearchParams, handleChatEvent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Send message ────────────────────────────────────────────────────
 
@@ -523,76 +520,15 @@ export function ChatPanel({
       text,
       currentSessionKey,
       (ev: ChatEvent) => {
-        switch (ev.type) {
-          case "delta":
-            setStreamingContent((prev) => prev + (ev.content ?? ""));
-            break;
-          case "tool_start":
-            setToolCalls((prev) => [
-              ...prev,
-              {
-                tool: ev.tool ?? "unknown",
-                toolId: ev.tool_id,
-                args: ev.args,
-                done: false,
-              },
-            ]);
-            break;
-          case "tool_result":
-            setToolCalls((prev) => {
-              const updated = [...prev];
-              let idx = -1;
-              for (let i = updated.length - 1; i >= 0; i--) {
-                if (
-                  ((ev.tool_id && updated[i].toolId === ev.tool_id) ||
-                    (!ev.tool_id && updated[i].tool === ev.tool)) &&
-                  !updated[i].done
-                ) {
-                  idx = i;
-                  break;
-                }
-              }
-              if (idx >= 0) {
-                updated[idx] = {
-                  ...updated[idx],
-                  output: ev.output,
-                  success: ev.success,
-                  done: true,
-                };
-              }
-              return updated;
-            });
-            break;
-          case "done": {
-            const raw = ev.content ?? "";
-            const skip = /^(\[\[no_reply\]\]|NO_REPLY)$/i.test(raw.trim());
-            if (!skip) {
-              const reply: ChatMessage = {
-                role: "assistant",
-                content: raw,
-                timestamp: new Date().toISOString(),
-              };
-              setPendingMsgs((prev) => [...prev, reply]);
-            }
-            setStreamingContent("");
-            setToolCalls([]);
-            setSending(false);
-            inputRef.current?.focus();
-            setTimeout(() => refreshCurrentSession(currentSessionKey), 500);
-            break;
-          }
-          case "error":
-            setChatError(ev.error ?? "Unknown error");
-            setStreamingContent("");
-            setToolCalls([]);
-            setSending(false);
-            inputRef.current?.focus();
-            break;
-        }
+        handleChatEvent(ev, () => {
+          // On done: refresh current session and focus input
+          inputRef.current?.focus();
+          setTimeout(() => refreshCurrentSession(currentSessionKey), 500);
+        });
       },
     );
     abortRef.current = controller;
-  }, [input, sending, agentName, currentSessionKey, refreshCurrentSession]);
+  }, [input, sending, agentName, currentSessionKey, refreshCurrentSession, handleChatEvent]);
 
   useEffect(() => {
     return () => {
@@ -705,21 +641,20 @@ export function ChatPanel({
     [agentName, refreshSessions, safeDestroySession],
   );
 
-  const handleCreateSession = async () => {
-    const name = newSessionName
+  const handleCreateSession = async (name: string) => {
+    const cleanName = name
       .trim()
       .toLowerCase()
       .replace(/\s+/g, "-");
-    if (!name) return;
+    if (!cleanName) return;
     setCreatingSession(false);
     setNewSessionName("");
     try {
-      const sess = await createSession(agentName, name);
+      const sess = await createSession(agentName, cleanName);
       setSessions((prev) => [...prev, { key: sess.key, title: sess.title }]);
-      setActiveGroupName(name);
+      setActiveGroupName(cleanName);
     } catch (err) {
       console.error("Failed to create session:", err);
-      // Don't add a local session or activate it — the creation failed
     }
   };
 
@@ -742,74 +677,17 @@ export function ChatPanel({
       }}
     >
       {/* Session group bar */}
-      {groups.length > 0 && (
-        <div className="flex items-center gap-1 overflow-x-auto scrollbar-hide rounded-t border border-b-0 border-border bg-bg-sidebar px-3 py-2">
-          {groups.map((g) => (
-            <div key={g.name} className="group/tab relative shrink-0">
-              <button
-                onClick={() => setActiveGroupName(g.name)}
-                className={`shrink-0 rounded px-3 py-1 text-[11px] font-medium transition-colors ${
-                  activeGroupName === g.name
-                    ? "bg-surface-hover text-accent"
-                    : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-                }`}
-              >
-                {g.name}
-                {g.archived.length > 0 && (
-                  <span className="ml-1 text-[9px] text-text-muted">
-                    +{g.archived.length}
-                  </span>
-                )}
-              </button>
-              <button
-                onClick={(e) => {
-                  e.stopPropagation();
-                  handleDestroySession(g);
-                }}
-                className="absolute -top-1.5 -right-1.5 hidden group-hover/tab:flex group-focus-within/tab:flex h-4 w-4 items-center justify-center rounded-full bg-surface border border-border text-text-muted transition-colors hover:text-red hover:border-red/50"
-                title={`Delete session "${g.name}"`}
-              >
-                <X className="h-2 w-2" />
-              </button>
-            </div>
-          ))}
-
-          {creatingSession ? (
-            <div className="flex items-center gap-1 ml-1">
-              <input
-                type="text"
-                value={newSessionName}
-                onChange={(e) => setNewSessionName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") handleCreateSession();
-                  if (e.key === "Escape") {
-                    setCreatingSession(false);
-                    setNewSessionName("");
-                  }
-                }}
-                placeholder="session name"
-                className="w-24 rounded border border-border bg-surface px-2 py-0.5 text-[11px] text-text placeholder:text-text-muted focus:outline-none focus:border-accent"
-                autoFocus
-              />
-              <button
-                onClick={handleCreateSession}
-                disabled={!newSessionName.trim()}
-                className="rounded px-1.5 py-0.5 text-[11px] text-accent hover:bg-surface-hover disabled:opacity-30"
-              >
-                ok
-              </button>
-            </div>
-          ) : (
-            <button
-              onClick={() => setCreatingSession(true)}
-              className="shrink-0 rounded p-1 text-text-muted transition-colors hover:text-accent hover:bg-surface-hover/50"
-              title="New session"
-            >
-              <Plus className="h-3.5 w-3.5" />
-            </button>
-          )}
-        </div>
-      )}
+      <SessionBar
+        groups={groups}
+        activeGroupName={activeGroupName}
+        onSelectGroup={setActiveGroupName}
+        onCreateSession={handleCreateSession}
+        onDestroySession={handleDestroySession}
+        creatingSession={creatingSession}
+        onSetCreating={setCreatingSession}
+        newSessionName={newSessionName}
+        onNewSessionNameChange={setNewSessionName}
+      />
 
       {/* Messages */}
       <div
@@ -846,7 +724,7 @@ export function ChatPanel({
               className="text-purple font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
               title="Compact all"
             >
-              −
+              {"\u2212"}
             </button>
           </div>
         )}
@@ -1001,319 +879,5 @@ export function ChatPanel({
   );
 }
 
-// ── Streaming cursor ────────────────────────────────────────────────────
-
-export function StreamingCursor() {
-  return (
-    <span className="inline-block w-1.5 h-3 bg-accent/60 animate-pulse ml-0.5 align-text-bottom" />
-  );
-}
-
-// ── Tool call components ────────────────────────────────────────────────
-
-function toolCallSummary(
-  _tool: string,
-  args: Record<string, any>,
-): string {
-  const cmd =
-    args.command ||
-    args.cmd ||
-    args.query ||
-    args.path ||
-    args.url ||
-    args.description;
-  if (typeof cmd === "string") {
-    return cmd.length > 60 ? cmd.slice(0, 57) + "..." : cmd;
-  }
-  return "";
-}
-
-type PartRun =
-  | { type: "text"; text: string }
-  | { type: "tools"; tools: ChatPart[] };
-
-export function groupPartsIntoRuns(parts: ChatPart[]): PartRun[] {
-  const runs: PartRun[] = [];
-  for (const p of parts) {
-    if (p.type === "text") {
-      runs.push({ type: "text", text: p.text ?? "" });
-    } else {
-      const last = runs[runs.length - 1];
-      if (last && last.type === "tools") {
-        last.tools.push(p);
-      } else {
-        runs.push({ type: "tools", tools: [p] });
-      }
-    }
-  }
-  return runs;
-}
-
-export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
-  const [expanded, setExpanded] = useState(true);
-  const failCount = tools.filter((t) => t.error).length;
-
-  // Single tool: render one PartToolCallCard directly (no outer header)
-  // to avoid showing the tool name twice.
-  if (tools.length === 1) {
-    return (
-      <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
-        <PartToolCallCard
-          part={tools[0]}
-          defaultExpanded
-          headerStyle="outer"
-        />
-      </div>
-    );
-  }
-
-  const names = tools.map((t) => t.name).filter(Boolean);
-  const uniqueNames = [...new Set(names)];
-  const summary =
-    `${tools.length} tools` +
-    (uniqueNames.length <= 3
-      ? `: ${uniqueNames.join(", ")}`
-      : "");
-
-  return (
-    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setExpanded(!expanded);
-        }}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
-      >
-        <span className="font-mono text-text">{summary}</span>
-        <span className="ml-auto flex items-center gap-1.5">
-          {failCount > 0 ? (
-            <span className="text-red text-[10px]">{failCount} FAIL</span>
-          ) : (
-            <span className="text-green text-[10px]">OK</span>
-          )}
-          <span className="text-text-muted text-[10px]">
-            {expanded ? "▾" : "▸"}
-          </span>
-        </span>
-      </button>
-      {expanded && (
-        <div className="border-t border-border">
-          {tools.map((part, i) => (
-            <PartToolCallCard
-              key={part.id || `tc-${i}`}
-              part={part}
-              defaultExpanded
-            />
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function PartToolCallCard({
-  part,
-  defaultExpanded = false,
-  headerStyle = "inner",
-}: {
-  part: ChatPart;
-  defaultExpanded?: boolean;
-  /** "outer" uses the bolder top-level card styling (for single-tool runs) */
-  headerStyle?: "inner" | "outer";
-}) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
-  const isOuter = headerStyle === "outer";
-
-  return (
-    <div className={isOuter ? "text-[11px]" : "border-b border-border/30 last:border-b-0 text-[11px]"}>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          setExpanded(!expanded);
-        }}
-        className={isOuter
-          ? "flex w-full items-center gap-2 px-3 py-1.5 text-left"
-          : "flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-surface-hover/30"
-        }
-      >
-        <span className={isOuter ? "font-mono text-text" : "font-mono text-text-secondary"}>{part.name}</span>
-        {part.args && (
-          <span className="font-mono text-text-muted truncate max-w-[300px]">
-            {toolCallSummary(part.name || "", part.args)}
-          </span>
-        )}
-        <span className="ml-auto flex items-center gap-1.5">
-          {part.error ? (
-            <span className="text-red text-[10px]">FAIL</span>
-          ) : part.output != null ? (
-            <span className="text-green text-[10px]">OK</span>
-          ) : null}
-          <span className="text-text-muted text-[10px]">
-            {expanded ? "▾" : "▸"}
-          </span>
-        </span>
-      </button>
-      {expanded && (
-        <div className={`${isOuter ? "border-t border-border/50" : "border-t border-border/30"} px-3 py-2 space-y-1.5 bg-surface/50`}>
-          {part.args && Object.keys(part.args).length > 0 && (
-            <div>
-              <span className="text-text-muted">args: </span>
-              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {JSON.stringify(part.args, null, 2)}
-              </pre>
-            </div>
-          )}
-          {part.output != null && (
-            <div>
-              <span className="text-text-muted">output: </span>
-              <pre className="mt-0.5 max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {part.output}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-export function ToolCallCard({ tc }: { tc: ToolCall }) {
-  const [expanded, setExpanded] = useState(false);
-
-  return (
-    <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
-      >
-        <span className="font-mono text-text">{tc.tool}</span>
-        {tc.args && (
-          <span className="font-mono text-text-muted truncate max-w-[300px]">
-            {toolCallSummary(tc.tool, tc.args)}
-          </span>
-        )}
-        <span className="ml-auto flex items-center gap-1.5">
-          {!tc.done && (
-            <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse" />
-          )}
-          {tc.done && tc.success !== false && (
-            <span className="text-green text-[10px]">OK</span>
-          )}
-          {tc.done && tc.success === false && (
-            <span className="text-red text-[10px]">FAIL</span>
-          )}
-          <span className="text-text-muted text-[10px]">
-            {expanded ? "▾" : "▸"}
-          </span>
-        </span>
-      </button>
-      {expanded && (
-        <div className="border-t border-border/50 px-3 py-2 space-y-1.5">
-          {tc.args && Object.keys(tc.args).length > 0 && (
-            <div>
-              <span className="text-text-muted">args: </span>
-              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {JSON.stringify(tc.args, null, 2)}
-              </pre>
-            </div>
-          )}
-          {tc.output != null && (
-            <div>
-              <span className="text-text-muted">output: </span>
-              <pre className="mt-0.5 max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {tc.output}
-              </pre>
-            </div>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── MessageRow ───────────────────────────────────────────────────────────
-
-export function MessageRow({
-  msg,
-  expanded,
-  onToggle,
-}: {
-  msg: {
-    timestamp: string;
-    role: string;
-    content: string;
-    parts?: ChatPart[];
-  };
-  expanded: boolean;
-  onToggle?: () => void;
-}) {
-  const parts = msg.parts ?? [];
-  const toolCount = parts.filter((p) => p.type === "tool_call").length;
-  const hasParts = parts.length > 0;
-  const isLong = msg.content.length > 200 || toolCount > 0;
-  const canToggle = isLong && onToggle;
-  const displayText =
-    isLong && !expanded
-      ? msg.content.length > 200
-        ? msg.content.slice(0, 200) + "..."
-        : msg.content
-      : msg.content;
-  const toolSummary =
-    !expanded && toolCount > 0
-      ? ` [${toolCount} tool${toolCount > 1 ? "s" : ""}]`
-      : "";
-
-  return (
-    <div
-      className={`py-1 ${canToggle ? "cursor-pointer hover:bg-surface-hover/50 rounded px-1 -mx-1" : ""}`}
-      onClick={
-        canToggle
-          ? () => {
-              if (!window.getSelection()?.toString()) onToggle!();
-            }
-          : undefined
-      }
-    >
-      <span className="text-text-muted">
-        {(() => { const d = new Date(msg.timestamp); return isNaN(d.getTime()) ? "-" : d.toLocaleTimeString(); })()}
-      </span>{" "}
-      <span
-        className={`font-medium ${msg.role === "user" ? "text-green" : "text-purple"}`}
-      >
-        {msg.role}:
-      </span>{" "}
-      {!expanded && (
-        <>
-          <span className="text-text">{displayText}</span>
-          {toolSummary && (
-            <span className="ml-1 text-accent/60 text-[10px]">
-              {toolSummary}
-            </span>
-          )}
-        </>
-      )}
-      {canToggle && !expanded && <span className="ml-1 text-green">▸</span>}
-      {canToggle && expanded && <span className="ml-1 text-green">▾</span>}
-      {expanded && hasParts && (
-        <div className="mt-0.5" onClick={(e) => e.stopPropagation()}>
-          {groupPartsIntoRuns(parts).map((run, ri) =>
-            run.type === "text" ? (
-              <div
-                key={`text-${ri}`}
-                className="text-text whitespace-pre-wrap py-0.5"
-              >
-                {run.text}
-              </div>
-            ) : (
-              <ToolRunCard key={`run-${ri}`} tools={run.tools} />
-            ),
-          )}
-        </div>
-      )}
-      {expanded && !hasParts && msg.content && (
-        <span className="text-text whitespace-pre-wrap">{msg.content}</span>
-      )}
-    </div>
-  );
-}
+// Re-exports for backward compatibility
+export { PartToolCallCard, StreamingCursor, ToolCallCard, ToolRunCard, MessageRow, groupPartsIntoRuns } from './chat';

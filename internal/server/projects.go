@@ -1,16 +1,13 @@
 package server
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
-	"time"
 
-	"github.com/google/uuid"
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
@@ -119,7 +116,16 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		p.Goal = *update.Goal
 	}
 	if update.Status != nil {
-		p.Status = *update.Status
+		newStatus := project.ProjectStatus(*update.Status)
+		if !newStatus.Valid() {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid status: " + *update.Status})
+			return
+		}
+		if !project.CanTransition(p.Status, newStatus) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("cannot transition from %q to %q", p.Status, newStatus)})
+			return
+		}
+		p.Status = newStatus
 	}
 	if update.OrchestratorID != nil {
 		p.OrchestratorID = *update.OrchestratorID
@@ -238,7 +244,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Load project to get participants
+	// Load project
 	pStore, err := project.NewStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open project store"})
@@ -255,254 +261,28 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Pre-flight: ensure at least the commander is running before starting the chat.
-	// On the first message the commander is required; on subsequent messages we need
-	// at least one participant (commander or captain).
-	disc := s.runDiscovery(r.Context())
-	participants := resolveProjectParticipants(proj, disc)
-	if len(participants) == 0 {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
-			"error": "no agents available — make sure the commander is running",
-		})
-		return
-	}
-
-	// Store the user message
 	cs, err := project.NewChatStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
 		return
 	}
 
-	existing, err := cs.Messages(projectID, 1)
+	sse, err := NewSSEWriter(w)
 	if err != nil {
-		slog.Warn("failed to check existing messages", "project", projectID, "error", err)
-	}
-	firstMessage := err == nil && len(existing) == 0
-
-	// Parse @mentions
-	mention := parseMention(body.Message)
-
-	userMsg := project.ChatMessage{
-		ID:        uuid.New().String(),
-		Sender:    "user",
-		Role:      "user",
-		Content:   body.Message,
-		Timestamp: time.Now(),
-		Mention:   mention,
-	}
-	if err := cs.Append(projectID, userMsg); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save message"})
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	// On first message, add a system message with project context after the user's message
-	var initContent string
-	var initMsg *project.ChatMessage
-	if firstMessage {
-		initContent = fmt.Sprintf("project \"%s\" chat started. (project_id: %s)", proj.Name, proj.ID)
-		if proj.Goal != "" {
-			initContent += fmt.Sprintf("\ngoal: %s", proj.Goal)
-		}
-		if proj.Description != "" {
-			initContent += fmt.Sprintf("\n%s", proj.Description)
-		}
-		// No instruction text — the commander already knows its job from its briefing.
-		// The project info above is enough context.
-		initMsg = &project.ChatMessage{
-			ID:        uuid.New().String(),
-			Sender:    "eyrie",
-			Role:      "system",
-			Content:   initContent,
-			Timestamp: time.Now(),
-			Mention:   "commander",
-		}
-		if err := cs.Append(projectID, *initMsg); err != nil {
-			slog.Warn("failed to save init message", "project", projectID, "error", err)
-		}
+	orch := &ChatOrchestrator{
+		cfg:       s.runDiscovery,
+		chatStore: cs,
 	}
-
-	// On the first message, reorder so commander goes first — the commander
-	// introduces the project, then the captain takes over.
-	if firstMessage {
-		reorderCommanderFirst(participants)
+	if err := orch.RunProjectChat(r.Context(), proj, body.Message, sse); err != nil {
+		// If SSE headers haven't been sent yet the error is returned before
+		// any events; otherwise it's too late to change HTTP status so we
+		// emit it as an SSE error event.
+		sse.WriteError(err.Error())
 	}
-
-	// Set up SSE streaming
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
-		return
-	}
-
-	// Send the stored user message back as first event
-	umData, _ := json.Marshal(map[string]any{"type": "message", "message": userMsg})
-	fmt.Fprintf(w, "data: %s\n\n", umData)
-	flusher.Flush()
-
-	if initMsg != nil {
-		imData, _ := json.Marshal(map[string]any{"type": "message", "message": initMsg})
-		fmt.Fprintf(w, "data: %s\n\n", imData)
-		flusher.Flush()
-	}
-
-	// Each agent has its own session for this project (e.g., "project-chess-coach").
-	// The agent's framework handles conversation history natively via session
-	// persistence — no need to paste the full conversation into the prompt.
-	//
-	// We format the user message with sender attribution so agents can tell
-	// who said what in the group conversation.
-	sessionKey := "project-" + projectID
-
-	// Track prior responses in this turn so later agents see what earlier
-	// agents said (e.g., captain sees commander's introduction).
-	var turnHistory []string
-
-	// Broadcast to agents sequentially: on first message commander goes first,
-	// otherwise captain first, then commander, then talons.
-	for _, p := range participants {
-		// On the first message, only the commander responds — the captain
-		// waits for the commander to establish context and hand off.
-		if firstMessage && p.role != "commander" {
-			continue
-		}
-
-		// If there's a mention and it's not for this agent, skip
-		if mention != "" && !strings.EqualFold(mention, p.name) && !strings.EqualFold(mention, p.role) {
-			continue
-		}
-
-		agent := discovery.NewAgent(p.agent)
-
-		// Build the message for this agent:
-		// - On first message, commander gets the system init context
-		// - Agents later in the sequence see earlier agents' responses
-		var labeledMsg string
-		if firstMessage && p.role == "commander" {
-			labeledMsg = fmt.Sprintf("[system]: %s\n\n[user]: %s", initContent, body.Message)
-		} else {
-			labeledMsg = fmt.Sprintf("[user]: %s", body.Message)
-		}
-
-		// Prepend earlier agents' responses from this turn so the agent
-		// has full context (avoids race with fire-and-forget sync).
-		if len(turnHistory) > 0 {
-			labeledMsg = strings.Join(turnHistory, "\n\n") + "\n\n" + labeledMsg
-		}
-
-		ch, err := agent.StreamMessage(r.Context(), labeledMsg, sessionKey)
-		if err != nil {
-			slog.Warn("failed to send to participant", "agent", p.name, "error", err)
-			errData, _ := json.Marshal(map[string]any{
-				"type":   "agent_event",
-				"sender": p.name,
-				"role":   p.role,
-				"event":  map[string]string{"type": "error", "content": err.Error()},
-			})
-			fmt.Fprintf(w, "data: %s\n\n", errData)
-			flusher.Flush()
-			continue
-		}
-
-		// Collect the response and tool calls, streaming intermediate events to the client
-		var responseContent string
-		var toolCalls []project.ChatPart
-		for ev := range ch {
-			switch ev.Type {
-			case "done":
-				responseContent = ev.Content
-			case "tool_start":
-				toolCalls = append(toolCalls, project.ChatPart{
-					Type: "tool_call",
-					ID:   ev.ToolID,
-					Name: ev.Tool,
-					Args: ev.Args,
-				})
-			case "tool_result":
-				// Match by tool ID or last unfinished tool call
-				for i := len(toolCalls) - 1; i >= 0; i-- {
-					if (ev.ToolID != "" && toolCalls[i].ID == ev.ToolID) ||
-						(ev.ToolID == "" && toolCalls[i].Name == ev.Tool && toolCalls[i].Output == "") {
-						toolCalls[i].Output = ev.Output
-						if ev.Success != nil && !*ev.Success {
-							toolCalls[i].Error = true
-						}
-						break
-					}
-				}
-			}
-			// Stream intermediate events (tool calls, chunks) with sender label
-			evData, _ := json.Marshal(map[string]any{
-				"type":   "agent_event",
-				"sender": p.name,
-				"role":   p.role,
-				"event":  ev,
-			})
-			fmt.Fprintf(w, "data: %s\n\n", evData)
-			flusher.Flush()
-		}
-
-		// Skip [PASS] responses — agents self-regulate whether to respond
-		trimmed := strings.TrimSpace(responseContent)
-		if trimmed == "[PASS]" || trimmed == "" {
-			continue
-		}
-
-		// Track this response so later agents in the sequence see it
-		turnHistory = append(turnHistory, fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent))
-
-		// Build parts from tool calls + final text
-		var parts []project.ChatPart
-		if len(toolCalls) > 0 {
-			parts = append(parts, toolCalls...)
-			if responseContent != "" {
-				parts = append(parts, project.ChatPart{Type: "text", Text: responseContent})
-			}
-		}
-
-		// Store the agent's response in Eyrie's project log
-		agentMsg := project.ChatMessage{
-			ID:        uuid.New().String(),
-			Sender:    p.name,
-			Role:      p.role,
-			Content:   responseContent,
-			Timestamp: time.Now(),
-			Parts:     parts,
-		}
-		if err := cs.Append(projectID, agentMsg); err != nil {
-			slog.Warn("failed to save agent response", "agent", p.name, "error", err)
-		}
-
-		// Also send the response to all OTHER agents' project sessions
-		// so they see it in their history on the next turn
-		for _, other := range participants {
-			if other.name == p.name {
-				continue
-			}
-			otherAgent := discovery.NewAgent(other.agent)
-			labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent)
-			// Fire-and-forget: send as a "user" message to their session
-			// so it appears in their conversation history
-			go func(a adapter.Agent, msg, sk, agentName string) {
-				// Use a detached context — r.Context() is cancelled when the handler returns
-				bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if _, err := a.SendMessage(bgCtx, msg, sk); err != nil {
-					slog.Debug("failed to sync message to agent", "agent", agentName, "session", sk, "error", err)
-				}
-			}(otherAgent, labeled, sessionKey, other.name)
-		}
-
-		// Send the stored message as SSE event
-		msgData, _ := json.Marshal(map[string]any{"type": "message", "message": agentMsg})
-		fmt.Fprintf(w, "data: %s\n\n", msgData)
-		flusher.Flush()
-	}
-
-	// Signal completion
-	doneData, _ := json.Marshal(map[string]string{"type": "done"})
-	fmt.Fprintf(w, "data: %s\n\n", doneData)
-	flusher.Flush()
 }
 
 type projectParticipant struct {
@@ -635,133 +415,25 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	disc := s.runDiscovery(r.Context())
-	var commanderAgent adapter.DiscoveredAgent
-	found := false
-	for _, ar := range disc.Agents {
-		if ar.Agent.Name == commanderName && ar.Alive {
-			commanderAgent = ar.Agent
-			found = true
-			break
-		}
-	}
-	if !found {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "commander not running"})
-		return
-	}
-
-	agent := discovery.NewAgent(commanderAgent)
-
-	// Chat store for intake messages
 	cs, err := project.NewChatStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
 		return
 	}
 
-	// Check if this is the first intake message
-	intakeMessages, intakeErr := cs.IntakeMessages(projectID, 1)
-	firstIntake := intakeErr == nil && len(intakeMessages) == 0
-	if intakeErr != nil {
-		slog.Warn("failed to check intake messages", "project", projectID, "error", intakeErr)
-	}
-
-	// Save user message
-	userMsg := project.ChatMessage{
-		ID:        uuid.New().String(),
-		Sender:    "user",
-		Role:      "user",
-		Content:   body.Message,
-		Timestamp: time.Now(),
-	}
-	if err := cs.AppendIntake(projectID, userMsg); err != nil {
-		slog.Error("failed to save intake message", "project", projectID, "error", err)
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save message"})
-		return
-	}
-
-	// Build the message to send to the commander
-	sessionKey := "project-" + projectID + "-intake"
-	var labeledMsg string
-	if firstIntake {
-		// First message: include intake prompt
-		intakePrompt := fmt.Sprintf(`Your user is setting up a new project called "%s".`, proj.Name)
-		if proj.Goal != "" {
-			intakePrompt += fmt.Sprintf("\nThey've noted the goal: %s", proj.Goal)
-		}
-		if proj.Description != "" {
-			intakePrompt += fmt.Sprintf("\nDescription: %s", proj.Description)
-		}
-		intakePrompt += `
-
-Have a brief conversation with them to understand what they want to accomplish. Ask about:
-- What they want to build or achieve
-- Their motivation and why this matters to them
-- Any constraints, preferences, or context that would help the project team
-
-Keep it conversational — 2-3 focused questions. Don't plan the project or propose a team yet. You're just gathering context so you can introduce the user and their goals to the project captain later.`
-		labeledMsg = fmt.Sprintf("[system]: %s\n\n[user]: %s", intakePrompt, body.Message)
-	} else {
-		labeledMsg = fmt.Sprintf("[user]: %s", body.Message)
-	}
-
-	// Set up SSE streaming
-	flusher, ok := startSSE(w)
-	if !ok {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "streaming not supported"})
-		return
-	}
-
-	// Send user message event
-	umData, _ := json.Marshal(map[string]any{"type": "message", "message": userMsg})
-	fmt.Fprintf(w, "data: %s\n\n", umData)
-	flusher.Flush()
-
-	// Stream commander response
-	ch, err := agent.StreamMessage(r.Context(), labeledMsg, sessionKey)
+	sse, err := NewSSEWriter(w)
 	if err != nil {
-		errData, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
-		fmt.Fprintf(w, "data: %s\n\n", errData)
-		flusher.Flush()
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
 
-	var responseContent string
-	for ev := range ch {
-		if ev.Type == "done" {
-			responseContent = ev.Content
-		}
-		evData, _ := json.Marshal(map[string]any{
-			"type":   "agent_event",
-			"sender": commanderName,
-			"role":   "commander",
-			"event":  ev,
-		})
-		fmt.Fprintf(w, "data: %s\n\n", evData)
-		flusher.Flush()
+	orch := &ChatOrchestrator{
+		cfg:       s.runDiscovery,
+		chatStore: cs,
 	}
-
-	// Save commander response
-	if responseContent != "" {
-		cmdMsg := project.ChatMessage{
-			ID:        uuid.New().String(),
-			Sender:    commanderName,
-			Role:      "commander",
-			Content:   responseContent,
-			Timestamp: time.Now(),
-		}
-		if err := cs.AppendIntake(projectID, cmdMsg); err != nil {
-			slog.Warn("failed to save intake response", "project", projectID, "error", err)
-		}
-
-		msgData, _ := json.Marshal(map[string]any{"type": "message", "message": cmdMsg})
-		fmt.Fprintf(w, "data: %s\n\n", msgData)
-		flusher.Flush()
+	if err := orch.RunIntakeChat(r.Context(), proj, body.Message, commanderName, sse); err != nil {
+		sse.WriteError(err.Error())
 	}
-
-	doneData, _ := json.Marshal(map[string]string{"type": "done"})
-	fmt.Fprintf(w, "data: %s\n\n", doneData)
-	flusher.Flush()
 }
 
 // handleProjectIntakeMessages returns the intake conversation for a project.

@@ -1,8 +1,9 @@
 import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Crown, Briefcase, User, ChevronRight } from "lucide-react";
-import type { HierarchyTree, AgentInstance, CommanderInfo, ProjectTree, Persona, AgentInfo } from "../lib/types";
-import { fetchHierarchy, fetchPersonas, fetchFrameworks, fetchAgents, createInstance, setCommander } from "../lib/api";
+import type { HierarchyTree, AgentInstance, CommanderInfo, ProjectTree, Persona } from "../lib/types";
+import { fetchHierarchy, fetchPersonas, fetchFrameworks, createInstance, setCommander } from "../lib/api";
+import { useData } from "../lib/DataContext";
 import type { Framework } from "../lib/types";
 
 function StatusDot({ status }: { status: string }) {
@@ -123,15 +124,15 @@ function ProjectSection({ tree, onInstanceClick, onProjectClick }: { tree: Proje
 
 function CommanderSetup({ onCreated }: { onCreated: () => void }) {
   const navigate = useNavigate();
+  const { agents, loading: ctxLoading } = useData();
   const [mode, setMode] = useState<"choose" | "existing" | "new">("choose");
-  const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [saving, setSaving] = useState(false);
   const [savingStatus, setSavingStatus] = useState("");
   const [error, setError] = useState("");
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [loadingAgents, setLoadingAgents] = useState(true);
+  const loadingAgents = ctxLoading;
 
   // "new" form state
   const [name, setName] = useState("atlas");
@@ -140,21 +141,15 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
 
   const loadData = useCallback(async () => {
     setLoadError(null);
-    const [agentsResult, frameworksResult, personasResult] = await Promise.allSettled([
-      fetchAgents(),
+    const [frameworksResult, personasResult] = await Promise.allSettled([
       fetchFrameworks(),
       fetchPersonas(),
     ]);
 
-    if (agentsResult.status === "fulfilled") setAgents(agentsResult.value);
     if (frameworksResult.status === "fulfilled") setFrameworks(frameworksResult.value);
     if (personasResult.status === "fulfilled") setPersonas(personasResult.value);
 
     const errors: string[] = [];
-    if (agentsResult.status === "rejected") {
-      console.error("Failed to discover agents:", agentsResult.reason);
-      errors.push(agentsResult.reason instanceof Error ? agentsResult.reason.message : "Failed to discover agents");
-    }
     if (frameworksResult.status === "rejected") {
       console.error("Failed to fetch frameworks:", frameworksResult.reason);
       errors.push(frameworksResult.reason instanceof Error ? frameworksResult.reason.message : "Failed to fetch frameworks");
@@ -165,7 +160,6 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
     }
 
     setLoadError(errors.length > 0 ? errors.join("; ") : null);
-    setLoadingAgents(false);
   }, []);
 
   useEffect(() => {

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/fileutil"
 	"github.com/google/uuid"
 )
 
@@ -30,19 +31,56 @@ func validateProjectID(id string) error {
 // ErrNotFound is returned when a project does not exist.
 var ErrNotFound = errors.New("project not found")
 
+// ProjectStatus represents the lifecycle state of a project.
+type ProjectStatus string
+
+const (
+	PStatusActive    ProjectStatus = "active"
+	PStatusPaused    ProjectStatus = "paused"
+	PStatusCompleted ProjectStatus = "completed"
+	PStatusArchived  ProjectStatus = "archived"
+)
+
+// Valid returns true if s is a recognised project status.
+func (s ProjectStatus) Valid() bool {
+	switch s {
+	case PStatusActive, PStatusPaused, PStatusCompleted, PStatusArchived:
+		return true
+	}
+	return false
+}
+
+// CanTransition returns true if transitioning from → to is allowed.
+// Allowed: active→paused, paused→active, active→completed, paused→completed, completed→archived.
+func CanTransition(from, to ProjectStatus) bool {
+	switch {
+	case from == PStatusActive && to == PStatusPaused:
+		return true
+	case from == PStatusPaused && to == PStatusActive:
+		return true
+	case from == PStatusActive && to == PStatusCompleted:
+		return true
+	case from == PStatusPaused && to == PStatusCompleted:
+		return true
+	case from == PStatusCompleted && to == PStatusArchived:
+		return true
+	}
+	return false
+}
+
 // Project is the top-level organizational entity for a group of agents
 // working toward a shared goal.
 type Project struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	Description    string            `json:"description"`
-	Goal           string            `json:"goal,omitempty"`
-	OrchestratorID string            `json:"orchestrator_id,omitempty"`
-	RoleAgentIDs   []string          `json:"role_agent_ids,omitempty"`
-	Status         string            `json:"status"` // "active", "paused", "completed", "archived"
-	CreatedAt      time.Time         `json:"created_at"`
-	UpdatedAt      time.Time         `json:"updated_at"`
-	CreatedBy      string            `json:"created_by"` // "user" or coordinator instance ID
+	ID             string        `json:"id"`
+	Name           string        `json:"name"`
+	Description    string        `json:"description"`
+	Goal           string        `json:"goal,omitempty"`
+	OrchestratorID string        `json:"orchestrator_id,omitempty"`
+	RoleAgentIDs   []string      `json:"role_agent_ids,omitempty"`
+	Status         ProjectStatus `json:"status"`
+	CreatedAt      time.Time     `json:"created_at"`
+	UpdatedAt      time.Time     `json:"updated_at"`
+	CreatedBy      string        `json:"created_by"` // "user" or coordinator instance ID
 }
 
 // CreateRequest holds parameters for creating a new project.
@@ -137,7 +175,7 @@ func (s *Store) Create(req CreateRequest) (*Project, error) {
 		Name:        req.Name,
 		Description: req.Description,
 		Goal:        req.Goal,
-		Status:      "active",
+		Status:      PStatusActive,
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 		CreatedBy:   req.CreatedBy,
@@ -150,7 +188,7 @@ func (s *Store) Create(req CreateRequest) (*Project, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := os.WriteFile(s.path(p.ID), data, 0o644); err != nil {
+	if err := fileutil.AtomicWrite(s.path(p.ID), data, 0o600); err != nil {
 		return nil, err
 	}
 	return &p, nil
@@ -176,7 +214,7 @@ func (s *Store) Save(p Project) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(p.ID), data, 0o644)
+	return fileutil.AtomicWrite(s.path(p.ID), data, 0o600)
 }
 
 func (s *Store) Delete(id string) error {
@@ -229,7 +267,7 @@ func (s *Store) AddAgent(projectID, instanceID string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(p.ID), out, 0o644)
+	return fileutil.AtomicWrite(s.path(p.ID), out, 0o600)
 }
 
 // RemoveAgent removes a role agent from a project.
@@ -269,7 +307,7 @@ func (s *Store) RemoveAgent(projectID, instanceID string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(p.ID), out, 0o644)
+	return fileutil.AtomicWrite(s.path(p.ID), out, 0o600)
 }
 
 func (s *Store) path(id string) string {
