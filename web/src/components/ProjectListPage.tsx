@@ -26,20 +26,27 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const isMounted = useRef(true);
+
+  useEffect(() => {
+    return () => { isMounted.current = false; };
+  }, []);
 
   // Derived default captain name from project name
   const defaultCaptainName = `captain-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
 
   const [fetchCaptainError, setFetchCaptainError] = useState("");
 
-  // Fetch existing captain instances when entering step 2
+  // Load all captain instances when entering step 2.
+  // Assignment/stopped-state filtering is applied in the UI (disabled prop).
   useEffect(() => {
     if (step === 2) {
       setFetchCaptainError("");
       fetchInstances().then((all) => {
-        // Show captains that are unassigned OR stopped (user might want to restart one)
+        if (!isMounted.current) return;
         setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
       }).catch((err) => {
+        if (!isMounted.current) return;
         console.error("Failed to fetch instances:", err);
         setFetchCaptainError(err instanceof Error ? err.message : "Failed to load captain instances");
         setExistingCaptains([]);
@@ -91,8 +98,11 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
       await instanceAction(id, "start");
       // Poll until instance status updates (max 15s)
       for (let i = 0; i < 15; i++) {
+        if (!isMounted.current) return;
         await new Promise((r) => setTimeout(r, 1000));
+        if (!isMounted.current) return;
         const all = await fetchInstances();
+        if (!isMounted.current) return;
         const target = all.find((inst) => inst.id === id);
         if (target && target.status === "running") {
           setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
@@ -101,11 +111,14 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
         }
       }
       // Timeout — refresh anyway
+      if (!isMounted.current) return;
       setError("Captain may still be starting — check status and retry if needed");
       const all = await fetchInstances();
+      if (!isMounted.current) return;
       setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
       setStartingCaptain("");
     } catch (e) {
+      if (!isMounted.current) return;
       setError(e instanceof Error ? e.message : "Failed to start captain");
       setStartingCaptain("");
     }

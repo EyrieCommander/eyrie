@@ -483,12 +483,14 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 			labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent)
 			// Fire-and-forget: send as a "user" message to their session
 			// so it appears in their conversation history
-			go func(a adapter.Agent, msg, sk string) {
+			go func(a adapter.Agent, msg, sk, agentName string) {
 				// Use a detached context — r.Context() is cancelled when the handler returns
 				bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
-				_, _ = a.SendMessage(bgCtx, msg, sk)
-			}(otherAgent, labeled, sessionKey)
+				if _, err := a.SendMessage(bgCtx, msg, sk); err != nil {
+					slog.Debug("failed to sync message to agent", "agent", agentName, "session", sk, "error", err)
+				}
+			}(otherAgent, labeled, sessionKey, other.name)
 		}
 
 		// Send the stored message as SSE event

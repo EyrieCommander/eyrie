@@ -173,13 +173,18 @@ func (p *Provisioner) renderIdentityFiles(workspaceDir string, role HierarchyRol
 	}
 
 	for filename, tmplStr := range templates {
-		rendered, err := renderTemplate(filename, tmplStr, tc)
-		if err != nil {
-			return fmt.Errorf("rendering %s: %w", filename, err)
+		// Sanitize filename to prevent path traversal from persona templates
+		safe := filepath.Base(filename)
+		if safe == "." || safe == ".." || safe != filename {
+			return fmt.Errorf("invalid identity template filename %q", filename)
 		}
-		path := filepath.Join(workspaceDir, filename)
+		rendered, err := renderTemplate(safe, tmplStr, tc)
+		if err != nil {
+			return fmt.Errorf("rendering %s: %w", safe, err)
+		}
+		path := filepath.Join(workspaceDir, safe)
 		if err := os.WriteFile(path, []byte(rendered), 0o644); err != nil {
-			return fmt.Errorf("writing %s: %w", filename, err)
+			return fmt.Errorf("writing %s: %w", safe, err)
 		}
 	}
 	return nil
@@ -238,10 +243,13 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		// Only set api_key in the config after confirming the secret key was written.
 		srcSecret := filepath.Join(parentConfigDir, ".secret_key")
 		dstSecret := filepath.Join(filepath.Dir(inst.ConfigPath), ".secret_key")
-		if secretData, err := os.ReadFile(srcSecret); err == nil {
-			if err := os.WriteFile(dstSecret, secretData, 0o600); err == nil {
-				cfg["api_key"] = apiKey
-			}
+		secretData, readErr := os.ReadFile(srcSecret)
+		if readErr != nil {
+			fmt.Fprintf(os.Stderr, "eyrie: cannot read parent secret key %s: %v (instance will need manual onboarding)\n", srcSecret, readErr)
+		} else if writeErr := os.WriteFile(dstSecret, secretData, 0o600); writeErr != nil {
+			fmt.Fprintf(os.Stderr, "eyrie: cannot write secret key %s: %v (instance will need manual onboarding)\n", dstSecret, writeErr)
+		} else {
+			cfg["api_key"] = apiKey
 		}
 	}
 

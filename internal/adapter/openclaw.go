@@ -9,6 +9,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1215,19 +1216,8 @@ func (o *OpenClawAdapter) DestroySession(ctx context.Context, sessionKey string)
 			return fmt.Errorf("parsing session metadata for %q: %w", sessionKey, err)
 		}
 
-		// Delete the JSONL transcript file
-		if meta.SessionFile != "" {
-			if err := os.Remove(meta.SessionFile); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("removing transcript %s: %w", meta.SessionFile, err)
-			}
-		} else if meta.SessionID != "" {
-			jsonlPath := filepath.Join(agentsDir, entry.Name(), "sessions", meta.SessionID+".jsonl")
-			if err := os.Remove(jsonlPath); err != nil && !os.IsNotExist(err) {
-				return fmt.Errorf("removing transcript %s: %w", jsonlPath, err)
-			}
-		}
-
-		// Remove from sessions.json (atomic write via temp file + rename)
+		// Remove from sessions.json first (atomic write via temp file + rename)
+		// so the index never points at a missing transcript on partial failure.
 		delete(store, sessionKey)
 		updated, err := json.MarshalIndent(store, "", "  ")
 		if err != nil {
@@ -1240,6 +1230,18 @@ func (o *OpenClawAdapter) DestroySession(ctx context.Context, sessionKey string)
 		if err := os.Rename(tmpPath, sessJSONPath); err != nil {
 			os.Remove(tmpPath)
 			return fmt.Errorf("renaming sessions.json: %w", err)
+		}
+
+		// Delete the JSONL transcript file (non-fatal if already gone)
+		if meta.SessionFile != "" {
+			if err := os.Remove(meta.SessionFile); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to remove transcript file", "path", meta.SessionFile, "error", err)
+			}
+		} else if meta.SessionID != "" {
+			jsonlPath := filepath.Join(agentsDir, entry.Name(), "sessions", meta.SessionID+".jsonl")
+			if err := os.Remove(jsonlPath); err != nil && !os.IsNotExist(err) {
+				slog.Warn("failed to remove transcript file", "path", jsonlPath, "error", err)
+			}
 		}
 		return nil
 	}

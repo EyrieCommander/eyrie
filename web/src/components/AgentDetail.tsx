@@ -815,7 +815,7 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
   const lines = content.split("\n");
 
   // Format the replacement value
-  const formatted = fieldType === "number" ? newValue : `"${newValue.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  const formatted = fieldType === "number" ? newValue : `"${escapeTomlString(newValue)}"`;
 
 
   if (parts.length === 1) {
@@ -874,6 +874,15 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
     lines.splice(insertAt, 0, `${parts[0]} = ${formatted}`);
   }
   return lines.join("\n");
+}
+
+function escapeTomlString(s: string): string {
+  return s
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
 }
 
 function escapeRegex(s: string): string {
