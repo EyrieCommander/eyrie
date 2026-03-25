@@ -87,6 +87,7 @@ func (s *Store) Get(id string) (*Persona, error) {
 	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, err
 	}
+	p.ID = id
 	p.Installed = true
 	return &p, nil
 }

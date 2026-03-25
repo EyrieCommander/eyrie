@@ -1,5 +1,7 @@
 package persona
 
+import "fmt"
+
 // Persona defines a named agent personality with a role, system prompt,
 // preferred model, and optional framework affinity.
 type Persona struct {
@@ -39,6 +41,17 @@ type Persona struct {
 	Installed   bool   `json:"installed,omitempty"`
 	AgentName   string `json:"agent_name,omitempty"`   // Name of the running agent instance
 	AgentAlive  bool   `json:"agent_alive,omitempty"`  // Whether the agent is currently running
+}
+
+// Validate checks that the Persona's numeric fields are within acceptable ranges.
+func (p Persona) Validate() error {
+	if p.Temperature != 0 && (p.Temperature < 0.0 || p.Temperature > 1.0) {
+		return fmt.Errorf("temperature must be between 0.0 and 1.0, got %g", p.Temperature)
+	}
+	if p.MaxTokens < 0 {
+		return fmt.Errorf("max_tokens must be >= 0, got %d", p.MaxTokens)
+	}
+	return nil
 }
 
 // categories holds the immutable category definitions.

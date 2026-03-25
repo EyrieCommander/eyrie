@@ -644,7 +644,7 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !found {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "commander not running"})
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "commander not running"})
 		return
 	}
 
@@ -673,7 +673,9 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 		Timestamp: time.Now(),
 	}
 	if err := cs.AppendIntake(projectID, userMsg); err != nil {
-		slog.Warn("failed to save intake message", "project", projectID, "error", err)
+		slog.Error("failed to save intake message", "project", projectID, "error", err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save message"})
+		return
 	}
 
 	// Build the message to send to the commander

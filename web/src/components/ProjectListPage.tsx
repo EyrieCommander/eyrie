@@ -101,6 +101,7 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
         }
       }
       // Timeout — refresh anyway
+      setError("Captain may still be starting — check status and retry if needed");
       const all = await fetchInstances();
       setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
       setStartingCaptain("");
@@ -244,8 +245,9 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
                           }`}
                         >
                           <button
-                            onClick={() => setSelectedCaptainId(inst.id)}
-                            className="flex flex-1 items-center gap-3 text-left"
+                            onClick={() => !inst.project_id && setSelectedCaptainId(inst.id)}
+                            disabled={!!inst.project_id}
+                            className={`flex flex-1 items-center gap-3 text-left ${inst.project_id ? "opacity-50 cursor-not-allowed" : ""}`}
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${isStopped ? "bg-text-muted" : "bg-green"}`} />
                             <span className="font-medium text-text">{inst.display_name}</span>

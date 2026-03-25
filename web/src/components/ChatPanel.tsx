@@ -1276,7 +1276,7 @@ export function MessageRow({
       }
     >
       <span className="text-text-muted">
-        {new Date(msg.timestamp).toLocaleTimeString()}
+        {(() => { const d = new Date(msg.timestamp); return isNaN(d.getTime()) ? "-" : d.toLocaleTimeString(); })()}
       </span>{" "}
       <span
         className={`font-medium ${msg.role === "user" ? "text-green" : "text-purple"}`}

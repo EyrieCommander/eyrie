@@ -12,3 +12,4 @@ backup/
 .nvmrc
 .cursor/
 COMMANDS.sh
+*.tsbuildinfo

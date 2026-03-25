@@ -89,7 +89,9 @@ function SetCaptainDialog({
         auto_start: true,
       });
       await updateProject(projectId, { orchestrator_id: inst.id });
-      // Brief the captain on the project (fire and forget — it runs in background)
+      // Brief the captain on the project (fire and forget — it runs in background).
+      // Note: the returned controller could be used to abort, but the briefing
+      // should complete even after the dialog closes, so we intentionally let it run.
       streamCaptainBriefing(projectId, (ev) => {
         if (ev.type === "error") {
           console.error("Captain briefing failed:", ev.error);

@@ -208,6 +208,20 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("failed to stop instance before deletion", "instance", inst.Name, "framework", inst.Framework, "error", stopErr)
 	}
 
+	// Clear any project references to this instance to avoid dangling refs
+	if projStore, pErr := project.NewStore(); pErr == nil {
+		if projects, pErr := projStore.List(); pErr == nil {
+			for _, proj := range projects {
+				if proj.OrchestratorID == id {
+					proj.OrchestratorID = ""
+					if pErr := projStore.Save(proj); pErr != nil {
+						slog.Warn("failed to clear project orchestrator ref", "project", proj.ID, "error", pErr)
+					}
+				}
+			}
+		}
+	}
+
 	if err := store.Delete(id); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return

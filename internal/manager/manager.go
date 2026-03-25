@@ -51,7 +51,7 @@ func executeZeroClaw(ctx context.Context, action LifecycleAction) error {
 	}
 	// Stop: try service stop first, then always pkill to catch manually started daemons
 	svcErr := run(ctx, "zeroclaw", "service", string(action))
-	killCmd := exec.Command("pkill", "-f", "zeroclaw daemon")
+	killCmd := exec.CommandContext(ctx, "pkill", "-f", "zeroclaw daemon")
 	killErr := killCmd.Run()
 	// Return nil if either succeeded; only fail if both failed
 	if svcErr != nil && killErr != nil {

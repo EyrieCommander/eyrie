@@ -658,7 +658,16 @@ function EditableInfoCard({
           if (!current[parts[i]]) current[parts[i]] = {};
           current = current[parts[i]];
         }
-        current[parts[parts.length - 1]] = field.type === "number" ? Number(editValue) : editValue;
+        if (field.type === "number") {
+          const num = Number(editValue);
+          if (isNaN(num)) {
+            setError("Invalid number");
+            return;
+          }
+          current[parts[parts.length - 1]] = num;
+        } else {
+          current[parts[parts.length - 1]] = editValue;
+        }
         updated = JSON.stringify(parsed, null, 2);
       } else if (config.format === "toml") {
         // TOML: targeted string replacement to preserve formatting and types
@@ -806,7 +815,8 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
   const lines = content.split("\n");
 
   // Format the replacement value
-  const formatted = fieldType === "number" ? newValue : `"${newValue}"`;
+  const formatted = fieldType === "number" ? newValue : `"${newValue.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+
 
   if (parts.length === 1) {
     // Top-level key: replace the first matching `key = value` line
@@ -840,6 +850,19 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
         lines[i] = lines[i].replace(re, `$1${formatted}`);
         return lines.join("\n");
       }
+    }
+
+    // Key not found in existing section — append it
+    if (inSection) {
+      let insertAt = lines.length;
+      for (let j = lines.indexOf(sectionHeader) + 1; j < lines.length; j++) {
+        if (lines[j].trim().startsWith("[")) {
+          insertAt = j;
+          break;
+        }
+      }
+      lines.splice(insertAt, 0, `${key} = ${formatted}`);
+      return lines.join("\n");
     }
   }
 

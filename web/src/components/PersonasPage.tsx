@@ -41,15 +41,17 @@ export default function PersonasPage() {
     try {
       setInstalling(personaId);
       await installPersona(personaId);
-      // Refresh to show updated status
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to install persona");
+      return;
+    } finally {
+      setInstalling(null);
+    }
+    try {
       const updated = await fetchPersonas();
       setPersonas(updated);
     } catch (e) {
-      setError(
-        e instanceof Error ? e.message : "Failed to install persona",
-      );
-    } finally {
-      setInstalling(null);
+      setError("Installed but failed to refresh persona list");
     }
   };
 

@@ -780,12 +780,17 @@ func (z *ZeroClawAdapter) SendMessage(ctx context.Context, message, sessionKey s
 		return nil, err
 	}
 	var content string
+	var seenTerminal bool
 	for ev := range ch {
 		if ev.Type == "done" {
 			content = ev.Content
+			seenTerminal = true
 		} else if ev.Type == "error" {
 			return nil, fmt.Errorf("agent error: %s", ev.Error)
 		}
+	}
+	if !seenTerminal {
+		return nil, fmt.Errorf("connection closed before terminal frame (session %s)", sessionKey)
 	}
 	return &ChatMessage{
 		Timestamp: time.Now(),
@@ -1061,7 +1066,7 @@ func (z *ZeroClawAdapter) CreateSession(_ context.Context, name string) (*Sessio
 	// Use the name as the session ID if it looks safe, otherwise generate a UUID.
 	// This makes session IDs human-readable in the ZeroClaw backend.
 	sessionID := name
-	if sessionID == "" {
+	if sessionID == "" || !safeSessionKey(sessionID) {
 		sessionID = uuid.New().String()
 	}
 	return &Session{Key: sessionID, Title: name}, nil

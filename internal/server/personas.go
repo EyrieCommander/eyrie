@@ -50,6 +50,10 @@ func (s *Server) handleListPersonas(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetPersona(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "persona id is required"})
+		return
+	}
 
 	// Check store first (installed personas may be customized)
 	store, err := persona.NewStore()
@@ -147,6 +151,10 @@ func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "persona id is required"})
+		return
+	}
 
 	store, err := persona.NewStore()
 	if err != nil {
@@ -222,6 +230,10 @@ func (s *Server) handleUpdatePersona(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeletePersona(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "persona id is required"})
+		return
+	}
 
 	store, err := persona.NewStore()
 	if err != nil {

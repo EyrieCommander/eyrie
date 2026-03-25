@@ -14,7 +14,7 @@ Transform Eyrie from a framework manager into a **project orchestrator** with a 
 - User picks which framework it runs on
 
 ### 2. Project Orchestrators (one per project)
-- Created by the coordinator (or user via UI)
+- Created by the commander (or user via UI)
 - Knows project goals, tracks progress
 - Can create role agents via Eyrie's API
 - Has its own identity and memory
@@ -113,7 +113,7 @@ The coordinator's TOOLS.md includes instructions for calling the Eyrie REST API 
 ### Instance Endpoints (`internal/server/instances.go`)
 ```
 GET    /api/instances                    # List all instances
-POST   /api/instances                    # Create (provision) new instance
+POST   /api/instances                    # Create (provision) new instance; accepts auto_start (bool, default false)
 GET    /api/instances/{id}               # Get instance detail
 PUT    /api/instances/{id}               # Update (rename, change persona)
 DELETE /api/instances/{id}               # Deprovision (stop + remove config)
@@ -132,7 +132,7 @@ DELETE /api/projects/{id}                # Archive project
 ### Hierarchy Endpoint (`internal/server/hierarchy.go`)
 ```
 GET    /api/hierarchy                    # Full tree: commander -> projects -> agents
-POST   /api/hierarchy/commander          # Set the commander (body: {"instance_id": "..."} or {"agent_name": "..."} — mutually exclusive)
+POST   /api/hierarchy/commander          # Set the commander (body: {"instance_id": "..."} or {"agent_name": "..."} — mutually exclusive; agent_name is the Instance Name slug, matched exactly and case-sensitively)
 POST   /api/hierarchy/commander/brief    # Send commander briefing (SSE stream)
 ```
 
@@ -176,10 +176,10 @@ eyrie
 
 ### User Journey
 
-1. **Setup Coordinator** — Choose framework, pick/customize persona, name it, create
-2. **Create Project** — Describe goals; coordinator (or user) creates project + orchestrator
+1. **Setup Commander** — Choose framework, pick/customize persona, name it, create
+2. **Create Project** — Describe goals; commander (or user) creates project + orchestrator
 3. **Populate Agents** — Orchestrator recommends role agents; user approves or creates manually
-4. **Monitor** — Hierarchy tree shows coordinator > projects > orchestrators > role agents
+4. **Monitor** — Hierarchy tree shows commander > projects > orchestrators > role agents
 
 ### New Pages
 - `HierarchyPage.tsx` — Tree visualization
@@ -251,7 +251,7 @@ Instance and Project IDs are generated as full UUIDs by default to ensure collis
 - The hierarchy page shows a setup wizard when no commander is configured
 
 ### API Security (Future Work)
-- Per-instance API tokens (token issuance at instance creation) — OpenClaw instances already get auth tokens via `inst.AuthToken`
+- Per-instance API tokens — currently implemented for OpenClaw instances only (AuthToken generated at provisioning time); extend to other frameworks or implement a framework-agnostic Eyrie-level token
 - Agent-to-agent creation endpoints should require token authentication: middleware checks `Authorization: Bearer <token>` against the calling instance's AuthToken, rejects with 401/403 and logs the attempt
 - Scope-based authorization (coordinator → captain → talon chain)
 - Audit logging for API calls (successful and failed creation attempts)
