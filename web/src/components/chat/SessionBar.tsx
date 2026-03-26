@@ -71,7 +71,7 @@ export function SessionBar({
             value={newSessionName}
             onChange={(e) => onNewSessionNameChange(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && newSessionName.trim()) onCreateSession(newSessionName);
+              if (e.key === "Enter" && newSessionName.trim()) onCreateSession(newSessionName.trim());
               if (e.key === "Escape") {
                 onSetCreating(false);
                 onNewSessionNameChange("");
@@ -82,7 +82,7 @@ export function SessionBar({
             autoFocus
           />
           <button
-            onClick={() => onCreateSession(newSessionName)}
+            onClick={() => onCreateSession(newSessionName.trim())}
             disabled={!newSessionName.trim()}
             className="rounded px-1.5 py-0.5 text-[11px] text-accent hover:bg-surface-hover disabled:opacity-30"
           >

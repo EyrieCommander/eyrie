@@ -1020,8 +1020,13 @@ func (z *ZeroClawAdapter) saveEnrichedMessage(sessionKey string, msg *ChatMessag
 	if err != nil {
 		return
 	}
-	f.Write(data)
-	f.Write([]byte("\n"))
+	if _, err := f.Write(data); err != nil {
+		slog.Debug("failed to write enriched message data", "error", err)
+		return
+	}
+	if _, err := f.Write([]byte("\n")); err != nil {
+		slog.Debug("failed to write enriched message newline", "error", err)
+	}
 }
 
 // loadEnrichedMessages reads all enriched messages for a session from Eyrie's

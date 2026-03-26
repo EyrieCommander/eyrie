@@ -74,6 +74,6 @@ type CreateRequest struct {
 	ProjectID     string        `json:"project_id,omitempty"`
 	ParentID      string        `json:"parent_id,omitempty"`
 	Model         string        `json:"model,omitempty"`    // override persona default
-	AutoStart     bool          `json:"auto_start,omitempty"`
+	AutoStart     *bool         `json:"auto_start,omitempty"`
 	CreatedBy     string        `json:"created_by,omitempty"` // "user" or parent instance ID
 }

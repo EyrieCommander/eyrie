@@ -278,10 +278,11 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 		chatStore: cs,
 	}
 	if err := orch.RunProjectChat(r.Context(), proj, body.Message, sse); err != nil {
-		// If SSE headers haven't been sent yet the error is returned before
-		// any events; otherwise it's too late to change HTTP status so we
-		// emit it as an SSE error event.
-		sse.WriteError(err.Error())
+		if sse.Sent() {
+			sse.WriteError(err.Error())
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 	}
 }
 

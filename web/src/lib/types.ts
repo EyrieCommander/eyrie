@@ -69,6 +69,7 @@ export interface ChatPart {
   args?: Record<string, unknown>;
   output?: string;
   error?: boolean;
+  pending?: boolean;
 }
 
 export interface ChatMessage {

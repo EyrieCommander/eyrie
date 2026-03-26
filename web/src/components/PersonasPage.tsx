@@ -37,7 +37,8 @@ export default function PersonasPage() {
     load();
   }, [load]);
 
-  const handleInstall = async (personaId: string) => {
+  const handleInstall = useCallback(async (personaId: string) => {
+    setError(null);
     try {
       setInstalling(personaId);
       await installPersona(personaId);
@@ -53,7 +54,7 @@ export default function PersonasPage() {
     } catch (e) {
       setError("Installed but failed to refresh persona list");
     }
-  };
+  }, []);
 
   const filtered = activeCategory
     ? personas.filter((p) => p.category === activeCategory)

@@ -59,6 +59,7 @@ export function PartToolCallCard({
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   const isOuter = headerStyle === "outer";
+  const panelId = `toolcall-${part.id || "panel"}`;
 
   return (
     <div className={isOuter ? "text-[11px]" : "border-b border-border/30 last:border-b-0 text-[11px]"}>
@@ -67,6 +68,8 @@ export function PartToolCallCard({
           e.stopPropagation();
           setExpanded(!expanded);
         }}
+        aria-expanded={expanded}
+        aria-controls={panelId}
         className={isOuter
           ? "flex w-full items-center gap-2 px-3 py-1.5 text-left"
           : "flex w-full items-center gap-2 px-3 py-1 text-left hover:bg-surface-hover/30"
@@ -90,7 +93,7 @@ export function PartToolCallCard({
         </span>
       </button>
       {expanded && (
-        <div className={`${isOuter ? "border-t border-border/50" : "border-t border-border/30"} px-3 py-2 space-y-1.5 bg-surface/50`}>
+        <div id={panelId} className={`${isOuter ? "border-t border-border/50" : "border-t border-border/30"} px-3 py-2 space-y-1.5 bg-surface/50`}>
           {part.args && Object.keys(part.args).length > 0 && (
             <div>
               <span className="text-text-muted">args: </span>
@@ -121,11 +124,14 @@ export interface ToolCallCardProps {
 
 export function ToolCallCard({ tc }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
+  const panelId = `toolcall-${tc.toolId || "panel"}`;
 
   return (
     <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
+        aria-expanded={expanded}
+        aria-controls={panelId}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
       >
         <span className="font-mono text-text">{tc.tool}</span>
@@ -150,7 +156,7 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-border/50 px-3 py-2 space-y-1.5">
+        <div id={panelId} className="border-t border-border/50 px-3 py-2 space-y-1.5">
           {tc.args && Object.keys(tc.args).length > 0 && (
             <div>
               <span className="text-text-muted">args: </span>

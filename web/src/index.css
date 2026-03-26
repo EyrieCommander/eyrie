@@ -26,6 +26,12 @@ body {
     Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+/*
+ * scrollbar-hide: Use sparingly and only where scroll context is visually
+ * obvious (e.g. horizontal tab bars with overflow indicators). Ensure that
+ * keyboard navigation still works and consider adding fade/arrow indicators
+ * so users are aware the area is scrollable.
+ */
 .scrollbar-hide {
   -ms-overflow-style: none;
   scrollbar-width: none;

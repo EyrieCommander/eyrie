@@ -202,19 +202,36 @@ func (s *Store) Save(p Project) error {
 	defer s.mu.Unlock()
 
 	// Prevent implicit creation — the project file must already exist.
-	if _, err := os.Stat(s.path(p.ID)); err != nil {
+	data, err := os.ReadFile(s.path(p.ID))
+	if err != nil {
 		if os.IsNotExist(err) {
 			return fmt.Errorf("project %q: %w", p.ID, ErrNotFound)
 		}
 		return err
 	}
 
+	// Validate status
+	if !p.Status.Valid() {
+		return fmt.Errorf("invalid project status %q", p.Status)
+	}
+
+	// Check transition if status is changing
+	var old Project
+	if err := json.Unmarshal(data, &old); err != nil {
+		return fmt.Errorf("failed to read existing project: %w", err)
+	}
+	if old.Status != p.Status {
+		if !CanTransition(old.Status, p.Status) {
+			return fmt.Errorf("cannot transition project from %q to %q", old.Status, p.Status)
+		}
+	}
+
 	p.UpdatedAt = time.Now()
-	data, err := json.MarshalIndent(p, "", "  ")
+	out, err := json.MarshalIndent(p, "", "  ")
 	if err != nil {
 		return err
 	}
-	return fileutil.AtomicWrite(s.path(p.ID), data, 0o600)
+	return fileutil.AtomicWrite(s.path(p.ID), out, 0o600)
 }
 
 func (s *Store) Delete(id string) error {

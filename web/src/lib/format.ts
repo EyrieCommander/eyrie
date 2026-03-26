@@ -1,4 +1,4 @@
-export function formatUptime(nanoseconds: number): string {
+export function formatUptime(nanoseconds: number | null | undefined): string {
   if (nanoseconds == null || nanoseconds <= 0) return "-";
   const seconds = nanoseconds / 1e9;
   const days = Math.floor(seconds / 86400);
@@ -9,7 +9,7 @@ export function formatUptime(nanoseconds: number): string {
   return `${mins}m`;
 }
 
-export function formatBytes(bytes: number): string {
+export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null || bytes <= 0) return "-";
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
   if (bytes < 1024 * 1024 * 1024)

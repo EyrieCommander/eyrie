@@ -58,7 +58,10 @@ export async function agentAction(
 
 export async function fetchAgentModels(name: string): Promise<string[]> {
   const res = await fetch(`${BASE}/api/agents/${name}/models`);
-  if (!res.ok) return [];
+  if (!res.ok) {
+    console.warn(`fetchAgentModels failed for ${name}: ${res.status} ${res.statusText}`);
+    throw new Error(`Failed to fetch models: ${res.statusText}`);
+  }
   return res.json();
 }
 

@@ -3,6 +3,7 @@ import {
   useState,
   useCallback,
   useRef,
+  useMemo,
   type ReactNode,
   type KeyboardEvent,
 } from "react";
@@ -145,7 +146,7 @@ export function ChatPanel({
 
   const defaultSessionKey =
     framework === "openclaw" ? "agent:main:main" : "main";
-  const groups = groupSessions(sessions);
+  const groups = useMemo(() => groupSessions(sessions), [sessions]);
   const activeGroup =
     groups.find((g) => g.name === activeGroupName) ?? groups[0];
   const currentSessionKey = activeGroup?.current?.key ?? defaultSessionKey;
@@ -247,7 +248,7 @@ export function ChatPanel({
     } else if (groups.length === 0) {
       setLoading(false);
     }
-  }, [activeGroupName, alive, loadGroup, sessions, groups.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeGroupName, alive, loadGroup, groups]);
 
   // ── Poll for new messages ───────────────────────────────────────────
 
@@ -443,16 +444,34 @@ export function ChatPanel({
               if (match) {
                 setActiveGroupName(match.name);
               } else {
-                setTimeout(() => {
-                  fetchSessions(agentName)
-                    .then((resp2) => {
-                      if (!mounted) return;
-                      const all2 = resp2.sessions ?? [];
-                      setSessions(all2);
-                      setActiveGroupName("eyrie-commander-briefing");
-                    })
-                    .catch(() => {});
-                }, 1000);
+                let retryCount = 0;
+                const maxRetries = 3;
+                const retryFetchBriefing = () => {
+                  if (!mounted || retryCount >= maxRetries) return;
+                  retryCount++;
+                  const delay = 1000 * Math.pow(2, retryCount - 1);
+                  setTimeout(() => {
+                    if (!mounted) return;
+                    fetchSessions(agentName)
+                      .then((resp2) => {
+                        if (!mounted) return;
+                        const all2 = resp2.sessions ?? [];
+                        setSessions(all2);
+                        const gs2 = groupSessions(all2);
+                        const match2 = gs2.find((g) => g.name === "eyrie-commander-briefing");
+                        if (match2) {
+                          setActiveGroupName(match2.name);
+                        } else if (retryCount < maxRetries) {
+                          retryFetchBriefing();
+                        }
+                      })
+                      .catch((err) => {
+                        console.warn("Failed to fetch briefing sessions:", err);
+                      });
+                  }, delay);
+                  // Note: timeoutId is cleaned up via mounted check
+                };
+                retryFetchBriefing();
               }
             })
             .catch(() => {});

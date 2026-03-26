@@ -263,7 +263,7 @@ func runDetachedWithEnv(_ context.Context, logDir string, env []string, command 
 func killByConfigDir(configDir string) (found bool, err error) {
 	// Escape regex metacharacters in configDir to avoid injection
 	escaped := regexp.QuoteMeta(configDir)
-	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s(\\s|$)", escaped))
+	cmd := exec.Command("pkill", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s([[:space:]]|$)", escaped))
 	if err := cmd.Run(); err != nil {
 		// pkill exit code 1 means "no processes matched" — not an error
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {

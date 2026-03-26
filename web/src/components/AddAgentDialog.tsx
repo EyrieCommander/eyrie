@@ -54,9 +54,17 @@ export function AddAgentDialog({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+      onClick={onClose}
+      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="add-agent-dialog-title"
+      tabIndex={-1}
+    >
       <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
-        <h2 className="text-sm font-bold text-text">add agent to project</h2>
+        <h2 id="add-agent-dialog-title" className="text-sm font-bold text-text">add agent to project</h2>
 
         <div>
           <label className="block text-xs font-medium text-text-secondary mb-1">name</label>

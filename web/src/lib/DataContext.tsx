@@ -24,31 +24,60 @@ export function DataProvider({ children }: { children: ReactNode }) {
     try {
       setLoading(true);
       setError(null);
-      const [agentData, projectData, instanceData] = await Promise.all([
+      const errors: string[] = [];
+
+      const [agentResult, projectResult, instanceResult] = await Promise.allSettled([
         fetchAgents(),
-        fetchProjects().catch((e) => {
-          console.error("Failed to fetch projects:", e);
-          return [] as Project[];
-        }),
-        fetchInstances().catch((e) => {
-          console.error("Failed to fetch instances:", e);
-          return [] as AgentInstance[];
-        }),
+        fetchProjects(),
+        fetchInstances(),
       ]);
-      setAgents(agentData);
-      setProjects(projectData);
-      setInstances(instanceData);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to fetch agents");
+
+      if (agentResult.status === "fulfilled") {
+        setAgents(agentResult.value);
+      } else {
+        errors.push(`agents: ${agentResult.reason?.message || "fetch failed"}`);
+      }
+
+      if (projectResult.status === "fulfilled") {
+        setProjects(projectResult.value);
+      } else {
+        errors.push(`projects: ${projectResult.reason?.message || "fetch failed"}`);
+      }
+
+      if (instanceResult.status === "fulfilled") {
+        setInstances(instanceResult.value);
+      } else {
+        errors.push(`instances: ${instanceResult.reason?.message || "fetch failed"}`);
+      }
+
+      if (errors.length > 0) {
+        setError(errors.join("; "));
+      }
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    refresh();
-    const interval = setInterval(refresh, 30000);
-    return () => clearInterval(interval);
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let cancelled = false;
+
+    const scheduleRefresh = () => {
+      timeoutId = setTimeout(async () => {
+        if (cancelled) return;
+        await refresh();
+        if (!cancelled) scheduleRefresh();
+      }, 30000);
+    };
+
+    refresh().then(() => {
+      if (!cancelled) scheduleRefresh();
+    });
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+    };
   }, [refresh]);
 
   return (

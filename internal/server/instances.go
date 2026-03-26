@@ -98,7 +98,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-start if requested
 	var autoStartErr error
-	if req.AutoStart {
+	if req.AutoStart != nil && *req.AutoStart {
 		if autoStartErr = manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); autoStartErr != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
 			inst.Status = instance.StatusError
@@ -124,7 +124,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if req.AutoStart && inst.Status == instance.StatusError {
+	if req.AutoStart != nil && *req.AutoStart && inst.Status == instance.StatusError {
 		writeJSON(w, http.StatusCreated, map[string]any{
 			"instance": inst,
 			"warning":  fmt.Sprintf("auto-start failed: %v", autoStartErr),

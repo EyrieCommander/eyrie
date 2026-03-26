@@ -29,7 +29,11 @@ func DefaultCatalogURL() string {
 	}
 	// Source path is distinct from cache path (~/.eyrie/cache/personas.json)
 	p := filepath.Join(home, ".eyrie", "personas.json")
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(p)}
+	slashed := filepath.ToSlash(p)
+	if len(slashed) > 0 && slashed[0] != '/' {
+		slashed = "/" + slashed
+	}
+	u := url.URL{Scheme: "file", Path: slashed}
 	return u.String()
 }
 
@@ -74,7 +78,15 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 		if parseErr != nil {
 			return nil, fmt.Errorf("parse catalog URL: %w", parseErr)
 		}
-		localPath := filepath.FromSlash(u.Path)
+		localPath := u.Path
+		if u.Host != "" {
+			localPath = u.Host + localPath
+		}
+		// On Windows, strip leading slash from /C:/... paths
+		if len(localPath) >= 3 && localPath[0] == '/' && localPath[2] == ':' {
+			localPath = localPath[1:]
+		}
+		localPath = filepath.FromSlash(localPath)
 		f, err := os.Open(localPath)
 		if err != nil {
 			return nil, fmt.Errorf("read local persona catalog: %w", err)

@@ -13,8 +13,9 @@ import (
 // SSEWriter wraps an http.ResponseWriter for Server-Sent Events.
 // It handles JSON marshaling, framing, and flushing in a single call.
 type SSEWriter struct {
-	w io.Writer
-	f http.Flusher
+	w    io.Writer
+	f    http.Flusher
+	sent bool
 }
 
 // NewSSEWriter sets SSE headers and returns a writer.
@@ -40,7 +41,13 @@ func (s *SSEWriter) WriteEvent(v any) error {
 		return err
 	}
 	s.f.Flush()
+	s.sent = true
 	return nil
+}
+
+// Sent returns true if at least one event has been flushed.
+func (s *SSEWriter) Sent() bool {
+	return s.sent
 }
 
 // WriteDone sends a {"type":"done"} event.

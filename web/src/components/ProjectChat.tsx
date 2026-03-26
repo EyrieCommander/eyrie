@@ -42,6 +42,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       fetchProjectChat(projectId).then((msgs) => {
         setMessages((prev) => {
           if (msgs.length !== prev.length) return msgs;
+          // Check if any message identity changed (edits/replacements)
+          for (let i = 0; i < msgs.length; i++) {
+            if (msgs[i].id !== prev[i].id || msgs[i].timestamp !== prev[i].timestamp) {
+              return msgs;
+            }
+          }
           return prev;
         });
       }).catch(() => {});
@@ -93,14 +99,15 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             type: "tool_call",
             id: event.event!.tool_id,
             name: event.event!.tool,
+            pending: true,
           }]);
         } else if (event.event.type === "tool_result") {
           setStreamingToolCalls((prev) => {
             const updated = [...prev];
             for (let i = updated.length - 1; i >= 0; i--) {
               if ((event.event!.tool_id && updated[i].id === event.event!.tool_id) ||
-                  (!event.event!.tool_id && updated[i].name === event.event!.tool && !updated[i].output)) {
-                updated[i] = { ...updated[i], output: event.event!.output };
+                  (!event.event!.tool_id && updated[i].name === event.event!.tool && updated[i].pending)) {
+                updated[i] = { ...updated[i], output: event.event!.output, pending: false };
                 break;
               }
             }
@@ -137,16 +144,52 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const startProjectChat = useCallback(() => {
     setSending(true);
     setChatError("");
-    // Brief the captain first (fetches API ref, saves TOOLS.md), then start the chat
-    const { sessionReady } = streamCaptainBriefing(projectId, () => {});
+    // Brief the captain first
+    const { controller: briefController, sessionReady } = streamCaptainBriefing(projectId, () => {});
+    streamControllerRef.current = briefController;
     sessionReady.then(() => {
       if (!mountedRef.current) return;
       const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
         if (!mountedRef.current) return;
         if (event.type === "message" && event.message) {
           setMessages((prev) => [...prev, event.message!]);
+          setStreamingContent("");
+          setStreamingSender(null);
+          setStreamingRole(null);
+          setStreamingToolCalls([]);
+        } else if (event.type === "agent_event" && event.event) {
+          if (event.event.type === "delta") {
+            setStreamingSender(event.sender || null);
+            setStreamingRole(event.role || null);
+            setStreamingContent((prev) => prev + (event.event!.content || ""));
+          } else if (event.event.type === "tool_start") {
+            setStreamingSender(event.sender || null);
+            setStreamingRole(event.role || null);
+            setStreamingToolCalls((prev) => [...prev, {
+              type: "tool_call",
+              id: event.event!.tool_id,
+              name: event.event!.tool,
+              pending: true,
+            }]);
+          } else if (event.event.type === "tool_result") {
+            setStreamingToolCalls((prev) => {
+              const updated = [...prev];
+              for (let i = updated.length - 1; i >= 0; i--) {
+                if ((event.event!.tool_id && updated[i].id === event.event!.tool_id) ||
+                    (!event.event!.tool_id && updated[i].name === event.event!.tool && updated[i].pending)) {
+                  updated[i] = { ...updated[i], output: event.event!.output, pending: false };
+                  break;
+                }
+              }
+              return updated;
+            });
+          }
         } else if (event.type === "done") {
           setSending(false);
+          setStreamingContent("");
+          setStreamingSender(null);
+          setStreamingRole(null);
+          setStreamingToolCalls([]);
         } else if (event.type === "error") {
           setSending(false);
           setChatError(event.error || "failed to start chat");

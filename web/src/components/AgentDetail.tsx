@@ -19,6 +19,7 @@ import type {
 } from "../lib/types";
 import {
   agentAction,
+  fetchAgents,
   fetchAgentConfig,
   fetchAgentModels,
   type AgentConfig,
@@ -54,21 +55,29 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const [framework, setFramework] = useState<Framework | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
 
+  const actionControllerRef = useRef<AbortController | null>(null);
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => { actionControllerRef.current?.abort(); };
+  }, []);
+
   const handleAction = useCallback(
     async (action: "start" | "stop" | "restart") => {
       setActionPending(action);
+      const controller = new AbortController();
+      actionControllerRef.current = controller;
       try {
         await agentAction(agent.name, action);
         if (onRefresh) {
           if (action === "start" || action === "restart") {
-            // Poll until alive or timeout (daemon takes a moment to start)
             for (let i = 0; i < 10; i++) {
+              if (controller.signal.aborted) break;
               await new Promise((r) => setTimeout(r, 1000));
+              if (controller.signal.aborted) break;
               await onRefresh();
-              // agent prop updates on next render, but we can't read it here.
-              // Break early by checking the API directly.
               try {
-                const agents = await (await fetch("/api/agents")).json();
+                const agents = await fetchAgents();
                 const a = agents.find((x: any) => x.name === agent.name);
                 if (a?.alive) break;
               } catch { /* ignore */ }
@@ -857,6 +866,10 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
       lines.splice(insertAt, 0, `${key} = ${formatted}`);
       return lines.join("\n");
     }
+
+    // Section not found — create it at the end of the file
+    lines.push("", `[${section}]`, `${key} = ${formatted}`);
+    return lines.join("\n");
   }
 
   // Field not found — append it (top-level or to section)

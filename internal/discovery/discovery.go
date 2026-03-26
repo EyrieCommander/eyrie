@@ -117,11 +117,11 @@ func scanInstances() []adapter.DiscoveredAgent {
 
 		switch ext {
 		case ".toml":
-			agent, err = scanZeroClawConfig(inst.ConfigPath)
+			agent, err = scanZeroClawConfig(expanded)
 		case ".json":
-			agent, err = scanOpenClawConfig(inst.ConfigPath)
+			agent, err = scanOpenClawConfig(expanded)
 		case ".yaml", ".yml":
-			agent, err = scanYAMLConfig(inst.ConfigPath)
+			agent, err = scanYAMLConfig(expanded)
 		default:
 			continue
 		}
@@ -153,11 +153,11 @@ func scanConfigFiles(paths []string) []adapter.DiscoveredAgent {
 		var err error
 
 		if strings.HasSuffix(expanded, ".toml") {
-			agent, err = scanZeroClawConfig(path)
+			agent, err = scanZeroClawConfig(expanded)
 		} else if strings.HasSuffix(expanded, ".json") {
-			agent, err = scanOpenClawConfig(path)
+			agent, err = scanOpenClawConfig(expanded)
 		} else if strings.HasSuffix(expanded, ".yaml") || strings.HasSuffix(expanded, ".yml") {
-			agent, err = scanYAMLConfig(path)
+			agent, err = scanYAMLConfig(expanded)
 		} else {
 			slog.Debug("skipping unknown config format", "path", path)
 			continue

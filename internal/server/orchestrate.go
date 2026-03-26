@@ -38,9 +38,9 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// Check if this is the first message
 	existing, err := o.chatStore.Messages(projectID, 1)
 	if err != nil {
-		slog.Warn("failed to check existing messages", "project", projectID, "error", err)
+		return fmt.Errorf("failed to check existing messages for project %s: %w", projectID, err)
 	}
-	firstMessage := err == nil && len(existing) == 0
+	firstMessage := len(existing) == 0
 
 	// Parse @mentions
 	mention := parseMention(message)
@@ -81,7 +81,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			Mention:   "commander",
 		}
 		if err := o.chatStore.Append(projectID, *initMsg); err != nil {
-			slog.Warn("failed to save init message", "project", projectID, "error", err)
+			return fmt.Errorf("failed to save init message: %w", err)
 		}
 	}
 
@@ -303,7 +303,7 @@ Keep it conversational — 2-3 focused questions. Don't plan the project or prop
 	ch, err := agent.StreamMessage(ctx, labeledMsg, sessionKey)
 	if err != nil {
 		sse.WriteError(err.Error())
-		return nil // error already sent via SSE
+		return fmt.Errorf("failed to stream to commander: %w", err)
 	}
 
 	var responseContent string
@@ -351,7 +351,10 @@ func streamBriefing(ctx context.Context, agent adapter.Agent, agentName string, 
 		for _, sess := range sessions {
 			if sess.Title == sessionName {
 				if resetExisting {
-					_ = agent.ResetSession(ctx, sess.Key)
+					if err := agent.ResetSession(ctx, sess.Key); err != nil {
+					slog.Warn("failed to reset briefing session", "agent", agentName, "session", sess.Key, "error", err)
+					return fmt.Errorf("failed to reset briefing session %q: %w", sess.Key, err)
+				}
 				} else {
 					// Already briefed — just return the session key
 					sse.WriteEvent(map[string]string{"type": "session", "session_key": sess.Key})
@@ -385,7 +388,7 @@ func streamBriefing(ctx context.Context, agent adapter.Agent, agentName string, 
 	eventCh, err := agent.StreamMessage(ctx, briefingText, sessionKey)
 	if err != nil {
 		sse.WriteError(err.Error())
-		return nil // error already sent via SSE
+		return fmt.Errorf("failed to stream briefing: %w", err)
 	}
 
 	// Send session key first so frontend knows where to navigate

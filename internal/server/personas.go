@@ -99,6 +99,7 @@ func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	var body struct {
 		PersonaID string `json:"persona_id"`
+		Force     bool   `json:"force"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		slog.Debug("malformed persona install request", "error", err)
@@ -138,6 +139,13 @@ func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
 	store, err := persona.NewStore()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open persona store"})
+		return
+	}
+
+	// Check if already installed — return existing persona unless force is set
+	existing, existErr := store.Get(found.ID)
+	if existErr == nil && existing.Installed && !body.Force {
+		writeJSON(w, http.StatusOK, existing)
 		return
 	}
 

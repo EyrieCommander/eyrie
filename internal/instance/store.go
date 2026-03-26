@@ -112,6 +112,18 @@ func (s *Store) Save(inst Instance) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Check name uniqueness: another instance with the same name but a
+	// different ID is a conflict. Same-ID updates are always allowed.
+	instances, err := s.listLocked()
+	if err != nil {
+		return fmt.Errorf("failed to check name uniqueness: %w", err)
+	}
+	for _, existing := range instances {
+		if existing.Name == inst.Name && existing.ID != inst.ID {
+			return ErrNameExists
+		}
+	}
+
 	dir := filepath.Join(s.dir, inst.ID)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
