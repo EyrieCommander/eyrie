@@ -1,6 +1,6 @@
 # Eyrie
 
-<img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
+<img width="1328" height="750" alt="image" src="https://github.com/user-attachments/assets/76319b5b-4b76-47ed-9a5e-2bde5f7876a2" />
 
 A unified management interface for the Claw family of AI agent frameworks.
 
@@ -20,6 +20,8 @@ Eyrie gives you a single CLI and web dashboard to discover, monitor, and control
 - **Provider health probing**: verify LLM provider connectivity from the status view
 - **Web dashboard** for visual monitoring (served from the same binary)
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
+
+<img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
 
 ### In development
 
@@ -59,6 +61,8 @@ eyrie dashboard
 # Install a new framework
 eyrie install hermes
 ```
+
+<img width="1355" height="781" alt="image" src="https://github.com/user-attachments/assets/a28909f1-6c35-46eb-aa58-4217f7de3b60" />
 
 ## CLI Commands
 
