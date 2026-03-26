@@ -1,14 +1,15 @@
 # Eyrie TODO
 
-## Current State (2026-03-23)
+## Current State (2026-03-26)
 
 **Branch:** `feature/project-orchestrator`
+**Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
+**Design:** `eyrie/project-design.pen` (Pencil mockups), implementation plan at `~/.claude/plans/majestic-crunching-tiger.md`
 
 ### What's working:
 - Commander system: select existing agent, briefing flow, hierarchy page with role descriptions
 - Agent instances: provisioning ZeroClaw instances with own config/workspace/port
 - Named sessions on ZeroClaw 0.5.7 (upstream merged our PR #4267 as #4275)
-- Streaming tool events on ZeroClaw (PR #4350 submitted, passing tests)
 - Project CRUD with captain assignment
 - Project group chat: backend (SSE streaming, per-agent sessions, @mention routing)
 - Project group chat: frontend (messages, @mention autocomplete with keyboard nav)
@@ -16,24 +17,46 @@
 - Agent lifecycle: start/stop/restart (including provisioned instances)
 - Session management: time-gap spacers, most-recent-first tabs, reset/delete
 - Chat history from ZeroClaw's SQLite session DB + JSONL enrichment
+- Activity event streaming from ZeroClaw (tool calls, LLM requests, session events)
 
-### Role hierarchy (decided 2026-03-23):
-- **Commander**: creates projects + assigns captains. Introduces user/goals in group chat, then steps back. Does NOT create talons.
-- **Captain**: project lead / tech lead. Owns planning, execution, coordination. Creates and manages talons. Reports to commander.
-- **Talon**: specialist agent (researcher, developer, writer, etc.). Created and managed by captain.
+### Role hierarchy:
+- **Commander**: creates projects + assigns captains. User can also create projects via UI (dual control).
+- **Captain**: project lead. Owns planning, execution, coordination. Creates and manages talons. User can also add talons via persona picker (dual control).
+- **Talon**: specialist agent (researcher, developer, writer, etc.). Created by captain or user.
 - **Daily sync (planned)**: captains sync with commander daily, commander syncs with user.
 
-### Next steps (in order):
-1. **Test project chat end-to-end** — test intake flow → group chat → captain takes over
-2. **Fix captain not responding to briefing** — captain receives briefing but doesn't respond (may be a ZeroClaw tool execution issue with the kimi model)
-3. **Captain creating talons via API** — captain will create talons via `POST /api/instances`
-4. **OpenClaw observe-group** — use `requireMention: true` for OpenClaw agents in project chat so they silently observe without wasting LLM calls
-5. **Cross-agent message sync** — after an agent responds in project chat, forward its response to other agents' sessions
-6. **Daily sync cron** — captains report to commander, commander reports to user
+### Next steps (by phase):
+
+**Phase 1 — Fix Agent Reliability (unblock the factory)**
+1. [ ] **Fix captain not responding to briefing** — diagnose model/tool issue, test with different models
+2. [ ] **Fix cross-agent message delivery** — add retry logic, delivery confirmation, error logging
+3. [ ] **Test end-to-end flow** — commander → captain → talon creation → @mention response
+
+**Phase 2 — Activity Tracking (backend)**
+4. [ ] **Project activity endpoint** — `GET /api/projects/{id}/activity` aggregating events from all project agents
+5. [ ] **Agent status enrichment** — busy/idle inference, current task, last active
+6. [ ] **Project progress tracking** — progress %, deadline field on Project struct
+7. [ ] **Metrics endpoint** — `GET /api/metrics` for dashboard stats
+
+**Phase 3 — Control Room UI (frontend)**
+8. [ ] **Real-time project events** — SSE event bus (`GET /api/projects/{id}/events`) for live UI updates
+9. [ ] **Project workspace** — live split view: hierarchy diagram + agent roster + chat workspace
+10. [ ] **Mission control** — dashboard with metrics, project cards, commander access
+11. [ ] **Agent profile** — identity/soul/memory display + 1:1 chat
+12. [ ] **Activity timeline** — chronological event feed with filters
+
+**Phase 4 — Agent Context (backend)**
+13. [ ] **Project context in provisioning** — PROJECT.md in talon workspace with project info + team roster
+14. [ ] **Dynamic context updates** — regenerate PROJECT.md when team or project changes
+15. [ ] **System messages for structural changes** — visible in chat regardless of who (user or agent) made the change
+
+**Phase 5 — User Override (frontend)**
+16. [ ] **Persona picker** — grid of persona cards for talon provisioning
+17. [ ] **Project creation with commander** — option to create via UI or ask commander
 
 ### Dashboard improvements:
-- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token. Currently requires manual terminal work.
-- [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state in the chat tab instead of a raw 500 error. Offer one-click re-pair.
+- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
+- [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 
 ### ZeroClaw PRs:
 - **#4275 (named sessions)**: Merged ✅ (our #4267 was superseded)

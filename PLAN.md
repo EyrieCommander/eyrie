@@ -1,31 +1,53 @@
-# Eyrie: Project Orchestrator with Agent Hierarchy
+# Eyrie: Agentic Factory with Control Room
 
 ## Vision
 
-Transform Eyrie from a framework manager into a **project orchestrator** with a three-tier agent hierarchy. Agents are persistent entities with real identity (IDENTITY.md, SOUL.md, MEMORY.md), not disposable LLM sessions.
+Transform Eyrie from a framework manager into an **agentic factory** with a three-tier agent hierarchy and a real-time control room UI. Agents do the work autonomously — commander creates projects, captains manage execution, talons specialize. Projects can be anything: software, research, content, business operations. The UI provides **real-time visibility** into everything happening, with the user able to **intervene at any level**.
+
+Agents are persistent entities with real identity (IDENTITY.md, SOUL.md, MEMORY.md), not disposable LLM sessions.
+
+**Design reference:** `eyrie/project-design.pen` (Pencil mockups)
+
+### Core Principles
+
+1. **Agents drive, user oversees** — Commander creates projects, captains create talons. The UI shows what they're doing and lets the user intervene.
+2. **Dual control** — Anything an agent can do, the user can also do via UI. Same API endpoints, same data. Both paths produce the same visible result.
+3. **Visibility first** — The user should never wonder "what is my agent doing?" Activity, status, decisions — all visible in real-time.
+4. **Graceful override** — User can step in at any point: create a project manually, add a talon, reassign a captain, pause an agent.
 
 ## Three-Tier Agent Hierarchy
 
-### 1. Master Commander (one per user)
+### 1. Commander (one per user)
 - Has its own identity, memory, and workspace
 - Knows about ALL the user's projects
-- Can create project orchestrators via Eyrie's API
+- Can create projects and assign captains via Eyrie's API
 - Relays project progress to the user
 - User picks which framework it runs on
+- User can also create projects directly via UI (dual control)
 
-### 2. Project Orchestrators (one per project)
-- Created by the commander (or user via UI)
-- Knows project goals, tracks progress
-- Can create role agents via Eyrie's API
+### 2. Captains (one per project)
+- Created by the commander or user via UI
+- Knows project goals, tracks progress, manages execution
+- Can create talons via Eyrie's API
 - Has its own identity and memory
 - Responsible for its project's progress
+- User can also add talons directly via persona picker (dual control)
 
-### 3. Role Agents / Implementers (many per project)
-- Created by orchestrators (or user via UI)
-- Specific roles: researcher, dev-lead, marketer, etc.
+### 3. Talons (many per project)
+- Created by captains or user via UI
+- Specific roles: researcher, developer, writer, reviewer, etc.
 - Use persona templates as starting point for identity
 - Develop their own memory over time
-- Responsible for their own role
+- Pulled into conversations via @mention when their expertise is needed
+
+### Control Room UI
+
+The UI provides real-time visibility into agent activity:
+- **Mission Control** — cross-project dashboard with metrics, project cards, commander access
+- **Project Workspace** — live hierarchy diagram + agent roster + chat, all updating in real-time
+- **Agent Profile** — inspect identity, soul, memory, current task for any agent
+- **Activity Timeline** — chronological feed of tool calls, decisions, completions
+- **Real-time events** — SSE stream ensures UI updates instantly whether user or agent makes changes
 
 ## Key Concept: Personas Are Identity Templates
 
