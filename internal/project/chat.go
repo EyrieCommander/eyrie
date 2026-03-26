@@ -55,6 +55,17 @@ func (cs *ChatStore) chatPath(projectID string) string {
 	return filepath.Join(cs.dir, projectID, "chat.jsonl")
 }
 
+// ClearChat removes the project's chat history file.
+func (cs *ChatStore) ClearChat(projectID string) error {
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+	path := cs.chatPath(projectID)
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to clear chat: %w", err)
+	}
+	return nil
+}
+
 
 
 // Append adds a message to the project's shared conversation.

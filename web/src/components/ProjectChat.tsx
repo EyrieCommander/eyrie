@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { Send } from "lucide-react";
 import type { ProjectChatMessage, ChatPart } from "../lib/types";
 import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
-import { fetchProjectChat, streamProjectChat, streamCaptainBriefing } from "../lib/api";
+import { fetchProjectChat, streamProjectChat } from "../lib/api";
 
 const ROLE_COLORS: Record<string, string> = {
   user: "text-green",
@@ -75,21 +75,34 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     };
   }, []);
 
-  const handleSend = useCallback(() => {
-    const msg = input.trim();
+  const sendMsg = useCallback((msg: string) => {
     if (!msg || sending) return;
-    setInput("");
     setSending(true);
     setChatError("");
     setStreamingContent("");
     setStreamingSender(null);
     setStreamingToolCalls([]);
 
+    // Optimistic: show user message immediately
+    setMessages((prev) => [...prev, {
+      id: `optimistic-${Date.now()}`,
+      sender: "user",
+      role: "user",
+      content: msg,
+      timestamp: new Date().toISOString(),
+    }]);
+
     const controller = streamProjectChat(projectId, msg, (event) => {
       if (!mountedRef.current) return;
       if (event.type === "message" && event.message) {
         const msg = event.message;
-        setMessages((prev) => [...prev, msg]);
+        setMessages((prev) => {
+          // Skip if this is the user message we already added optimistically
+          if (msg.role === "user" && prev.some((m) => m.id.startsWith("optimistic-") && m.content === msg.content)) {
+            return prev.map((m) => m.id.startsWith("optimistic-") && m.content === msg.content ? msg : m);
+          }
+          return [...prev, msg];
+        });
         setStreamingContent("");
         setStreamingSender(null);
         setStreamingRole(null);
@@ -147,88 +160,17 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       }
     });
     streamControllerRef.current = controller;
-  }, [input, sending, projectId]);
+  }, [sending, projectId]);
 
-  const startProjectChat = useCallback(() => {
-    setSending(true);
-    setChatError("");
-    // Brief the captain first
-    const { controller: briefController, sessionReady } = streamCaptainBriefing(projectId, () => {});
-    streamControllerRef.current = briefController;
-    sessionReady.then(() => {
-      if (!mountedRef.current) return;
-      const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
-        if (!mountedRef.current) return;
-        if (event.type === "message" && event.message) {
-          const msg = event.message;
-          setMessages((prev) => [...prev, msg]);
-          setStreamingContent("");
-          setStreamingSender(null);
-          setStreamingRole(null);
-          setStreamingToolCalls([]);
-        } else if (event.type === "agent_event" && event.event) {
-          const ev = event.event;
-          if (ev.type === "delta") {
-            setStreamingSender(event.sender || null);
-            setStreamingRole(event.role || null);
-            setStreamingContent((prev) => prev + (ev.content || ""));
-          } else if (ev.type === "tool_start") {
-            setStreamingSender(event.sender || null);
-            setStreamingRole(event.role || null);
-            setStreamingToolCalls((prev) => [...prev, {
-              type: "tool_call",
-              id: ev.tool_id,
-              name: ev.tool,
-              pending: true,
-            }]);
-          } else if (ev.type === "tool_result") {
-            setStreamingToolCalls((prev) => {
-              const updated = [...prev];
-              for (let i = updated.length - 1; i >= 0; i--) {
-                if ((ev.tool_id && updated[i].id === ev.tool_id) ||
-                    (!ev.tool_id && updated[i].name === ev.tool && updated[i].pending)) {
-                  updated[i] = { ...updated[i], output: ev.output, pending: false };
-                  break;
-                }
-              }
-              return updated;
-            });
-          } else if (ev.type === "error") {
-            const agentName = event.sender || "agent";
-            const errContent = ev.content || ev.error || "unknown error";
-            setMessages((prev) => [...prev, {
-              id: `err-${Date.now()}`,
-              sender: agentName,
-              role: event.role || "system",
-              content: `error: ${errContent}`,
-              timestamp: new Date().toISOString(),
-            }]);
-            setStreamingContent("");
-            setStreamingSender(null);
-            setStreamingRole(null);
-          }
-        } else if (event.type === "done") {
-          setSending(false);
-          setStreamingContent("");
-          setStreamingSender(null);
-          setStreamingRole(null);
-          setStreamingToolCalls([]);
-        } else if (event.type === "error") {
-          setSending(false);
-          setChatError(event.error || "failed to start chat");
-        }
-      });
-      streamControllerRef.current = controller;
-    }).catch((err) => {
-      console.error("Captain briefing failed:", err);
-      if (!mountedRef.current) return;
-      setSending(false);
-      setChatError("failed to brief captain");
-    });
-  }, [projectId]);
+  const handleSend = useCallback(() => {
+    const msg = input.trim();
+    if (!msg) return;
+    setInput("");
+    sendMsg(msg);
+  }, [input, sendMsg]);
 
   return (
-    <div className="flex flex-col resize-y overflow-hidden" style={{ height: "calc(100vh - 300px)", minHeight: "300px", maxHeight: "calc(100vh - 120px)" }}>
+    <div className="flex flex-1 flex-col overflow-hidden">
       {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
         {messages.length === 0 && !sending && (
@@ -242,7 +184,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               </div>
             )}
             <button
-              onClick={startProjectChat}
+              onClick={() => sendMsg("Let's get started on this project.")}
               disabled={sending}
               className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
             >
@@ -285,8 +227,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         })}
         {sending && !streamingContent && !streamingSender && streamingToolCalls.length === 0 && (
           <div className="text-xs py-1 text-text-muted animate-pulse">
-            <span className={`font-bold ${ROLE_COLORS["captain"]}`}>captain</span>{" "}
-            thinking...
+            agent thinking...
           </div>
         )}
         {streamingSender && (

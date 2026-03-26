@@ -10,6 +10,7 @@ import { useData } from "../lib/DataContext";
 import { SetCaptainDialog } from "./SetCaptainDialog";
 import { AddAgentDialog } from "./AddAgentDialog";
 import { ProjectChat } from "./ProjectChat";
+import { ProjectHierarchy } from "./ProjectHierarchy";
 
 // Status dot color based on instance status
 function statusDotClass(status: string): string {
@@ -163,7 +164,7 @@ export default function ProjectDetail() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-2rem)] flex-col">
+    <div className="flex h-full flex-col">
       {/* Compact header */}
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <button
@@ -208,7 +209,7 @@ export default function ProjectDetail() {
       {/* Split workspace: sidebar + chat */}
       <div className="flex flex-1 overflow-hidden">
         {/* Agent roster sidebar */}
-        <div className="flex w-[280px] flex-shrink-0 flex-col gap-4 overflow-y-auto border-r border-border bg-surface p-4">
+        <div className="flex w-[260px] flex-shrink-0 flex-col gap-2.5 overflow-y-auto border-r border-border bg-surface px-3 py-3">
           {/* Project info */}
           {project.description && (
             <p className="text-[11px] text-text-muted">{project.description}</p>
@@ -227,6 +228,37 @@ export default function ProjectDetail() {
                   style={{ width: `${(project as any).progress}%` }}
                 />
               </div>
+            </div>
+          )}
+
+          <div className="h-px w-full bg-border" />
+
+          {/* Commander */}
+          {commanderName && (
+            <div>
+              <div className="mb-2">
+                <span className="text-[10px] font-medium text-text-muted">// commander</span>
+              </div>
+              {(() => {
+                const cmdAgent = agents.find((a) => a.name === commanderName);
+                return cmdAgent ? (
+                  <button
+                    onClick={() => navigate(`/agents/${commanderName}/chat`)}
+                    className="flex w-full items-center gap-2.5 rounded border border-border bg-transparent px-3 py-2.5 text-left text-xs transition-all hover:border-accent/30 hover:bg-surface-hover/50"
+                  >
+                    <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${commanderStatus === "running" ? "bg-green" : "bg-text-muted"}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="font-medium text-text truncate">{cmdAgent.name}</div>
+                      <div className="text-text-muted truncate">{cmdAgent.framework} · :{cmdAgent.port}</div>
+                    </div>
+                    <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400 opacity-50 hover:opacity-100" />
+                  </button>
+                ) : (
+                  <div className="rounded border border-dashed border-border px-3 py-3 text-center text-[10px] text-text-muted">
+                    commander not found
+                  </div>
+                );
+              })()}
             </div>
           )}
 
@@ -308,12 +340,73 @@ export default function ProjectDetail() {
                 <Pause className="h-3 w-3" /> pause
               </button>
               <button
-                onClick={() => navigate(`/agents/${commanderName}/chat`)}
-                className="flex flex-1 items-center justify-center gap-1.5 rounded bg-accent px-2 py-1.5 text-[10px] font-medium text-white hover:bg-accent/80"
+                disabled
+                className="flex flex-1 items-center justify-center gap-1.5 rounded bg-accent px-2 py-1.5 text-[10px] font-medium text-white opacity-50 cursor-not-allowed"
+                title="coming soon"
               >
-                <MessageSquare className="h-3 w-3" /> commander
+                <Target className="h-3 w-3" /> review
               </button>
             </div>
+            <button
+              onClick={async () => {
+                if (!confirm("reset project chat and all agent sessions for this project?")) return;
+                try {
+                  // Reset project chat
+                  await fetch(`/api/projects/${project.id}/chat`, { method: "DELETE" });
+                  // Reset each agent's project session
+                  const sessionKey = `project-${project.id}`;
+                  const allAgents = [
+                    commanderName,
+                    ...(captainInstance ? [captainInstance.name] : []),
+                    ...(captainAgent ? [captainAgent.name] : []),
+                    ...roleAgents.map((a) => a.name),
+                  ].filter(Boolean);
+                  for (const name of allAgents) {
+                    await fetch(`/api/agents/${name}/sessions/${sessionKey}/reset`, { method: "POST" }).catch(() => {});
+                  }
+                  window.location.reload();
+                } catch (e) {
+                  setLoadError(e instanceof Error ? e.message : "reset failed");
+                }
+              }}
+              className="flex w-full items-center justify-center gap-1.5 rounded border border-red/30 px-2 py-1.5 text-[10px] text-red/70 hover:bg-red/10 hover:text-red"
+            >
+              <Trash2 className="h-3 w-3" /> reset project
+            </button>
+          </div>
+
+          <div className="h-px w-full bg-border" />
+
+          {/* Hierarchy diagram */}
+          <div>
+            <div className="mb-2">
+              <span className="text-[10px] font-medium text-text-muted">// hierarchy</span>
+            </div>
+            <ProjectHierarchy
+              commander={commanderName ? {
+                name: commanderName,
+                role: "commander",
+                status: commanderStatus === "running" ? "running" : "stopped",
+                onClick: () => navigate(`/agents/${commanderName}/chat`),
+              } : null}
+              captain={captainInstance ? {
+                name: captainInstance.display_name || captainInstance.name,
+                role: "captain",
+                status: captainInstance.status as any,
+                onClick: () => navigate(`/agents/${captainInstance.name}/chat`),
+              } : captainAgent ? {
+                name: captainAgent.name,
+                role: "captain",
+                status: captainAgent.alive ? "running" : "stopped",
+                onClick: () => navigate(`/agents/${captainAgent.name}/chat`),
+              } : null}
+              talons={roleAgents.map((a) => ({
+                name: a.display_name || a.name,
+                role: "talon" as const,
+                status: a.status as any,
+                onClick: () => navigate(`/agents/${a.name}/chat`),
+              }))}
+            />
           </div>
         </div>
 

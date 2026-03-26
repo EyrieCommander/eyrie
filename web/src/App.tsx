@@ -26,19 +26,23 @@ function AppContent() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
 
-      <main className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl px-8 py-8">
-          {error && (
-            <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
-              {error}
-            </div>
-          )}
+      <main className="flex-1 overflow-hidden">
+        <Routes>
+          {/* Full-width routes (no padding/max-width) */}
+          <Route path="/projects/:id" element={<ProjectDetail />} />
 
-          <Routes>
-            <Route path="/" element={<Navigate to="/hierarchy" replace />} />
-            <Route path="/hierarchy" element={<HierarchyPage />} />
-            <Route path="/projects" element={<ProjectListPage />} />
-            <Route path="/projects/:id" element={<ProjectDetail />} />
+          {/* Constrained routes */}
+          <Route path="*" element={
+            <div className="mx-auto max-w-5xl px-8 py-8 h-full overflow-y-auto">
+              {error && (
+                <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
+                  {error}
+                </div>
+              )}
+              <Routes>
+                <Route path="/" element={<Navigate to="/hierarchy" replace />} />
+                <Route path="/hierarchy" element={<HierarchyPage />} />
+                <Route path="/projects" element={<ProjectListPage />} />
             <Route
               path="/agents/overview"
               element={
@@ -53,10 +57,12 @@ function AppContent() {
               path="/agents/:name/:tab?"
               element={<AgentDetailRoute />}
             />
-            <Route path="/install" element={<InstallPage />} />
-            <Route path="/personas" element={<PersonasPage />} />
-          </Routes>
-        </div>
+                <Route path="/install" element={<InstallPage />} />
+                <Route path="/personas" element={<PersonasPage />} />
+              </Routes>
+            </div>
+          } />
+        </Routes>
       </main>
     </div>
   );

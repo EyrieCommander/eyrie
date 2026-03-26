@@ -744,3 +744,19 @@ func injectSystemMessage(projectID, content string) {
 		slog.Warn("injectSystemMessage: append", "project", projectID, "error", err)
 	}
 }
+
+// handleProjectChatClear deletes the project's chat history.
+// DELETE /api/projects/{id}/chat
+func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	cs, err := project.NewChatStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	if err := cs.ClearChat(projectID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}

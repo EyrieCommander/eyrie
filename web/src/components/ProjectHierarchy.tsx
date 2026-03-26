@@ -70,36 +70,39 @@ export function ProjectHierarchy({ commander, captain, talons }: ProjectHierarch
       {captain && (
         <>
           <HierarchyNodeCard node={captain} />
-          {talons.length > 0 && <Connector vertical />}
+          <Connector vertical />
         </>
       )}
 
       {/* Talons */}
-      {talons.length > 0 && (
-        <div className="flex flex-col items-center gap-0">
-          {/* Horizontal branch line */}
-          {talons.length > 1 && (
-            <div className="flex items-center">
-              {talons.map((_, i) => (
-                <div key={i} className="flex items-center">
-                  {i > 0 && <div className="h-px w-6 bg-border" />}
-                  <div className="h-3 w-px bg-border" />
-                </div>
+      <div className="flex flex-col items-center gap-0">
+        {talons.length > 0 ? (
+          <>
+            {/* Horizontal branch line */}
+            {talons.length > 1 && (
+              <div className="flex items-center">
+                {talons.map((_, i) => (
+                  <div key={i} className="flex items-center">
+                    {i > 0 && <div className="h-px w-6 bg-border" />}
+                    <div className="h-3 w-px bg-border" />
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex flex-wrap items-start justify-center gap-2">
+              {talons.map((t) => (
+                <HierarchyNodeCard key={t.name} node={t} />
               ))}
             </div>
-          )}
-          <div className="flex flex-wrap items-start justify-center gap-2">
-            {talons.map((t) => (
-              <HierarchyNodeCard key={t.name} node={t} />
-            ))}
+          </>
+        ) : (captain || commander) && (
+          /* Empty talon placeholder */
+          <div className="flex items-center gap-2 rounded border border-dashed border-border px-3 py-2 text-[10px] text-text-muted">
+            <Bot className="h-3 w-3" />
+            <span>no talons yet</span>
           </div>
-        </div>
-      )}
-
-      {/* Empty state */}
-      {!commander && !captain && talons.length === 0 && (
-        <div className="py-2 text-[10px] text-text-muted">no agents assigned</div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
