@@ -21,13 +21,13 @@ Eyrie gives you a single CLI and web dashboard to discover, monitor, and control
 - **Web dashboard** for visual monitoring (served from the same binary)
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
 
-<img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
-
 ### In development
 
 - **Project orchestration**: organize agents into project teams with commander/captain/talon hierarchy
 - **Project chat**: multi-agent group conversations with @mention routing
 - **Persona catalog**: browse and install agent personalities from a registry
+
+<img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
 
 ## Install
 
@@ -61,8 +61,6 @@ eyrie dashboard
 # Install a new framework
 eyrie install hermes
 ```
-
-<img width="1355" height="781" alt="image" src="https://github.com/user-attachments/assets/a28909f1-6c35-46eb-aa58-4217f7de3b60" />
 
 ## CLI Commands
 
@@ -100,6 +98,8 @@ name = "remote-zeroclaw"
 framework = "zeroclaw"
 url = "http://192.168.1.50:42617"
 ```
+
+<img width="1355" height="781" alt="image" src="https://github.com/user-attachments/assets/a28909f1-6c35-46eb-aa58-4217f7de3b60" />
 
 ## Architecture
 
