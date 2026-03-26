@@ -186,6 +186,7 @@ func (s *Store) Delete(id string) error {
 }
 
 // Dir returns the base directory for a given instance ID.
+// Returns an empty string if the ID is invalid (fails path-safety validation).
 func (s *Store) Dir(id string) string {
 	if validateID(id) != nil {
 		return ""

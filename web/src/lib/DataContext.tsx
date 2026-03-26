@@ -8,7 +8,7 @@ interface DataContextValue {
   instances: AgentInstance[];
   loading: boolean;
   error: string | null;
-  refresh: () => Promise<void>;
+  refresh: (isUserInitiated?: boolean) => Promise<void>;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -20,9 +20,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (isUserInitiated = true) => {
     try {
-      setLoading(true);
+      if (isUserInitiated) setLoading(true);
       setError(null);
       const errors: string[] = [];
 
@@ -65,7 +65,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
     const scheduleRefresh = () => {
       timeoutId = setTimeout(async () => {
         if (cancelled) return;
-        await refresh();
+        await refresh(false);
         if (!cancelled) scheduleRefresh();
       }, 30000);
     };

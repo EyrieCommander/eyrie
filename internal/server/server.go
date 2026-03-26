@@ -23,6 +23,7 @@ type Server struct {
 	mux    *http.ServeMux
 	server *http.Server
 	hidden *config.HiddenStore
+	events *EventBus
 }
 
 func New(cfg config.Config) *Server {
@@ -31,7 +32,7 @@ func New(cfg config.Config) *Server {
 		slog.Warn("failed to load hidden sessions store", "error", err)
 		hidden = nil
 	}
-	s := &Server{cfg: cfg, hidden: hidden}
+	s := &Server{cfg: cfg, hidden: hidden, events: NewEventBus()}
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
@@ -93,6 +94,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/projects/{id}/intake", s.handleProjectIntakeMessages)
 	s.mux.HandleFunc("POST /api/projects/{id}/intake", s.handleProjectIntake)
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
+	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)

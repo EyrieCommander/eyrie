@@ -275,7 +275,9 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "captain is stopped and failed to start: " + startErr.Error()})
 					return
 				}
-				_ = instStore.UpdateStatus(inst.ID, instance.StatusStarting)
+				if err := instStore.UpdateStatus(inst.ID, instance.StatusStarting); err != nil {
+				slog.Warn("failed to update instance status to starting", "instance", inst.ID, "error", err)
+			}
 				// Wait for agent to become reachable (poll discovery)
 				for attempt := 0; attempt < 10; attempt++ {
 					select {

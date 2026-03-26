@@ -148,6 +148,10 @@ func (s *Server) handleInstallPersona(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, existing)
 		return
 	}
+	if existErr != nil && !errors.Is(existErr, persona.ErrNotFound) {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to check installed persona: %v", existErr)})
+		return
+	}
 
 	found.Installed = true
 	if err := store.Save(*found); err != nil {

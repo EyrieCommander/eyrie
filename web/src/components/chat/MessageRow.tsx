@@ -39,6 +39,16 @@ export function MessageRow({ msg, expanded, onToggle }: MessageRowProps) {
             }
           : undefined
       }
+      {...(canToggle ? {
+        role: "button",
+        tabIndex: 0,
+        onKeyDown: (e: React.KeyboardEvent) => {
+          if ((e.key === "Enter" || e.key === " ") && !window.getSelection()?.toString()) {
+            if (e.key === " ") e.preventDefault();
+            onToggle!();
+          }
+        },
+      } : {})}
     >
       <span className="text-text-muted">
         {(() => { const d = new Date(msg.timestamp); return isNaN(d.getTime()) ? "-" : d.toLocaleTimeString(); })()}

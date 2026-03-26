@@ -58,6 +58,8 @@ export default function ProjectDetail() {
   const [commanderName, setCommanderName] = useState("");
   const [commanderStatus, setCommanderStatus] = useState("");
   const [startingAgent, setStartingAgent] = useState("");
+  const [briefingLoading, setBriefingLoading] = useState(false);
+  const [briefingError, setBriefingError] = useState("");
   const hasLoadedRef = useRef(false);
   const pollRef = useRef<{ interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null }>({ interval: null, timeout: null });
 
@@ -359,17 +361,26 @@ export default function ProjectDetail() {
             />
             <button
               onClick={() => {
+                setBriefingLoading(true);
+                setBriefingError("");
                 const { sessionReady } = streamCaptainBriefing(project.id, (ev) => {
                   if (ev.type === "error") console.error("Captain briefing error:", ev.error);
                 });
                 sessionReady
                   .then(() => navigate(`/agents/${captainInstance.name}/chat?brief=captain`))
-                  .catch((e) => console.error("Captain briefing session failed:", e));
+                  .catch((e) => {
+                    setBriefingError(e instanceof Error ? e.message : "briefing failed");
+                  })
+                  .finally(() => setBriefingLoading(false));
               }}
-              className="ml-4 text-xs text-green hover:text-green/80 transition-colors"
+              disabled={briefingLoading}
+              className="ml-4 text-xs text-green hover:text-green/80 transition-colors disabled:opacity-50"
             >
-              brief captain on project
+              {briefingLoading ? "briefing..." : "brief captain on project"}
             </button>
+            {briefingError && (
+              <p className="ml-4 mt-1 text-xs text-red">{briefingError}</p>
+            )}
           </div>
         ) : captainAgent ? (
           <button

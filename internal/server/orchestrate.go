@@ -189,14 +189,14 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		}
 
 		// Track this response so later agents in the sequence see it
-		turnHistory = append(turnHistory, fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent))
+		turnHistory = append(turnHistory, fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, trimmed))
 
 		// Build parts from tool calls + final text
 		var parts []project.ChatPart
 		if len(toolCalls) > 0 {
 			parts = append(parts, toolCalls...)
-			if responseContent != "" {
-				parts = append(parts, project.ChatPart{Type: "text", Text: responseContent})
+			if trimmed != "" {
+				parts = append(parts, project.ChatPart{Type: "text", Text: trimmed})
 			}
 		}
 
@@ -205,7 +205,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			ID:        uuid.New().String(),
 			Sender:    p.name,
 			Role:      p.role,
-			Content:   responseContent,
+			Content:   trimmed,
 			Timestamp: time.Now(),
 			Parts:     parts,
 		}
@@ -215,7 +215,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 
 		// Cross-agent sync: inform other participants of this agent's response.
 		// Retries up to 2 times with backoff; surfaces failures as system messages.
-		labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent)
+		labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, trimmed)
 		for _, other := range participants {
 			if other.name == p.name {
 				continue
@@ -285,10 +285,10 @@ func (o *ChatOrchestrator) RunIntakeChat(ctx context.Context, proj *project.Proj
 
 	// Check if this is the first intake message
 	intakeMessages, intakeErr := o.chatStore.IntakeMessages(projectID, 1)
-	firstIntake := intakeErr == nil && len(intakeMessages) == 0
 	if intakeErr != nil {
-		slog.Warn("failed to check intake messages", "project", projectID, "error", intakeErr)
+		return fmt.Errorf("failed to check intake messages for project %s: %w", projectID, intakeErr)
 	}
+	firstIntake := len(intakeMessages) == 0
 
 	// Store user message
 	userMsg := project.ChatMessage{
@@ -431,5 +431,6 @@ func streamBriefing(ctx context.Context, agent adapter.Agent, agentName string, 
 		sse.WriteEvent(ev)
 	}
 
+	sse.WriteDone()
 	return nil
 }

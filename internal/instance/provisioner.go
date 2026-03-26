@@ -235,6 +235,8 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		},
 		// Workaround for ZeroClaw #4764: seatbelt rejects 127.0.0.1 in
 		// network rules on macOS Monterey. Disable until upstream fix.
+		// TODO(2026-03-26): Re-check ZeroClaw #4764 status and re-enable
+		// sandbox once the upstream fix is released.
 		"security": map[string]any{
 			"sandbox": map[string]any{
 				"backend": "none",

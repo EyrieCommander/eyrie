@@ -597,7 +597,7 @@ export function streamCaptainBriefing(
 export async function fetchProjectIntake(projectId: string): Promise<ProjectChatMessage[]> {
   const res = await fetch(`${BASE}/api/projects/${projectId}/intake`);
   if (!res.ok) {
-    throw new Error(`fetchProjectIntake failed: ${res.status} ${res.url}`);
+    throw new Error(`Failed to fetch project intake: ${res.status} ${res.statusText}`);
   }
   return res.json();
 }
@@ -636,7 +636,7 @@ export function streamProjectIntake(
 export async function fetchProjectChat(projectId: string): Promise<ProjectChatMessage[]> {
   const res = await fetch(`${BASE}/api/projects/${projectId}/chat`);
   if (!res.ok) {
-    throw new Error(`fetchProjectChat failed: ${res.status} ${res.url}`);
+    throw new Error(`Failed to fetch project chat: ${res.status} ${res.statusText}`);
   }
   return res.json();
 }

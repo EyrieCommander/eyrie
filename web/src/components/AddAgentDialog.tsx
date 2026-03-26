@@ -21,6 +21,14 @@ export function AddAgentDialog({
   const [error, setError] = useState("");
 
   useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  useEffect(() => {
     fetchPersonas().then(setPersonas).catch((err) => {
       console.error("Failed to load personas:", err);
       setPersonas([]);
@@ -57,18 +65,17 @@ export function AddAgentDialog({
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
       onClick={onClose}
-      onKeyDown={(e) => { if (e.key === "Escape") onClose(); }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-agent-dialog-title"
-      tabIndex={-1}
     >
       <div className="w-full max-w-md rounded border border-border bg-bg p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
         <h2 id="add-agent-dialog-title" className="text-sm font-bold text-text">add agent to project</h2>
 
         <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">name</label>
+          <label htmlFor="agent-name" className="block text-xs font-medium text-text-secondary mb-1">name</label>
           <input
+            id="agent-name"
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
@@ -79,8 +86,9 @@ export function AddAgentDialog({
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">framework</label>
+          <label htmlFor="agent-framework" className="block text-xs font-medium text-text-secondary mb-1">framework</label>
           <select
+            id="agent-framework"
             value={framework}
             onChange={(e) => setFramework(e.target.value)}
             className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
@@ -92,8 +100,9 @@ export function AddAgentDialog({
         </div>
 
         <div>
-          <label className="block text-xs font-medium text-text-secondary mb-1">persona (optional)</label>
+          <label htmlFor="agent-persona" className="block text-xs font-medium text-text-secondary mb-1">persona (optional)</label>
           <select
+            id="agent-persona"
             value={personaId}
             onChange={(e) => setPersonaId(e.target.value)}
             className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"

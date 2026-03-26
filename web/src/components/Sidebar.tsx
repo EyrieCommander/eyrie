@@ -67,6 +67,9 @@ export default function Sidebar() {
           </Link>
           <button
             onClick={() => setProjectsExpanded((prev) => !prev)}
+            aria-expanded={projectsExpanded}
+            aria-controls="projects-list"
+            aria-label={projectsExpanded ? "Collapse projects" : "Expand projects"}
             className="px-3 py-1.5 hover:text-text transition-colors"
           >
             {projectsExpanded ? (
@@ -78,7 +81,7 @@ export default function Sidebar() {
         </div>
 
         {projectsExpanded && projects.length > 0 && (
-          <div className="ml-4 border-l border-border pl-2 space-y-px">
+          <div id="projects-list" className="ml-4 border-l border-border pl-2 space-y-px">
             {projects.map((project) => {
               const isActive = activeProject === project.id;
               return (
@@ -115,6 +118,9 @@ export default function Sidebar() {
           </Link>
           <button
             onClick={() => setAgentsExpanded((prev) => !prev)}
+            aria-expanded={agentsExpanded}
+            aria-controls="agents-list"
+            aria-label={agentsExpanded ? "Collapse agents" : "Expand agents"}
             className="px-3 py-1.5 hover:text-text transition-colors"
           >
             {agentsExpanded ? (
@@ -126,7 +132,7 @@ export default function Sidebar() {
         </div>
 
         {agentsExpanded && agents.length > 0 && (
-          <div className="ml-4 border-l border-border pl-2 space-y-px">
+          <div id="agents-list" className="ml-4 border-l border-border pl-2 space-y-px">
             {agents.map((agent) => {
               const isActive = activeAgent === agent.name;
               return (

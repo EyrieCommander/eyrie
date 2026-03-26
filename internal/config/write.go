@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 
@@ -210,7 +211,7 @@ func CoerceJSONNumbers(v interface{}) {
 	switch val := v.(type) {
 	case map[string]interface{}:
 		for k, child := range val {
-			if f, ok := child.(float64); ok && f == float64(int64(f)) {
+			if f, ok := child.(float64); ok && f == float64(int64(f)) && f <= float64(math.MaxInt64) && f >= float64(math.MinInt64) {
 				val[k] = int64(f)
 			} else {
 				CoerceJSONNumbers(child)
@@ -218,7 +219,7 @@ func CoerceJSONNumbers(v interface{}) {
 		}
 	case []interface{}:
 		for i, child := range val {
-			if f, ok := child.(float64); ok && f == float64(int64(f)) {
+			if f, ok := child.(float64); ok && f == float64(int64(f)) && f <= float64(math.MaxInt64) && f >= float64(math.MinInt64) {
 				val[i] = int64(f)
 			} else {
 				CoerceJSONNumbers(child)

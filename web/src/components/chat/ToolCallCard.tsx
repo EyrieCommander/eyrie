@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useId } from "react";
 import type { ToolCall } from "../../lib/chat-events";
 import type { ChatPart } from "../../lib/types";
 
@@ -59,7 +59,8 @@ export function PartToolCallCard({
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   const isOuter = headerStyle === "outer";
-  const panelId = `toolcall-${part.id || "panel"}`;
+  const generatedId = useId();
+  const panelId = `toolcall-${part.id || generatedId}`;
 
   return (
     <div className={isOuter ? "text-[11px]" : "border-b border-border/30 last:border-b-0 text-[11px]"}>
@@ -124,7 +125,8 @@ export interface ToolCallCardProps {
 
 export function ToolCallCard({ tc }: ToolCallCardProps) {
   const [expanded, setExpanded] = useState(false);
-  const panelId = `toolcall-${tc.toolId || "panel"}`;
+  const generatedId = useId();
+  const panelId = `toolcall-${tc.toolId || generatedId}`;
 
   return (
     <div className="my-1.5 ml-4 rounded border border-border bg-surface-hover/30 text-[11px] overflow-hidden">
@@ -183,6 +185,8 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
 
 export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
   const [expanded, setExpanded] = useState(true);
+  const generatedId = useId();
+  const panelId = `toolrun-${generatedId}`;
   const failCount = tools.filter((t) => t.error).length;
 
   // Single tool: render one PartToolCallCard directly (no outer header)
@@ -214,6 +218,8 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
           e.stopPropagation();
           setExpanded(!expanded);
         }}
+        aria-expanded={expanded}
+        aria-controls={panelId}
         className="flex w-full items-center gap-2 px-3 py-1.5 text-left"
       >
         <span className="font-mono text-text">{summary}</span>
@@ -229,7 +235,7 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
         </span>
       </button>
       {expanded && (
-        <div className="border-t border-border">
+        <div id={panelId} className="border-t border-border">
           {tools.map((part, i) => (
             <PartToolCallCard
               key={part.id || `tc-${i}`}

@@ -139,6 +139,8 @@ export function ChatPanel({
   const [newSessionName, setNewSessionName] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
+  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [searchParams, setSearchParams] = useSearchParams();
   const requestedSession = searchParams.get("session");
@@ -450,7 +452,7 @@ export function ChatPanel({
                   if (!mounted || retryCount >= maxRetries) return;
                   retryCount++;
                   const delay = 1000 * Math.pow(2, retryCount - 1);
-                  setTimeout(() => {
+                  const timeoutId = setTimeout(() => {
                     if (!mounted) return;
                     fetchSessions(agentName)
                       .then((resp2) => {
@@ -469,7 +471,7 @@ export function ChatPanel({
                         console.warn("Failed to fetch briefing sessions:", err);
                       });
                   }, delay);
-                  // Note: timeoutId is cleaned up via mounted check
+                  retryTimeoutRef.current.push(timeoutId);
                 };
                 retryFetchBriefing();
               }
@@ -512,6 +514,8 @@ export function ChatPanel({
       mounted = false;
       controller.abort();
       delete (window as any)[briefKey];
+      retryTimeoutRef.current.forEach(clearTimeout);
+      retryTimeoutRef.current = [];
     };
   }, [briefMode, alive, agentName, briefKey, setSearchParams, handleChatEvent]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -542,7 +546,8 @@ export function ChatPanel({
         handleChatEvent(ev, () => {
           // On done: refresh current session and focus input
           inputRef.current?.focus();
-          setTimeout(() => refreshCurrentSession(currentSessionKey), 500);
+          if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
+          refreshTimeoutRef.current = setTimeout(() => refreshCurrentSession(currentSessionKey), 500);
         });
       },
     );
@@ -552,6 +557,7 @@ export function ChatPanel({
   useEffect(() => {
     return () => {
       abortRef.current?.abort();
+      if (refreshTimeoutRef.current) clearTimeout(refreshTimeoutRef.current);
     };
   }, []);
 

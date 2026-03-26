@@ -343,7 +343,7 @@ export default function ProjectListPage() {
         </div>
         <div className="flex items-center gap-3">
           <button
-            onClick={refresh}
+            onClick={() => refresh()}
             disabled={loading}
             className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
           >

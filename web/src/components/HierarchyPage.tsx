@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Crown, Briefcase, User, ChevronRight } from "lucide-react";
 import type { HierarchyTree, AgentInstance, CommanderInfo, ProjectTree, Persona } from "../lib/types";
@@ -434,6 +434,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
 export default function HierarchyPage() {
   const navigate = useNavigate();
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
+  const hierarchyRef = useRef<HierarchyTree | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
 
@@ -443,12 +444,12 @@ export default function HierarchyPage() {
       setLoading(true);
       const data = await fetchHierarchy();
       setHierarchy(data);
+      hierarchyRef.current = data;
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Failed to fetch hierarchy";
-      setHierarchy((prev) => {
-        if (prev === null) setFetchError(msg);
-        return prev;
-      });
+      if (hierarchyRef.current === null) {
+        setFetchError(msg);
+      }
     } finally {
       setLoading(false);
     }
@@ -480,7 +481,7 @@ export default function HierarchyPage() {
         </div>
         <div>
           <button
-            onClick={refresh}
+            onClick={() => refresh()}
             disabled={loading}
             className="text-xs text-text-muted hover:text-text transition-colors disabled:opacity-50"
           >
@@ -511,7 +512,7 @@ export default function HierarchyPage() {
           </p>
         </div>
         <button
-          onClick={refresh}
+          onClick={() => refresh()}
           disabled={loading}
           className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
         >

@@ -217,6 +217,8 @@ func runDetached(ctx context.Context, logDir string, command string, args ...str
 	return runDetachedWithEnv(ctx, logDir, nil, command, args...)
 }
 
+// runDetachedWithEnv starts a detached daemon process. The context parameter is
+// intentionally unused because the process must outlive the caller's context.
 func runDetachedWithEnv(_ context.Context, logDir string, env []string, command string, args ...string) error {
 	cmd := exec.Command(command, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
@@ -274,6 +276,20 @@ func killByConfigDir(configDir string) (found bool, err error) {
 	return true, nil
 }
 
+// processExistsByConfigDir checks if any processes match the config-dir pattern
+// without sending a signal. Used in restart loops to wait for process exit.
+func processExistsByConfigDir(configDir string) (bool, error) {
+	escaped := regexp.QuoteMeta(configDir)
+	cmd := exec.Command("pgrep", "-f", fmt.Sprintf("zeroclaw daemon --config-dir %s([[:space:]]|$)", escaped))
+	if err := cmd.Run(); err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("pgrep for config-dir %s: %w", configDir, err)
+	}
+	return true, nil
+}
+
 // ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
 // This is used for provisioned instances that have their own config files.
 func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {
@@ -297,7 +313,7 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			// Wait for old process to exit before starting a new one
 			for i := 0; i < 10; i++ {
 				time.Sleep(100 * time.Millisecond)
-				found, err := killByConfigDir(configDir)
+				found, err := processExistsByConfigDir(configDir)
 				if err != nil || !found {
 					break // no matching process found, safe to start new one
 				}

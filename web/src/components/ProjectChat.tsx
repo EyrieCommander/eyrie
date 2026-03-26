@@ -22,6 +22,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState("");
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [streamingSender, setStreamingSender] = useState<string | null>(null);
   const [streamingRole, setStreamingRole] = useState<string | null>(null);
   const [streamingContent, setStreamingContent] = useState("");
@@ -36,7 +37,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
   // Load chat history and poll for new messages
   useEffect(() => {
-    fetchProjectChat(projectId).then(setMessages).catch(() => {});
+    fetchProjectChat(projectId).then(setMessages).catch((err) => {
+      console.error("fetchProjectChat error:", err);
+      setFetchError(err instanceof Error ? err.message : "Failed to load chat");
+    });
     const interval = setInterval(() => {
       if (sending) return;
       fetchProjectChat(projectId).then((msgs) => {
@@ -50,7 +54,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           }
           return prev;
         });
-      }).catch(() => {});
+      }).catch((err) => {
+        console.error("fetchProjectChat poll error:", err);
+      });
     }, 4000);
     return () => clearInterval(interval);
   }, [projectId, sending]);
@@ -82,40 +88,42 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     const controller = streamProjectChat(projectId, msg, (event) => {
       if (!mountedRef.current) return;
       if (event.type === "message" && event.message) {
-        setMessages((prev) => [...prev, event.message!]);
+        const msg = event.message;
+        setMessages((prev) => [...prev, msg]);
         setStreamingContent("");
         setStreamingSender(null);
         setStreamingRole(null);
         setStreamingToolCalls([]);
       } else if (event.type === "agent_event" && event.event) {
-        if (event.event.type === "delta") {
+        const ev = event.event;
+        if (ev.type === "delta") {
           setStreamingSender(event.sender || null);
           setStreamingRole(event.role || null);
-          setStreamingContent((prev) => prev + (event.event!.content || ""));
-        } else if (event.event.type === "tool_start") {
+          setStreamingContent((prev) => prev + (ev.content || ""));
+        } else if (ev.type === "tool_start") {
           setStreamingSender(event.sender || null);
           setStreamingRole(event.role || null);
           setStreamingToolCalls((prev) => [...prev, {
             type: "tool_call",
-            id: event.event!.tool_id,
-            name: event.event!.tool,
+            id: ev.tool_id,
+            name: ev.tool,
             pending: true,
           }]);
-        } else if (event.event.type === "tool_result") {
+        } else if (ev.type === "tool_result") {
           setStreamingToolCalls((prev) => {
             const updated = [...prev];
             for (let i = updated.length - 1; i >= 0; i--) {
-              if ((event.event!.tool_id && updated[i].id === event.event!.tool_id) ||
-                  (!event.event!.tool_id && updated[i].name === event.event!.tool && updated[i].pending)) {
-                updated[i] = { ...updated[i], output: event.event!.output, pending: false };
+              if ((ev.tool_id && updated[i].id === ev.tool_id) ||
+                  (!ev.tool_id && updated[i].name === ev.tool && updated[i].pending)) {
+                updated[i] = { ...updated[i], output: ev.output, pending: false };
                 break;
               }
             }
             return updated;
           });
-        } else if (event.event.type === "error") {
+        } else if (ev.type === "error") {
           const agentName = event.sender || "agent";
-          const errContent = event.event.content || "unknown error";
+          const errContent = ev.content || "unknown error";
           setMessages((prev) => [...prev, {
             id: `err-${Date.now()}`,
             sender: agentName,
@@ -152,37 +160,52 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       const controller = streamProjectChat(projectId, "Let's get started on this project.", (event) => {
         if (!mountedRef.current) return;
         if (event.type === "message" && event.message) {
-          setMessages((prev) => [...prev, event.message!]);
+          const msg = event.message;
+          setMessages((prev) => [...prev, msg]);
           setStreamingContent("");
           setStreamingSender(null);
           setStreamingRole(null);
           setStreamingToolCalls([]);
         } else if (event.type === "agent_event" && event.event) {
-          if (event.event.type === "delta") {
+          const ev = event.event;
+          if (ev.type === "delta") {
             setStreamingSender(event.sender || null);
             setStreamingRole(event.role || null);
-            setStreamingContent((prev) => prev + (event.event!.content || ""));
-          } else if (event.event.type === "tool_start") {
+            setStreamingContent((prev) => prev + (ev.content || ""));
+          } else if (ev.type === "tool_start") {
             setStreamingSender(event.sender || null);
             setStreamingRole(event.role || null);
             setStreamingToolCalls((prev) => [...prev, {
               type: "tool_call",
-              id: event.event!.tool_id,
-              name: event.event!.tool,
+              id: ev.tool_id,
+              name: ev.tool,
               pending: true,
             }]);
-          } else if (event.event.type === "tool_result") {
+          } else if (ev.type === "tool_result") {
             setStreamingToolCalls((prev) => {
               const updated = [...prev];
               for (let i = updated.length - 1; i >= 0; i--) {
-                if ((event.event!.tool_id && updated[i].id === event.event!.tool_id) ||
-                    (!event.event!.tool_id && updated[i].name === event.event!.tool && updated[i].pending)) {
-                  updated[i] = { ...updated[i], output: event.event!.output, pending: false };
+                if ((ev.tool_id && updated[i].id === ev.tool_id) ||
+                    (!ev.tool_id && updated[i].name === ev.tool && updated[i].pending)) {
+                  updated[i] = { ...updated[i], output: ev.output, pending: false };
                   break;
                 }
               }
               return updated;
             });
+          } else if (ev.type === "error") {
+            const agentName = event.sender || "agent";
+            const errContent = ev.content || ev.error || "unknown error";
+            setMessages((prev) => [...prev, {
+              id: `err-${Date.now()}`,
+              sender: agentName,
+              role: event.role || "system",
+              content: `error: ${errContent}`,
+              timestamp: new Date().toISOString(),
+            }]);
+            setStreamingContent("");
+            setStreamingSender(null);
+            setStreamingRole(null);
           }
         } else if (event.type === "done") {
           setSending(false);
@@ -298,6 +321,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         )}
       </div>
 
+      {fetchError && !sending && messages.length === 0 && (
+        <div className="text-center py-4">
+          <p className="text-xs text-red">{fetchError}</p>
+        </div>
+      )}
+
       {/* Input */}
       <div className="relative border-t border-border p-3 flex gap-2">
         {showMentions && (() => {
@@ -349,7 +378,8 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((prev) => Math.max(prev - 1, 0)); return; }
               if ((e.key === "Enter" || e.key === "Tab") && filtered.length > 0) {
                 e.preventDefault();
-                const p = filtered[mentionIdx];
+                const idx = Math.min(mentionIdx, filtered.length - 1);
+                const p = filtered[idx];
                 const atIdx = input.lastIndexOf("@");
                 const before = atIdx >= 0 ? input.slice(0, atIdx) : input;
                 setInput(before + "@" + p.role + " ");

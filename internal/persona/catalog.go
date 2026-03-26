@@ -153,9 +153,17 @@ func (c *CatalogClient) loadCache() (*PersonaRegistry, error) {
 	if time.Since(stat.ModTime()) > 24*time.Hour {
 		return nil, fmt.Errorf("cache expired")
 	}
-	data, err := os.ReadFile(path)
+	f, err := os.Open(path)
 	if err != nil {
 		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxPersonaCatalogSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxPersonaCatalogSize {
+		return nil, fmt.Errorf("cached persona catalog exceeds %d byte limit", maxPersonaCatalogSize)
 	}
 	var reg PersonaRegistry
 	if err := json.Unmarshal(data, &reg); err != nil {

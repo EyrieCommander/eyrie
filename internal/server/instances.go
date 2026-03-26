@@ -1,11 +1,13 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/manager"
@@ -99,7 +101,9 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	// Auto-start if requested
 	var autoStartErr error
 	if req.AutoStart != nil && *req.AutoStart {
-		if autoStartErr = manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); autoStartErr != nil {
+		startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer startCancel()
+		if autoStartErr = manager.ExecuteWithConfig(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart); autoStartErr != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
 			inst.Status = instance.StatusError
 		} else {
@@ -122,6 +126,19 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+	}
+
+	// Publish event for real-time UI updates
+	if inst.ProjectID != "" {
+		s.events.Publish(ProjectEvent{
+			Type:      "agent_created",
+			ProjectID: inst.ProjectID,
+			Agent:     inst.Name,
+			AgentRole: string(inst.HierarchyRole),
+			Detail:    fmt.Sprintf("%s created (%s, :%d)", inst.DisplayName, inst.Framework, inst.Port),
+			Data:      inst,
+			Timestamp: time.Now(),
+		})
 	}
 
 	if req.AutoStart != nil && *req.AutoStart && inst.Status == instance.StatusError {
@@ -161,16 +178,6 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if update.Name != "" && update.Name != inst.Name {
-		// Check uniqueness before allowing rename
-		exists, err := store.NameExists(update.Name)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
-		if exists {
-			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance name \"" + update.Name + "\" already exists"})
-			return
-		}
 		inst.Name = update.Name
 	}
 	if update.DisplayName != "" {
@@ -178,7 +185,11 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := store.Save(*inst); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		if errors.Is(err, instance.ErrNameExists) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance name \"" + inst.Name + "\" already exists"})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 		return
 	}
 	writeJSON(w, http.StatusOK, inst)
@@ -261,7 +272,9 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, mgrAction); err != nil {
+	execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer execCancel()
+	if err := manager.ExecuteWithConfig(execCtx, inst.Framework, inst.ConfigPath, mgrAction); err != nil {
 		// Persist the error status so the instance reflects the failure
 		inst.Status = instance.StatusError
 		if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {
@@ -278,6 +291,22 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := store.UpdateStatus(id, newStatus); err != nil {
 		slog.Warn("failed to persist instance status", "instance", id, "status", newStatus, "error", err)
+	}
+
+	// Publish event for real-time UI updates
+	if inst.ProjectID != "" {
+		eventType := "agent_started"
+		if action == "stop" {
+			eventType = "agent_stopped"
+		}
+		s.events.Publish(ProjectEvent{
+			Type:      eventType,
+			ProjectID: inst.ProjectID,
+			Agent:     inst.Name,
+			AgentRole: string(inst.HierarchyRole),
+			Detail:    fmt.Sprintf("%s %s", inst.Name, action),
+			Timestamp: time.Now(),
+		})
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": string(newStatus)})

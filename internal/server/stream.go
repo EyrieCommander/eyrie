@@ -18,16 +18,17 @@ type SSEWriter struct {
 	sent bool
 }
 
-// NewSSEWriter sets SSE headers and returns a writer.
-// Returns an error if the ResponseWriter does not support flushing.
+// NewSSEWriter validates flushing support, sets SSE headers, and returns a writer.
+// The flusher check happens before setting headers so callers can safely fall
+// back to writeJSON on error without stale SSE headers in the response.
 func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		return nil, fmt.Errorf("streaming not supported")
 	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
 	return &SSEWriter{w: w, f: flusher}, nil
 }
 

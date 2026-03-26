@@ -836,10 +836,8 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		defer close(ch)
 		defer conn.CloseNow()
 
-		// Use a long-lived context for the WS read loop. The parent ctx may
-		// be tied to an HTTP request that can be cancelled by the client, but
-		// we want to finish reading the agent's response so it gets captured.
-		readCtx, readCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		// Derive a timeout from the parent context for the WS read loop.
+		readCtx, readCancel := context.WithTimeout(ctx, 5*time.Minute)
 		defer readCancel()
 
 		// Phase 1: Wait for session_start frame with timeout
@@ -933,7 +931,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 				ev = ChatEvent{Type: "tool_result", Tool: name, ToolID: toolID, Output: output}
 				// Update the matching tool call part with output
 				for i := range toolCalls {
-					if toolCalls[i].ID == toolID || (toolID == "" && toolCalls[i].Name == name) {
+					if toolCalls[i].ID == toolID || (toolID == "" && toolCalls[i].Name == name && toolCalls[i].Output == "") {
 						toolCalls[i].Output = output
 						break
 					}
