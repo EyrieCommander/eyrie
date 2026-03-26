@@ -31,22 +31,25 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const streamControllerRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
 
-  // Load chat history and poll for new messages
+  // Load chat history on mount, poll when idle
   useEffect(() => {
     fetchProjectChat(projectId).then(setMessages).catch((err) => {
       console.error("fetchProjectChat error:", err);
       setFetchError(err instanceof Error ? err.message : "Failed to load chat");
     });
+  }, [projectId]);
+
+  // Poll for new messages only when NOT sending
+  useEffect(() => {
+    if (sending) return;
     const interval = setInterval(() => {
-      if (sending) return;
       fetchProjectChat(projectId).then((msgs) => {
         setMessages((prev) => {
           if (msgs.length !== prev.length) return msgs;
-          // Check if any message identity changed (edits/replacements)
           for (let i = 0; i < msgs.length; i++) {
             if (msgs[i].id !== prev[i].id || msgs[i].timestamp !== prev[i].timestamp) {
               return msgs;
@@ -103,10 +106,13 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           }
           return [...prev, msg];
         });
-        setStreamingContent("");
-        setStreamingSender(null);
-        setStreamingRole(null);
-        setStreamingToolCalls([]);
+        // Only clear streaming state for agent responses (not user/system echoes)
+        if (msg.role !== "user" && msg.role !== "system") {
+          setStreamingContent("");
+          setStreamingSender(null);
+          setStreamingRole(null);
+          setStreamingToolCalls([]);
+        }
       } else if (event.type === "agent_event" && event.event) {
         const ev = event.event;
         if (ev.type === "delta") {
@@ -166,6 +172,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     const msg = input.trim();
     if (!msg) return;
     setInput("");
+    if (inputRef.current) inputRef.current.style.height = "auto";
     sendMsg(msg);
   }, [input, sendMsg]);
 
@@ -225,9 +232,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             </div>
           );
         })}
-        {sending && !streamingContent && !streamingSender && streamingToolCalls.length === 0 && (
-          <div className="text-xs py-1 text-text-muted animate-pulse">
-            agent thinking...
+        {sending && !streamingSender && streamingToolCalls.length === 0 && messages.length > 0 && (
+          <div className="text-xs py-1 flex items-center gap-2 text-text-muted">
+            <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
+            waiting for agent response...
           </div>
         )}
         {streamingSender && (
@@ -236,8 +244,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               <span className={`font-bold ${ROLE_COLORS[streamingRole || "captain"] || "text-text"}`}>
                 {streamingRole || "agent"}
               </span>
-              {streamingSender !== streamingRole && (
-                <span className="text-[10px] text-text-muted">({streamingSender})</span>
+              <span className="text-[10px] text-text-muted">({streamingSender})</span>
+              {!streamingContent && streamingToolCalls.length === 0 && (
+                <span className="text-[10px] text-text-muted animate-pulse">thinking...</span>
               )}
             </div>
             {streamingToolCalls.length > 0 && (
@@ -294,13 +303,16 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             </div>
           );
         })()}
-        <input
+        <textarea
           ref={inputRef}
-          type="text"
+          rows={1}
           value={input}
           onChange={(e) => {
             const val = e.target.value;
             setInput(val);
+            // Auto-resize: reset height then set to scrollHeight
+            e.target.style.height = "auto";
+            e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
             const atIdx = val.lastIndexOf("@");
             if (atIdx >= 0 && (atIdx === 0 || val[atIdx - 1] === " ")) {
               const partial = val.slice(atIdx + 1).toLowerCase();
@@ -330,7 +342,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             }
             if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); handleSend(); }
           }}
-          className="flex-1 rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
+          className="flex-1 resize-none rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
           placeholder="type a message... (@ to mention)"
           disabled={sending}
         />
