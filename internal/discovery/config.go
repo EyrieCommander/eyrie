@@ -20,10 +20,54 @@ func readIdentityName(configPath string) string {
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		if idx := strings.Index(line, "Name:"); idx >= 0 {
-			return strings.TrimSpace(line[idx+len("Name:"):])
+			val := strings.TrimSpace(line[idx+len("Name:"):])
+			// Strip markdown bold markers (e.g., "** Danya" from "- **Name:** Danya")
+			val = strings.Trim(val, "*")
+			return strings.TrimSpace(val)
 		}
 	}
 	return ""
+}
+
+// WriteIdentityName updates (or creates) the Name field in the workspace's IDENTITY.md.
+func WriteIdentityName(configPath, name string) error {
+	workspaceDir := filepath.Join(filepath.Dir(configPath), "workspace")
+	identityPath := filepath.Join(workspaceDir, "IDENTITY.md")
+	data, err := os.ReadFile(identityPath)
+	if err != nil {
+		// No IDENTITY.md yet — create a minimal one
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(workspaceDir, 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(identityPath, []byte("# IDENTITY.md — Who Am I?\n\n- **Name:** "+name+"\n"), 0o644)
+		}
+		return err
+	}
+
+	lines := strings.Split(string(data), "\n")
+	found := false
+	for i, line := range lines {
+		if strings.Contains(line, "Name:") {
+			lines[i] = "- **Name:** " + name
+			found = true
+			break
+		}
+	}
+	if !found {
+		// Insert after the first heading or at line 2
+		insertAt := 1
+		for i, line := range lines {
+			if strings.HasPrefix(line, "#") {
+				insertAt = i + 1
+				break
+			}
+		}
+		lines = append(lines[:insertAt+1], lines[insertAt:]...)
+		lines[insertAt] = "- **Name:** " + name
+	}
+
+	return os.WriteFile(identityPath, []byte(strings.Join(lines, "\n")), 0o644)
 }
 
 // scanZeroClawConfig reads a ZeroClaw config.toml and extracts the gateway address.

@@ -36,7 +36,7 @@ func New(cfg config.Config) *Server {
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
-		Handler:      s.mux,
+		Handler:      corsHandler(s.mux),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0, // SSE streams need unbounded writes
 		IdleTimeout:  60 * time.Second,
@@ -63,6 +63,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/agents/{name}/config/validate", s.handleAgentConfigValidate)
 	s.mux.HandleFunc("GET /api/agents/{name}/terminal/ws", s.handleTerminal)
 	s.mux.HandleFunc("GET /api/agents/{name}/models", s.handleAgentModels)
+	s.mux.HandleFunc("PUT /api/agents/{name}/display-name", s.handleUpdateDisplayName)
 
 	// Registry and install endpoints
 	s.mux.HandleFunc("GET /api/registry/frameworks", s.handleListFrameworks)
@@ -155,4 +156,19 @@ func (s *Server) Shutdown(ctx context.Context) error {
 // runDiscovery is a helper used by API handlers.
 func (s *Server) runDiscovery(ctx context.Context) discovery.Result {
 	return discovery.Run(ctx, s.cfg)
+}
+
+// corsHandler wraps a handler with permissive CORS headers for development.
+// In production the frontend is served from the same origin so CORS is a no-op.
+func corsHandler(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(204)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }

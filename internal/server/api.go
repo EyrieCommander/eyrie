@@ -581,6 +581,58 @@ func (s *Server) findAgentAnyState(ctx context.Context, name string) (adapter.Ag
 	return nil, fmt.Errorf("agent %q not found", name)
 }
 
+// findDiscoveredAgent returns the raw DiscoveredAgent for the named agent.
+func (s *Server) findDiscoveredAgent(ctx context.Context, name string) (*adapter.DiscoveredAgent, error) {
+	result := s.runDiscovery(ctx)
+	for _, ar := range result.Agents {
+		if ar.Agent.Name == name {
+			return &ar.Agent, nil
+		}
+	}
+	return nil, fmt.Errorf("agent %q not found", name)
+}
+
+func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+
+	var body struct {
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON"})
+		return
+	}
+
+	// Sanitize: keep only alphanumeric, spaces, hyphens, and underscores
+	cleaned := strings.Map(func(r rune) rune {
+		if (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') || r == ' ' || r == '-' || r == '_' {
+			return r
+		}
+		return -1
+	}, body.DisplayName)
+	cleaned = strings.TrimSpace(cleaned)
+	if cleaned == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "display name must contain at least one alphanumeric character"})
+		return
+	}
+
+	agent, err := s.findDiscoveredAgent(ctx, name)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Update IDENTITY.md in the agent's workspace
+	if err := discovery.WriteIdentityName(agent.ConfigPath, cleaned); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"display_name": cleaned})
+}
+
 // providerAPIKey returns an API key for the given provider from environment
 // variables. Returns "" if no key is configured.
 func providerAPIKey(provider string) string {

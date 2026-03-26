@@ -20,6 +20,10 @@ import type {
 } from "./types";
 
 const BASE = "";
+// SSE streaming endpoints bypass the Vite proxy (which buffers responses)
+// and connect directly to the Go backend. In production (no Vite), this
+// falls back to the same origin.
+const SSE_BASE = import.meta.env.DEV ? "http://localhost:7200" : "";
 
 export async function fetchAgents(): Promise<AgentInfo[]> {
   const res = await fetch(`${BASE}/api/agents`);
@@ -44,6 +48,20 @@ export async function fetchAgentConfig(name: string): Promise<AgentConfig> {
   } catch {
     return { content: data.raw, format };
   }
+}
+
+export async function updateDisplayName(agentName: string, displayName: string): Promise<string> {
+  const res = await fetch(`${BASE}/api/agents/${agentName}/display-name`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ display_name: displayName }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  const data = await res.json();
+  return data.display_name;
 }
 
 export async function agentAction(
@@ -658,7 +676,7 @@ export function streamProjectChat(
   const controller = new AbortController();
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/projects/${projectId}/chat`, {
+      const res = await fetch(`${SSE_BASE}/api/projects/${projectId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),

@@ -136,25 +136,35 @@ export default function Sidebar() {
 
         {agentsExpanded && agents.length > 0 && (
           <div id="agents-list" className="ml-4 border-l border-border pl-2 space-y-px">
-            {agents.map((agent) => {
-              const isActive = activeAgent === agent.name;
-              return (
-                <Link
-                  key={agent.name}
-                  to={`/agents/${agent.name}/chat`}
-                  className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                    isActive
-                      ? "bg-surface-hover text-accent font-medium"
-                      : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-                  }`}
-                >
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${pendingActions[agent.name] ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
-                  />
-                  {agent.display_name || agent.name}
-                </Link>
-              );
-            })}
+            {(() => {
+              // Detect display name collisions to disambiguate with framework
+              const nameCounts = new Map<string, number>();
+              for (const a of agents) {
+                const label = a.display_name || a.name;
+                nameCounts.set(label, (nameCounts.get(label) || 0) + 1);
+              }
+              return agents.map((agent) => {
+                const isActive = activeAgent === agent.name;
+                const label = agent.display_name || agent.name;
+                const needsDisambig = (nameCounts.get(label) || 0) > 1;
+                return (
+                  <Link
+                    key={agent.name}
+                    to={`/agents/${agent.name}/chat`}
+                    className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                      isActive
+                        ? "bg-surface-hover text-accent font-medium"
+                        : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+                    }`}
+                  >
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full ${pendingActions[agent.name] ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
+                    />
+                    {needsDisambig ? `${label} (${agent.framework})` : label}
+                  </Link>
+                );
+              });
+            })()}
           </div>
         )}
 

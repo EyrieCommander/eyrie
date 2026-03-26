@@ -25,6 +25,7 @@ import {
   type AgentConfig,
   streamLogs,
   updateAgentConfig,
+  updateDisplayName,
   validateAgentConfig,
   getFrameworkDetail,
 } from "../lib/api";
@@ -55,6 +56,9 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const [actionPending, setActionPending] = useState<string | false>(false);
   const [framework, setFramework] = useState<Framework | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  const [editingName, setEditingName] = useState(false);
+  const [nameInput, setNameInput] = useState("");
+  const [nameSaving, setNameSaving] = useState(false);
   const { setPendingAction } = useData();
 
   const actionControllerRef = useRef<AbortController | null>(null);
@@ -175,7 +179,48 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
           <span
             className={`h-3 w-3 rounded-full ${actionPending ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
           />
-          <h2 className="text-xl font-bold">{agent.display_name || agent.name}</h2>
+          {editingName ? (
+            <form
+              className="flex items-center gap-1.5"
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const cleaned = nameInput.replace(/[^a-zA-Z0-9 \-_]/g, "").trim();
+                if (!cleaned) { setEditingName(false); return; }
+                setNameSaving(true);
+                try {
+                  await updateDisplayName(agent.name, cleaned);
+                  if (onRefresh) await onRefresh();
+                } catch (err) {
+                  console.error("Failed to update display name:", err);
+                }
+                setNameSaving(false);
+                setEditingName(false);
+              }}
+            >
+              <input
+                autoFocus
+                value={nameInput}
+                onChange={(e) => setNameInput(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Escape") setEditingName(false); }}
+                className="text-xl font-bold bg-transparent border-b border-accent text-text outline-none w-48"
+                disabled={nameSaving}
+              />
+              <button type="submit" disabled={nameSaving} className="p-1 text-accent hover:text-accent-hover">
+                <Save className="h-3.5 w-3.5" />
+              </button>
+              <button type="button" onClick={() => setEditingName(false)} className="p-1 text-text-muted hover:text-text">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </form>
+          ) : (
+            <button
+              onClick={() => { setNameInput(agent.display_name || agent.name); setEditingName(true); }}
+              className="group relative"
+            >
+              <h2 className="text-xl font-bold">{agent.display_name || agent.name}</h2>
+              <Edit3 className="absolute -top-1 -right-3 h-3 w-3 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+          )}
           <span className="rounded border border-border-strong bg-surface-hover px-2 py-0.5 text-[11px] text-text-secondary">
             {agent.framework}
           </span>
