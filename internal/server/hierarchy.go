@@ -347,17 +347,17 @@ func composeCaptainBriefing(proj *project.Project) string {
 
 ## Getting started
 
-Use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1:7200. Do NOT use web_fetch — it blocks localhost.
+Use the exec tool to run curl commands against the Eyrie API at http://localhost:7200. Do NOT use web_fetch — it blocks localhost.
 
 1. Fetch the API reference and save it to your TOOLS.md:
-   exec: curl -s http://127.0.0.1:7200/api/reference
+   exec: curl -s http://localhost:7200/api/reference
 
 2. Check your project details and any assigned agents:
-   exec: curl -s http://127.0.0.1:7200/api/projects/` + proj.ID + `
+   exec: curl -s http://localhost:7200/api/projects/` + proj.ID + `
 
 3. Review available personas and frameworks (for when you create Talons):
-   exec: curl -s http://127.0.0.1:7200/api/registry/personas
-   exec: curl -s http://127.0.0.1:7200/api/registry/frameworks
+   exec: curl -s http://localhost:7200/api/registry/personas
+   exec: curl -s http://localhost:7200/api/registry/frameworks
 
 Save the API reference to your TOOLS.md under an "## Eyrie API" heading.
 
@@ -427,17 +427,17 @@ Do NOT plan the project or propose milestones — that's the Captain's job.
 
 ## Getting started
 
-First, use the exec tool to run curl commands against the Eyrie API at http://127.0.0.1:7200. Do NOT use web_fetch — it blocks localhost. Use curl instead:
+First, use the exec tool to run curl commands against the Eyrie API at http://localhost:7200. Do NOT use web_fetch — it blocks localhost. Use curl instead:
 
 1. Fetch the full API reference:
-   exec: curl -s http://127.0.0.1:7200/api/reference
+   exec: curl -s http://localhost:7200/api/reference
 
 2. Review available frameworks and personas:
-   exec: curl -s http://127.0.0.1:7200/api/registry/frameworks
-   exec: curl -s http://127.0.0.1:7200/api/registry/personas
+   exec: curl -s http://localhost:7200/api/registry/frameworks
+   exec: curl -s http://localhost:7200/api/registry/personas
 
 3. Check for existing projects:
-   exec: curl -s http://127.0.0.1:7200/api/projects
+   exec: curl -s http://localhost:7200/api/projects
 
 Next: use your "edit" tool to save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
 

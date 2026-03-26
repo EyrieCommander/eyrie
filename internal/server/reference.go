@@ -9,11 +9,11 @@ func (s *Server) handleAPIReference(w http.ResponseWriter, r *http.Request) {
 
 const apiReference = `# Eyrie API Reference
 
-Base URL: http://127.0.0.1:7200
+Base URL: http://localhost:7200
 
 IMPORTANT: Use the exec tool with curl to call these endpoints. Do NOT use web_fetch — it blocks localhost.
-Example: exec: curl -s http://127.0.0.1:7200/api/projects
-Example: exec: curl -s -X POST http://127.0.0.1:7200/api/projects -H "Content-Type: application/json" -d '{"name":"my project","goal":"build a SaaS"}'
+Example: exec: curl -s http://localhost:7200/api/projects
+Example: exec: curl -s -X POST http://localhost:7200/api/projects -H "Content-Type: application/json" -d '{"name":"my project","goal":"build a SaaS"}'
 
 ## Projects
 

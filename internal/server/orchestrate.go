@@ -28,8 +28,14 @@ type ChatOrchestrator struct {
 func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Project, message string, sse *SSEWriter) error {
 	projectID := proj.ID
 
+	// Use a detached context for agent interactions so they complete even
+	// if the HTTP client disconnects. SSE writes may fail (broken pipe)
+	// but the response will still be persisted to chat storage.
+	agentCtx, agentCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer agentCancel()
+
 	// Resolve participants
-	disc := o.cfg(ctx)
+	disc := o.cfg(agentCtx)
 	participants := resolveProjectParticipants(proj, disc)
 	if len(participants) == 0 {
 		return fmt.Errorf("no agents available — make sure the commander is running")
@@ -104,13 +110,14 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 
 	// Broadcast to agents sequentially
 	for _, p := range participants {
-		// On the first message, only the commander responds
-		if firstMessage && p.role != "commander" {
-			continue
-		}
-
-		// If there's a mention and it's not for this agent, skip
-		if mention != "" && !strings.EqualFold(mention, p.name) && !strings.EqualFold(mention, p.role) {
+		// @mentions always take priority — if the user explicitly asked
+		// for a specific agent, honor that regardless of other rules.
+		if mention != "" {
+			if !strings.EqualFold(mention, p.name) && !strings.EqualFold(mention, p.role) {
+				continue
+			}
+		} else if firstMessage && p.role != "commander" {
+			// On the first message with no mention, only commander responds
 			continue
 		}
 
@@ -129,7 +136,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			labeledMsg = strings.Join(turnHistory, "\n\n") + "\n\n" + labeledMsg
 		}
 
-		ch, err := agent.StreamMessage(ctx, labeledMsg, sessionKey)
+		ch, err := agent.StreamMessage(agentCtx, labeledMsg, sessionKey)
 		if err != nil {
 			slog.Warn("failed to send to participant", "agent", p.name, "error", err)
 			sse.WriteEvent(map[string]any{
@@ -206,20 +213,43 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			slog.Warn("failed to save agent response", "agent", p.name, "error", err)
 		}
 
-		// Fire-and-forget cross-agent sync for turn history
+		// Cross-agent sync: inform other participants of this agent's response.
+		// Retries up to 2 times with backoff; surfaces failures as system messages.
+		labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent)
 		for _, other := range participants {
 			if other.name == p.name {
 				continue
 			}
 			otherAgent := discovery.NewAgent(other.agent)
-			labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, responseContent)
-			go func(a adapter.Agent, msg, sk, agentName string) {
-				bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				if _, err := a.SendMessage(bgCtx, msg, sk); err != nil {
-					slog.Debug("failed to sync message to agent", "agent", agentName, "session", sk, "error", err)
+			go func(a adapter.Agent, msg, sk, senderName, targetName string) {
+				const maxRetries = 2
+				var lastErr error
+				for attempt := 0; attempt <= maxRetries; attempt++ {
+					if attempt > 0 {
+						time.Sleep(time.Duration(attempt) * 2 * time.Second)
+						slog.Info("retrying cross-agent sync", "sender", senderName, "target", targetName, "attempt", attempt+1)
+					}
+					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					_, lastErr = a.SendMessage(bgCtx, msg, sk)
+					cancel()
+					if lastErr == nil {
+						return
+					}
 				}
-			}(otherAgent, labeled, sessionKey, other.name)
+				slog.Warn("cross-agent sync failed after retries",
+					"sender", senderName, "target", targetName, "error", lastErr)
+				// Surface as a system message in the project chat
+				failMsg := project.ChatMessage{
+					ID:        uuid.New().String(),
+					Sender:    "eyrie",
+					Role:      "system",
+					Content:   fmt.Sprintf("failed to deliver %s's message to %s: %v", senderName, targetName, lastErr),
+					Timestamp: time.Now(),
+				}
+				if appendErr := o.chatStore.Append(projectID, failMsg); appendErr != nil {
+					slog.Warn("failed to store sync failure message", "error", appendErr)
+				}
+			}(otherAgent, labeled, sessionKey, p.name, other.name)
 		}
 
 		// Send the stored message as SSE event

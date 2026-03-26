@@ -133,7 +133,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 		Name:        inst.Name,
 		DisplayName: inst.DisplayName,
 		Framework:   inst.Framework,
-		EyrieURL:    "http://127.0.0.1:7200",
+		EyrieURL:    "http://localhost:7200",
 		ParentAgent: req.ParentID,
 	}
 	if pers != nil {
@@ -232,6 +232,13 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		"memory": map[string]any{
 			"backend":   "sqlite",
 			"auto_save": true,
+		},
+		// Workaround for ZeroClaw #4764: seatbelt rejects 127.0.0.1 in
+		// network rules on macOS Monterey. Disable until upstream fix.
+		"security": map[string]any{
+			"sandbox": map[string]any{
+				"backend": "none",
+			},
 		},
 	}
 
