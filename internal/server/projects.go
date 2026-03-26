@@ -150,6 +150,25 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Publish relevant events for real-time UI updates
+	if update.Progress != nil {
+		s.events.Publish(ProjectEvent{
+			Type:      "progress_updated",
+			ProjectID: id,
+			Detail:    fmt.Sprintf("progress updated to %d%%", *update.Progress),
+			Timestamp: time.Now(),
+		})
+	}
+	if update.Goal != nil {
+		s.events.Publish(ProjectEvent{
+			Type:      "goal_changed",
+			ProjectID: id,
+			Detail:    fmt.Sprintf("goal updated: %s", *update.Goal),
+			Timestamp: time.Now(),
+		})
+	}
+
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -198,6 +217,23 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+
+	// Publish event — resolve instance name for the event detail
+	agentName := body.InstanceID
+	if is, err := instance.NewStore(); err == nil {
+		if inst, err := is.Get(body.InstanceID); err == nil {
+			agentName = inst.Name
+		}
+	}
+	s.events.Publish(ProjectEvent{
+		Type:      "agent_created",
+		ProjectID: projectID,
+		Agent:     agentName,
+		AgentRole: "talon",
+		Detail:    fmt.Sprintf("%s added to project", agentName),
+		Timestamp: time.Now(),
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "added"})
 }
 
