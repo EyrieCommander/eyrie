@@ -2,6 +2,8 @@ import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Settings, Users } from "lucide-react";
 import { useData } from "../lib/DataContext";
+import { useZoom } from "../lib/useZoom";
+import ZoomSlider from "./ZoomSlider";
 
 function parseAgentRoute(pathname: string) {
   const match = pathname.match(/^\/agents\/([^/]+?)(?:\/(status|chat|logs|config))?$/);
@@ -17,6 +19,7 @@ function parseProjectRoute(pathname: string) {
 export default function Sidebar() {
   const { agents, projects } = useData();
   const { pathname } = useLocation();
+  const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
   const activeAgent = useMemo(() => parseAgentRoute(pathname), [pathname]);
   const activeProject = useMemo(() => parseProjectRoute(pathname), [pathname]);
 
@@ -189,6 +192,15 @@ export default function Sidebar() {
           </div>
         </div>
       </nav>
+
+      <ZoomSlider
+        zoom={zoom}
+        min={min}
+        max={max}
+        step={step}
+        onChange={setZoom}
+        onReset={resetZoom}
+      />
     </aside>
   );
 }

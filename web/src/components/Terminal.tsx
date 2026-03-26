@@ -31,10 +31,14 @@ export default function Terminal({ agentName, onClose }: TerminalProps) {
     }
     initializedRef.current = true;
 
+    // Scale terminal font with the global zoom level
+    const zoomPct = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
+    const termFontSize = Math.round(13 * zoomPct);
+
     // Create terminal instance
     const term = new XTerm({
       cursorBlink: true,
-      fontSize: 13,
+      fontSize: termFontSize,
       fontFamily: 'Menlo, Monaco, "Courier New", monospace',
       theme: {
         background: "#000000",

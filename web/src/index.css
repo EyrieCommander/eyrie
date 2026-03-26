@@ -26,6 +26,26 @@ body {
     Menlo, Consolas, "Liberation Mono", monospace;
 }
 
+/* Dark scrollbars to match the theme */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 3px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--color-border-strong);
+}
+
 /*
  * scrollbar-hide: Use sparingly and only where scroll context is visually
  * obvious (e.g. horizontal tab bars with overflow indicators). Ensure that
@@ -38,4 +58,36 @@ body {
 }
 .scrollbar-hide::-webkit-scrollbar {
   display: none;
+}
+
+/* Disable all transitions while zoom is changing */
+.zoom-transitioning,
+.zoom-transitioning * {
+  transition-duration: 0s !important;
+}
+
+/* Zoom slider thumb */
+.zoom-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.zoom-slider::-webkit-slider-thumb:hover {
+  background: var(--color-accent);
+}
+.zoom-slider::-moz-range-thumb {
+  width: 8px;
+  height: 8px;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-text-muted);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.zoom-slider::-moz-range-thumb:hover {
+  background: var(--color-accent);
 }
