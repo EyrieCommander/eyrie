@@ -78,6 +78,8 @@ type Project struct {
 	OrchestratorID string        `json:"orchestrator_id,omitempty"`
 	RoleAgentIDs   []string      `json:"role_agent_ids,omitempty"`
 	Status         ProjectStatus `json:"status"`
+	Progress       int           `json:"progress,omitempty"`          // 0-100 percentage, set by user or captain
+	Deadline       *time.Time    `json:"deadline,omitempty"`          // target completion date
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
 	CreatedBy      string        `json:"created_by"` // "user" or coordinator instance ID

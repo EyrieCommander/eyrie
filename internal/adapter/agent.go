@@ -92,6 +92,22 @@ type AgentStatus struct {
 	Errors24h      int      `json:"errors_24h"`
 	GatewayPort    int      `json:"gateway_port"`
 	ProviderStatus string   `json:"provider_status,omitempty"` // "ok", "error", or "" (unknown/not checked)
+	BusyState      string   `json:"busy_state,omitempty"`      // "idle", "busy", "error"
+	CurrentTask    string   `json:"current_task,omitempty"`     // description of current activity
+}
+
+// InferBusyState populates BusyState based on LastTask timestamp.
+// Call after Status() to enrich the response.
+func (s *AgentStatus) InferBusyState() {
+	if s.Errors24h > 5 {
+		s.BusyState = "error"
+		return
+	}
+	if s.LastTask != nil && time.Since(*s.LastTask) < 60*time.Second {
+		s.BusyState = "busy"
+		return
+	}
+	s.BusyState = "idle"
 }
 
 // ProbeProvider checks whether the LLM provider is reachable by hitting its

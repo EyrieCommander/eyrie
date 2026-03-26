@@ -54,6 +54,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 			if ar.Alive && status.Provider != "" {
 				status.ProviderStatus = adapter.ProbeProvider(ctx, status.Provider)
 			}
+			status.InferBusyState()
 			aj.Status = status
 		}
 
@@ -110,6 +111,12 @@ func (s *Server) handleAgentModels(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeJSON(w, http.StatusOK, []string{})
 		return
+	}
+
+	// Set auth header from environment if available. Provider APIs typically
+	// require authentication to list models.
+	if key := providerAPIKey(st.Provider); key != "" {
+		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
 	resp, err := http.DefaultClient.Do(req)
@@ -570,6 +577,19 @@ func (s *Server) findAgentAnyState(ctx context.Context, name string) (adapter.Ag
 		}
 	}
 	return nil, fmt.Errorf("agent %q not found", name)
+}
+
+// providerAPIKey returns an API key for the given provider from environment
+// variables. Returns "" if no key is configured.
+func providerAPIKey(provider string) string {
+	switch {
+	case strings.HasPrefix(provider, "openrouter"), provider == "openrouter":
+		return os.Getenv("OPENROUTER_API_KEY")
+	case strings.HasPrefix(provider, "openai"), provider == "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	default:
+		return ""
+	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

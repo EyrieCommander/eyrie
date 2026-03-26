@@ -1,12 +1,15 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strings"
+	"time"
 
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/discovery"
@@ -92,11 +95,13 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var update struct {
-		Name           *string `json:"name"`
-		Description    *string `json:"description"`
-		Goal           *string `json:"goal"`
-		Status         *string `json:"status"`
-		OrchestratorID *string `json:"orchestrator_id"`
+		Name           *string    `json:"name"`
+		Description    *string    `json:"description"`
+		Goal           *string    `json:"goal"`
+		Status         *string    `json:"status"`
+		OrchestratorID *string    `json:"orchestrator_id"`
+		Progress       *int       `json:"progress"`
+		Deadline       *time.Time `json:"deadline"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&update); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
@@ -129,6 +134,16 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	}
 	if update.OrchestratorID != nil {
 		p.OrchestratorID = *update.OrchestratorID
+	}
+	if update.Progress != nil {
+		if *update.Progress < 0 || *update.Progress > 100 {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "progress must be 0-100"})
+			return
+		}
+		p.Progress = *update.Progress
+	}
+	if update.Deadline != nil {
+		p.Deadline = update.Deadline
 	}
 
 	if err := store.Save(*p); err != nil {
@@ -443,7 +458,11 @@ func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
 		chatStore: cs,
 	}
 	if err := orch.RunIntakeChat(r.Context(), proj, body.Message, commanderName, sse); err != nil {
-		sse.WriteError(err.Error())
+		if sse.Sent() {
+			sse.WriteError(err.Error())
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
 	}
 }
 
@@ -465,6 +484,83 @@ func (s *Server) handleProjectIntakeMessages(w http.ResponseWriter, r *http.Requ
 		msgs = []project.ChatMessage{}
 	}
 	writeJSON(w, http.StatusOK, msgs)
+}
+
+// ProjectActivityEvent is an ActivityEvent tagged with the agent that produced it.
+type ProjectActivityEvent struct {
+	adapter.ActivityEvent
+	Agent     string `json:"agent"`
+	AgentRole string `json:"agent_role,omitempty"`
+}
+
+// handleProjectActivity returns recent activity events from all agents in a project.
+// GET /api/projects/{id}/activity?limit=50&type=tool_call
+func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	store, err := project.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	proj, err := store.Get(projectID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		return
+	}
+
+	// Parse query params
+	limit := 50
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := fmt.Sscanf(l, "%d", &limit); n != 1 || err != nil {
+			limit = 50
+		}
+	}
+	typeFilter := r.URL.Query().Get("type")
+
+	// Resolve all project agents
+	disc := s.runDiscovery(r.Context())
+	participants := resolveProjectParticipants(proj, disc)
+
+	// Collect activity from each agent (historical snapshot only)
+	var allEvents []ProjectActivityEvent
+	for _, p := range participants {
+		agent := discovery.NewAgent(p.agent)
+		// Use a short-lived context — we only want the historical batch,
+		// not the live SSE stream.
+		collectCtx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		ch, err := agent.TailActivity(collectCtx)
+		if err != nil {
+			cancel()
+			slog.Debug("skipping activity for agent", "agent", p.name, "error", err)
+			continue
+		}
+		// Drain the channel until it blocks (historical events come first,
+		// then live events which we don't want). The timeout ensures we
+		// don't wait for live events.
+		for ev := range ch {
+			if typeFilter != "" && ev.Type != typeFilter {
+				continue
+			}
+			allEvents = append(allEvents, ProjectActivityEvent{
+				ActivityEvent: ev,
+				Agent:         p.name,
+				AgentRole:     p.role,
+			})
+		}
+		cancel()
+	}
+
+	// Sort by timestamp descending (most recent first)
+	sort.Slice(allEvents, func(i, j int) bool {
+		return allEvents[i].Timestamp.After(allEvents[j].Timestamp)
+	})
+
+	// Apply limit
+	if len(allEvents) > limit {
+		allEvents = allEvents[:limit]
+	}
+
+	writeJSON(w, http.StatusOK, allEvents)
 }
 
 // parseMention extracts an @mention from a message (e.g., "@captain" → "captain")
