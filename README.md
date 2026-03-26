@@ -2,30 +2,30 @@
 
 <img width="1328" height="750" alt="image" src="https://github.com/user-attachments/assets/76319b5b-4b76-47ed-9a5e-2bde5f7876a2" />
 
-A unified management interface for the Claw family of AI agent frameworks.
+An agentic factory and control room for the Claw family of AI agent frameworks.
 
-Eyrie gives you a single CLI and web dashboard to discover, monitor, and control all your Claw agents — ZeroClaw, OpenClaw, Hermes, and others — regardless of which framework they run on.
+Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, and others.
 
 ## Features
 
+- **Agent hierarchy**: three-tier structure (commander → captain → talons) for organizing agents into project teams
+- **Dual control**: agents and users can both create projects, assign agents, and manage lifecycle — same API, same result
+- **Project workspace**: split view with agent roster, hierarchy diagram, and @mention chat
+- **Real-time visibility**: SSE event streaming so the dashboard updates live whether changes come from the user or an agent
 - **Auto-discovery** of running Claw instances on localhost
-- **Unified status view**: health, uptime, provider status, connected channels
-- **Start, stop, restart** any agent from one place
-- **Log tailing** per agent in real time
-- **Chat**: talk to any agent from the dashboard with streaming responses and live tool call visibility
-- **Session management**: browse, rename, reset, and delete conversation sessions
-- **Streaming tool events**: see tool calls with arguments and output as they happen (supports ZeroClaw with [claude-max-api-proxy](https://github.com/nichochar/claude-max-api-proxy))
-- **Framework installation**: install new agent frameworks (ZeroClaw, OpenClaw, Hermes) from the dashboard or CLI
+- **Chat**: talk to any agent with streaming responses and live tool call visibility
 - **Agent provisioning**: create new agent instances with custom personas and configuration
-- **Provider health probing**: verify LLM provider connectivity from the status view
-- **Web dashboard** for visual monitoring (served from the same binary)
+- **Session management**: browse, rename, reset, and delete conversation sessions
+- **Framework installation**: install new agent frameworks from the dashboard or CLI
+- **Lifecycle management**: start, stop, restart any agent from one place
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
 
 ### In development
 
-- **Project orchestration**: organize agents into project teams with commander/captain/talon hierarchy
-- **Project chat**: multi-agent group conversations with @mention routing
-- **Persona catalog**: browse and install agent personalities from a registry
+- **Mission control**: cross-project dashboard with metrics, agent health, and commander access
+- **Activity timeline**: per-project event feeds with tool calls, decisions, and progress tracking
+- **Persona picker**: browse and install agent personas from a registry to provision specialist talons
+- **Agent profiles**: inspect identity, soul, and memory for any persistent agent
 
 <img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
 
