@@ -9,6 +9,8 @@ interface DataContextValue {
   loading: boolean;
   error: string | null;
   refresh: (isUserInitiated?: boolean) => Promise<void>;
+  pendingActions: Record<string, string>;
+  setPendingAction: (agentName: string, action: string | null) => void;
 }
 
 const DataContext = createContext<DataContextValue | null>(null);
@@ -19,6 +21,17 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [instances, setInstances] = useState<AgentInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingActions, setPendingActions] = useState<Record<string, string>>({});
+
+  const setPendingAction = useCallback((agentName: string, action: string | null) => {
+    setPendingActions((prev) => {
+      if (action === null) {
+        const { [agentName]: _, ...rest } = prev;
+        return rest;
+      }
+      return { ...prev, [agentName]: action };
+    });
+  }, []);
 
   const refresh = useCallback(async (isUserInitiated = true) => {
     try {
@@ -81,7 +94,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   return (
-    <DataContext.Provider value={{ agents, projects, instances, loading, error, refresh }}>
+    <DataContext.Provider value={{ agents, projects, instances, loading, error, refresh, pendingActions, setPendingAction }}>
       {children}
     </DataContext.Provider>
   );

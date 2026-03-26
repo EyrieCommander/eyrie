@@ -137,6 +137,7 @@ func scanInstances() []adapter.DiscoveredAgent {
 
 		// Override the hardcoded name with the instance name and set instance ID
 		agent.Name = inst.Name
+		agent.DisplayName = inst.DisplayName
 		agent.InstanceID = inst.ID
 		agents = append(agents, *agent)
 	}

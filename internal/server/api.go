@@ -18,6 +18,7 @@ import (
 
 type agentJSON struct {
 	Name             string                `json:"name"`
+	DisplayName      string                `json:"display_name,omitempty"`
 	Framework        string                `json:"framework"`
 	Host             string                `json:"host"`
 	Port             int                   `json:"port"`
@@ -37,6 +38,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 	for _, ar := range result.Agents {
 		aj := agentJSON{
 			Name:             ar.Agent.Name,
+			DisplayName:      ar.Agent.DisplayName,
 			Framework:        ar.Agent.Framework,
 			Host:             ar.Agent.Host,
 			Port:             ar.Agent.Port,

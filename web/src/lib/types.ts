@@ -1,5 +1,6 @@
 export interface AgentInfo {
   name: string;
+  display_name?: string;
   framework: string;
   host: string;
   port: number;

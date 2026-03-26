@@ -32,6 +32,7 @@ import ConfigEditor from "./ConfigEditor";
 import Terminal from "./Terminal";
 import { ChatPanel } from "./ChatPanel";
 import { formatBytes } from "../lib/format";
+import { useData } from "../lib/DataContext";
 
 interface AgentDetailProps {
   agent: AgentInfo;
@@ -54,6 +55,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const [actionPending, setActionPending] = useState<string | false>(false);
   const [framework, setFramework] = useState<Framework | null>(null);
   const [showTerminal, setShowTerminal] = useState(false);
+  const { setPendingAction } = useData();
 
   const actionControllerRef = useRef<AbortController | null>(null);
 
@@ -65,6 +67,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const handleAction = useCallback(
     async (action: "start" | "stop" | "restart") => {
       setActionPending(action);
+      setPendingAction(agent.name, action);
       const controller = new AbortController();
       actionControllerRef.current = controller;
       try {
@@ -90,9 +93,10 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
         console.error(e);
       } finally {
         setActionPending(false);
+        setPendingAction(agent.name, null);
       }
     },
-    [agent.name, onRefresh],
+    [agent.name, onRefresh, setPendingAction],
   );
 
   useEffect(() => {
@@ -171,7 +175,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
           <span
             className={`h-3 w-3 rounded-full ${actionPending ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
           />
-          <h2 className="text-xl font-bold">{agent.name}</h2>
+          <h2 className="text-xl font-bold">{agent.display_name || agent.name}</h2>
           <span className="rounded border border-border-strong bg-surface-hover px-2 py-0.5 text-[11px] text-text-secondary">
             {agent.framework}
           </span>

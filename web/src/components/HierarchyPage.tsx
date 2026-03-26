@@ -505,7 +505,7 @@ function CommanderSetup({ onCreated }: { onCreated: () => void }) {
                 >
                   <span className="h-1.5 w-1.5 rounded-full bg-green" />
                   <div className="flex-1">
-                    <span className="font-medium text-text">{agent.name}</span>
+                    <span className="font-medium text-text">{agent.display_name || agent.name}</span>
                     <span className="ml-2 text-text-muted">{agent.framework} · :{agent.port}</span>
                   </div>
                   {canBeCommander ? (

@@ -146,7 +146,7 @@ function AgentList({
                       <span
                         className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
                       />
-                      {agent.name}
+                      {agent.display_name || agent.name}
                     </span>
                   </td>
                   <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">

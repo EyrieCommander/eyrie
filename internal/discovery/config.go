@@ -3,11 +3,28 @@ package discovery
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 )
+
+// readIdentityName reads the "Name:" field from the workspace's IDENTITY.md file.
+func readIdentityName(configPath string) string {
+	workspaceDir := filepath.Join(filepath.Dir(configPath), "workspace")
+	data, err := os.ReadFile(filepath.Join(workspaceDir, "IDENTITY.md"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if idx := strings.Index(line, "Name:"); idx >= 0 {
+			return strings.TrimSpace(line[idx+len("Name:"):])
+		}
+	}
+	return ""
+}
 
 // scanZeroClawConfig reads a ZeroClaw config.toml and extracts the gateway address.
 func scanZeroClawConfig(path string) (*adapter.DiscoveredAgent, error) {
@@ -37,11 +54,12 @@ func scanZeroClawConfig(path string) (*adapter.DiscoveredAgent, error) {
 	}
 
 	return &adapter.DiscoveredAgent{
-		Name:       "zeroclaw",
-		Framework:  "zeroclaw",
-		Host:       host,
-		Port:       port,
-		ConfigPath: path,
+		Name:        "zeroclaw",
+		DisplayName: readIdentityName(path),
+		Framework:   "zeroclaw",
+		Host:        host,
+		Port:        port,
+		ConfigPath:  path,
 	}, nil
 }
 
@@ -76,11 +94,12 @@ func scanOpenClawConfig(path string) (*adapter.DiscoveredAgent, error) {
 	}
 
 	return &adapter.DiscoveredAgent{
-		Name:       "openclaw",
-		Framework:  "openclaw",
-		Host:       host,
-		Port:       port,
-		ConfigPath: path,
-		Token:      cfg.Gateway.Auth.Token,
+		Name:        "openclaw",
+		DisplayName: readIdentityName(path),
+		Framework:   "openclaw",
+		Host:        host,
+		Port:        port,
+		ConfigPath:  path,
+		Token:       cfg.Gateway.Auth.Token,
 	}, nil
 }

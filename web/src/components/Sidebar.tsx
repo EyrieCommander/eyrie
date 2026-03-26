@@ -17,7 +17,7 @@ function parseProjectRoute(pathname: string) {
 }
 
 export default function Sidebar() {
-  const { agents, projects } = useData();
+  const { agents, projects, pendingActions } = useData();
   const { pathname } = useLocation();
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
   const activeAgent = useMemo(() => parseAgentRoute(pathname), [pathname]);
@@ -149,9 +149,9 @@ export default function Sidebar() {
                   }`}
                 >
                   <span
-                    className={`h-1.5 w-1.5 rounded-full ${!agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
+                    className={`h-1.5 w-1.5 rounded-full ${pendingActions[agent.name] ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
                   />
-                  {agent.name}
+                  {agent.display_name || agent.name}
                 </Link>
               );
             })}
