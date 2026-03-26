@@ -7,13 +7,18 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/persona"
 	"github.com/Audacity88/eyrie/internal/project"
 )
 
@@ -169,6 +174,11 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Refresh PROJECT.md for all project agents when project details change
+	if update.Goal != nil || update.Description != nil || update.Progress != nil || update.Deadline != nil {
+		s.refreshProjectContext(id)
+	}
+
 	writeJSON(w, http.StatusOK, p)
 }
 
@@ -218,19 +228,32 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Publish event — resolve instance name for the event detail
+	// Resolve instance details for event + system message
 	agentName := body.InstanceID
+	agentFramework := ""
+	agentPort := 0
 	if is, err := instance.NewStore(); err == nil {
 		if inst, err := is.Get(body.InstanceID); err == nil {
 			agentName = inst.Name
+			agentFramework = inst.Framework
+			agentPort = inst.Port
 		}
 	}
+
+	// System message + context refresh so all agents see the team change
+	detail := fmt.Sprintf("user added %s to project", agentName)
+	if agentFramework != "" {
+		detail = fmt.Sprintf("user added %s (%s, :%d)", agentName, agentFramework, agentPort)
+	}
+	injectSystemMessage(projectID, detail)
+	s.refreshProjectContext(projectID)
+
 	s.events.Publish(ProjectEvent{
 		Type:      "agent_created",
 		ProjectID: projectID,
 		Agent:     agentName,
 		AgentRole: "talon",
-		Detail:    fmt.Sprintf("%s added to project", agentName),
+		Detail:    detail,
 		Timestamp: time.Now(),
 	})
 
@@ -254,6 +277,24 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 		}
 		return
 	}
+
+	// Resolve instance name for the event + system message
+	agentName := instanceID
+	if is, err := instance.NewStore(); err == nil {
+		if inst, err := is.Get(instanceID); err == nil {
+			agentName = inst.Name
+		}
+	}
+	injectSystemMessage(projectID, fmt.Sprintf("%s removed from project", agentName))
+	s.refreshProjectContext(projectID)
+	s.events.Publish(ProjectEvent{
+		Type:      "agent_removed",
+		ProjectID: projectID,
+		Agent:     agentName,
+		Detail:    fmt.Sprintf("%s removed from project", agentName),
+		Timestamp: time.Now(),
+	})
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
 }
 
@@ -611,4 +652,95 @@ func parseMention(msg string) string {
 		}
 	}
 	return ""
+}
+
+// refreshProjectContext regenerates PROJECT.md for every agent in the given
+// project. Called whenever the team roster or project details change so that
+// all agents have up-to-date context about their project and teammates.
+func (s *Server) refreshProjectContext(projectID string) {
+	projStore, err := project.NewStore()
+	if err != nil {
+		slog.Warn("refreshProjectContext: project store", "error", err)
+		return
+	}
+	proj, err := projStore.Get(projectID)
+	if err != nil {
+		slog.Warn("refreshProjectContext: load project", "project", projectID, "error", err)
+		return
+	}
+	instStore, err := instance.NewStore()
+	if err != nil {
+		slog.Warn("refreshProjectContext: instance store", "error", err)
+		return
+	}
+	instances, err := instStore.List()
+	if err != nil {
+		slog.Warn("refreshProjectContext: list instances", "error", err)
+		return
+	}
+
+	// Look up persona descriptions once (best-effort)
+	var persStore *persona.Store
+	if ps, psErr := persona.NewStore(); psErr == nil {
+		persStore = ps
+	}
+
+	// Collect project agents and their workspaces
+	var members []project.TeamMember
+	var workspaces []string
+	for _, inst := range instances {
+		if inst.ProjectID != projectID && inst.ID != proj.OrchestratorID {
+			continue
+		}
+		role := string(inst.HierarchyRole)
+		if role == "" {
+			role = "agent"
+		}
+		desc := ""
+		if persStore != nil && inst.PersonaID != "" {
+			if pers, pErr := persStore.Get(inst.PersonaID); pErr == nil {
+				desc = pers.Description
+			}
+		}
+		members = append(members, project.TeamMember{
+			Name:        inst.Name,
+			DisplayName: inst.DisplayName,
+			Role:        role,
+			Description: desc,
+			Framework:   inst.Framework,
+		})
+		workspaces = append(workspaces, inst.WorkspacePath)
+	}
+
+	content := project.RenderProjectMD(*proj, members)
+
+	for _, ws := range workspaces {
+		mdPath := filepath.Join(ws, "PROJECT.md")
+		if wErr := os.WriteFile(mdPath, []byte(content), 0o644); wErr != nil {
+			slog.Warn("refreshProjectContext: write PROJECT.md", "path", mdPath, "error", wErr)
+		}
+	}
+	slog.Debug("refreshProjectContext: updated", "project", projectID, "agents", len(workspaces))
+}
+
+// injectSystemMessage appends a system message to a project's chat log.
+// Used to surface structural changes (agent created, removed, project
+// updated) in the project chat regardless of whether the change was made
+// by a user or an agent.
+func injectSystemMessage(projectID, content string) {
+	cs, err := project.NewChatStore()
+	if err != nil {
+		slog.Warn("injectSystemMessage: chat store", "error", err)
+		return
+	}
+	msg := project.ChatMessage{
+		ID:        uuid.New().String(),
+		Sender:    "eyrie",
+		Role:      "system",
+		Content:   content,
+		Timestamp: time.Now(),
+	}
+	if err := cs.Append(projectID, msg); err != nil {
+		slog.Warn("injectSystemMessage: append", "project", projectID, "error", err)
+	}
 }

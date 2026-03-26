@@ -18,13 +18,16 @@ import (
 
 // TemplateContext is passed to identity file templates when rendering.
 type TemplateContext struct {
-	Name        string
-	DisplayName string
-	Role        string
-	Description string
-	ParentAgent string
-	EyrieURL    string
-	Framework   string
+	Name               string
+	DisplayName        string
+	Role               string
+	Description        string
+	ParentAgent        string
+	EyrieURL           string
+	Framework          string
+	ProjectName        string // populated when instance belongs to a project
+	ProjectGoal        string
+	ProjectDescription string
 }
 
 // Provisioner creates new agent instances with full workspace and config.
@@ -130,11 +133,14 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	// Build template context — ProjectName, ProjectGoal, and ParentAgent are
 	// populated from the request so identity templates can reference them.
 	tc := TemplateContext{
-		Name:        inst.Name,
-		DisplayName: inst.DisplayName,
-		Framework:   inst.Framework,
-		EyrieURL:    "http://localhost:7200",
-		ParentAgent: req.ParentID,
+		Name:               inst.Name,
+		DisplayName:        inst.DisplayName,
+		Framework:          inst.Framework,
+		EyrieURL:           "http://localhost:7200",
+		ParentAgent:        req.ParentID,
+		ProjectName:        req.ProjectName,
+		ProjectGoal:        req.ProjectGoal,
+		ProjectDescription: req.ProjectDescription,
 	}
 	if pers != nil {
 		tc.Role = pers.Role

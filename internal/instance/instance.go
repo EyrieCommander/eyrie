@@ -76,4 +76,10 @@ type CreateRequest struct {
 	Model         string        `json:"model,omitempty"`    // override persona default
 	AutoStart     *bool         `json:"auto_start,omitempty"`
 	CreatedBy     string        `json:"created_by,omitempty"` // "user" or parent instance ID
+
+	// Project context — populated by the server handler (not from API body)
+	// so the provisioner can include project info in identity templates.
+	ProjectName        string `json:"-"`
+	ProjectGoal        string `json:"-"`
+	ProjectDescription string `json:"-"`
 }

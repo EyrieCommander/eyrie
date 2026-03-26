@@ -83,6 +83,18 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Populate project context on the request so the provisioner can
+	// include project info in identity templates (TemplateContext).
+	if req.ProjectID != "" {
+		if projStore, pErr := project.NewStore(); pErr == nil {
+			if proj, pErr := projStore.Get(req.ProjectID); pErr == nil {
+				req.ProjectName = proj.Name
+				req.ProjectGoal = proj.Goal
+				req.ProjectDescription = proj.Description
+			}
+		}
+	}
+
 	provisioner := instance.NewProvisioner(store)
 	inst, err := provisioner.Provision(req, pers)
 	if err != nil {
@@ -117,6 +129,8 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-link captain to project: if a captain is created for a project,
 	// set the project's orchestrator_id so it appears as the project captain.
+	// Also trigger a background briefing so the captain is ready when the
+	// user opens the project chat — no waiting required.
 	if req.HierarchyRole == "captain" && req.ProjectID != "" {
 		if projStore, pErr := project.NewStore(); pErr == nil {
 			if proj, pErr := projStore.Get(req.ProjectID); pErr == nil {
@@ -124,8 +138,47 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 				if pErr := projStore.Save(*proj); pErr != nil {
 					slog.Warn("failed to auto-link captain to project", "project", req.ProjectID, "error", pErr)
 				}
+				// Background briefing — fire and forget
+				go func(projCopy project.Project, instName string) {
+					briefCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+					defer cancel()
+					// Wait for the agent to become reachable
+					time.Sleep(5 * time.Second)
+					agent, err := s.findAgent(briefCtx, instName)
+					if err != nil {
+						slog.Warn("background captain briefing skipped — agent not reachable", "agent", instName, "error", err)
+						return
+					}
+					briefing := composeCaptainBriefing(&projCopy)
+					_, err = agent.SendMessage(briefCtx, briefing, "project-"+projCopy.Name+"-briefing")
+					if err != nil {
+						slog.Warn("background captain briefing failed", "agent", instName, "error", err)
+					} else {
+						slog.Info("background captain briefing complete", "agent", instName, "project", projCopy.Name)
+					}
+				}(*proj, inst.Name)
 			}
 		}
+	}
+
+	// Auto-add talon to project roster (mirrors the captain auto-link above)
+	if req.HierarchyRole == "talon" && req.ProjectID != "" {
+		if projStore, pErr := project.NewStore(); pErr == nil {
+			if pErr := projStore.AddAgent(req.ProjectID, inst.ID); pErr != nil {
+				slog.Warn("failed to auto-add talon to project", "project", req.ProjectID, "error", pErr)
+			}
+		}
+	}
+
+	// Write/refresh PROJECT.md for all project agents and inject a system
+	// message so the chat log records the structural change.
+	if inst.ProjectID != "" {
+		s.refreshProjectContext(inst.ProjectID)
+		creator := inst.CreatedBy
+		if creator == "" {
+			creator = "user"
+		}
+		injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s created %s (%s, :%d)", creator, inst.Name, inst.Framework, inst.Port))
 	}
 
 	// Publish event for real-time UI updates
@@ -231,6 +284,24 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
+		// Remove from project agent roster if this was a talon
+		if inst.ProjectID != "" {
+			_ = projStore.RemoveAgent(inst.ProjectID, id)
+		}
+	}
+
+	// Inject system message and refresh project context for remaining agents
+	if inst.ProjectID != "" {
+		injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s removed from project", inst.Name))
+		s.refreshProjectContext(inst.ProjectID)
+		s.events.Publish(ProjectEvent{
+			Type:      "agent_removed",
+			ProjectID: inst.ProjectID,
+			Agent:     inst.Name,
+			AgentRole: string(inst.HierarchyRole),
+			Detail:    fmt.Sprintf("%s removed", inst.Name),
+			Timestamp: time.Now(),
+		})
 	}
 
 	if err := store.Delete(id); err != nil {
