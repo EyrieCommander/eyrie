@@ -1,123 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, RefreshCw, Crown, Briefcase, User, ChevronRight } from "lucide-react";
-import type { HierarchyTree, AgentInstance, CommanderInfo, ProjectTree, Persona } from "../lib/types";
+import { Plus, RefreshCw, Crown, Briefcase, ChevronRight, MessageSquare, Bot, AlertTriangle } from "lucide-react";
+import type { HierarchyTree, Persona } from "../lib/types";
 import { fetchHierarchy, fetchPersonas, fetchFrameworks, createInstance, setCommander } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import type { Framework } from "../lib/types";
 
-function StatusDot({ status }: { status: string }) {
-  const color = status === "running" ? "bg-green" : status === "error" ? "bg-red" : "bg-text-muted";
-  return <span className={`inline-block h-1.5 w-1.5 rounded-full ${color}`} />;
-}
-
-function RoleBadge({ role }: { role?: string }) {
-  switch (role) {
-    case "commander":
-      return (
-        <span className="inline-flex items-center gap-1 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-medium text-accent">
-          <Crown className="h-2.5 w-2.5" /> commander
-        </span>
-      );
-    case "captain":
-      return (
-        <span className="inline-flex items-center gap-1 rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
-          <Briefcase className="h-2.5 w-2.5" /> captain
-        </span>
-      );
-    case "talon":
-      return (
-        <span className="inline-flex items-center gap-1 rounded bg-text-muted/10 px-1.5 py-0.5 text-[10px] font-medium text-text-secondary">
-          <User className="h-2.5 w-2.5" /> talon
-        </span>
-      );
-    default:
-      return null;
-  }
-}
-
-function InstanceCard({ instance, onClick }: { instance: AgentInstance | CommanderInfo; onClick: () => void }) {
-  const displayName = instance.display_name || instance.name;
-  const role = instance.hierarchy_role || undefined;
-  return (
-    <button
-      onClick={onClick}
-      className="flex w-full items-center gap-3 rounded border border-border bg-surface px-4 py-3 text-left text-xs transition-all hover:border-accent/50 hover:bg-surface-hover/50"
-    >
-      <StatusDot status={instance.status} />
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-2">
-          <span className="font-medium text-text">{displayName}</span>
-          <RoleBadge role={role} />
-          {"legacy" in instance && instance.legacy && (
-            <span className="rounded bg-text-muted/10 px-1.5 py-0.5 text-[10px] text-text-muted">existing agent</span>
-          )}
-        </div>
-        <div className="mt-0.5 text-text-muted truncate">
-          {instance.framework} · :{instance.port}
-        </div>
-      </div>
-      <ChevronRight className="h-3.5 w-3.5 text-text-muted" />
-    </button>
-  );
-}
-
-function ProjectSection({ tree, onInstanceClick, onProjectClick }: { tree: ProjectTree; onInstanceClick: (name: string) => void; onProjectClick: (id: string) => void }) {
-  return (
-    <div className="rounded border border-border bg-surface/50 p-4 space-y-3">
-      <button
-        onClick={() => onProjectClick(tree.project.id)}
-        className="w-full text-left group"
-      >
-        <div className="flex items-center gap-2">
-          <Briefcase className="h-3.5 w-3.5 text-green" />
-          <span className="font-medium text-text text-sm group-hover:text-accent transition-colors">{tree.project.name}</span>
-          <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
-            {tree.project.status}
-          </span>
-          <ChevronRight className="ml-auto h-3.5 w-3.5 text-text-muted opacity-0 group-hover:opacity-100 transition-opacity" />
-        </div>
-        {tree.project.description && (
-          <p className="mt-1 text-xs text-text-muted ml-5">{tree.project.description}</p>
-        )}
-      </button>
-
-      {/* Captain */}
-      <div className="ml-5">
-        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">captain</span>
-        {tree.captain ? (
-          <div className="mt-1">
-            <InstanceCard
-              instance={tree.captain}
-              onClick={() => onInstanceClick(tree.captain!.name)}
-            />
-          </div>
-        ) : (
-          <p className="mt-1 text-xs text-text-muted italic">none assigned</p>
-        )}
-      </div>
-
-      {/* Talons */}
-      <div className="ml-5">
-        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
-          talons {tree.talons.length > 0 && `(${tree.talons.length})`}
-        </span>
-        {tree.talons.length > 0 ? (
-          <div className="mt-1 ml-5 space-y-1.5">
-            {tree.talons.map((agent) => (
-              <InstanceCard
-                key={agent.id}
-                instance={agent}
-                onClick={() => onInstanceClick(agent.name)}
-              />
-            ))}
-          </div>
-        ) : (
-          <p className="mt-1 text-xs text-text-muted italic">none assigned</p>
-        )}
-      </div>
-    </div>
-  );
+interface DashboardMetrics {
+  active_projects: number;
+  paused_projects: number;
+  running_agents: number;
+  busy_agents: number;
+  stopped_agents: number;
+  total_instances: number;
 }
 
 // --- Coordinator Setup ---
@@ -461,10 +356,6 @@ export default function HierarchyPage() {
     return () => clearInterval(interval);
   }, [refresh]);
 
-  const handleInstanceClick = (name: string) => {
-    navigate(`/agents/${name}`);
-  };
-
   if (loading && !hierarchy) {
     return (
       <div className="py-20 text-center text-xs text-text-muted">
@@ -498,147 +389,101 @@ export default function HierarchyPage() {
     return <CommanderSetup onCreated={refresh} />;
   }
 
+  // Fetch metrics for dashboard cards
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  useEffect(() => {
+    fetch("/api/metrics").then((r) => r.json()).then(setMetrics).catch(() => {});
+  }, [hierarchy]);
+
+  // Compute derived stats
+  const allCaptains = hierarchy.projects.filter((t) => t.captain).length;
+  const allTalons = hierarchy.projects.reduce((n, t) => n + t.talons.length, 0);
+
   return (
     <div className="space-y-6">
-      <div className="text-xs text-text-muted">~/hierarchy</div>
+      <div className="text-xs text-text-muted">~/mission-control</div>
 
+      {/* Commander bar */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-bold">
-            <span className="text-accent">&gt;</span> agent hierarchy
-          </h1>
-          <p className="mt-1 text-xs text-text-muted">
-            commander &rarr; captains &rarr; talons
-          </p>
-        </div>
-        <button
-          onClick={() => refresh()}
-          disabled={loading}
-          className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          $ refresh
-        </button>
-      </div>
-
-      {/* Role descriptions */}
-      <div className="grid grid-cols-3 gap-3">
-        <div className="rounded border border-accent/20 bg-accent/5 p-3 space-y-1">
-          <div className="flex items-center gap-1.5">
-            <Crown className="h-3 w-3 text-accent" />
-            <span className="text-[10px] font-bold text-accent uppercase tracking-wider">commander</span>
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-purple-500/20">
+            <Crown className="h-4 w-4 text-purple-400" />
           </div>
-          <p className="text-[10px] text-text-muted leading-relaxed">
-            your executive. creates projects, assigns captains, tracks cross-project progress. your primary point of contact.
-          </p>
-        </div>
-        <div className="rounded border border-green/20 bg-green/5 p-3 space-y-1">
-          <div className="flex items-center gap-1.5">
-            <Briefcase className="h-3 w-3 text-green" />
-            <span className="text-[10px] font-bold text-green uppercase tracking-wider">captain</span>
-          </div>
-          <p className="text-[10px] text-text-muted leading-relaxed">
-            your tech lead. owns a project end-to-end — plans work, creates talons, coordinates the team. reports to the commander.
-          </p>
-        </div>
-        <div className="rounded border border-border bg-surface/50 p-3 space-y-1">
-          <div className="flex items-center gap-1.5">
-            <User className="h-3 w-3 text-text-secondary" />
-            <span className="text-[10px] font-bold text-text-secondary uppercase tracking-wider">talon</span>
-          </div>
-          <p className="text-[10px] text-text-muted leading-relaxed">
-            a specialist. focused on one role — researcher, developer, writer, etc. created and managed by the captain.
-          </p>
-        </div>
-      </div>
-
-      {/* Commander */}
-      <div>
-        <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
-          commander
-        </div>
-        <InstanceCard
-          instance={hierarchy.commander}
-          onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
-        />
-      </div>
-
-      {/* Captains */}
-      {(() => {
-        const allCaptains = hierarchy.projects
-          .filter((t) => t.captain)
-          .map((t) => ({ instance: t.captain!, projectName: t.project.name }));
-        return (
           <div>
-            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
-              captains ({allCaptains.length})
-            </div>
-            {allCaptains.length === 0 ? (
-              <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
-                no captains yet — assign one to a project
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {allCaptains.map(({ instance, projectName }) => (
-                  <div key={instance.id} className="flex items-center gap-2">
-                    <div className="flex-1">
-                      <InstanceCard
-                        instance={instance}
-                        onClick={() => handleInstanceClick(instance.name)}
-                      />
-                    </div>
-                    <span className="shrink-0 text-[10px] text-text-muted">{projectName}</span>
-                  </div>
-                ))}
-              </div>
-            )}
+            <h1 className="text-xl font-bold">
+              <span className="text-accent">&gt;</span> mission control
+            </h1>
+            <p className="text-xs text-text-muted">
+              commander: {hierarchy.commander.display_name || hierarchy.commander.name}
+            </p>
           </div>
-        );
-      })()}
-
-      {/* Talons */}
-      {(() => {
-        const allTalons = hierarchy.projects.flatMap((t) =>
-          t.talons.map((talon) => ({ instance: talon, projectName: t.project.name }))
-        );
-        return (
-          <div>
-            <div className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
-              talons ({allTalons.length})
-            </div>
-            {allTalons.length === 0 ? (
-              <div className="rounded border border-border bg-surface p-4 text-center text-xs text-text-muted">
-                no talons yet — add agents to your projects
-              </div>
-            ) : (
-              <div className="space-y-1.5">
-                {allTalons.map(({ instance, projectName }) => (
-                  <div key={instance.id} className="flex items-center gap-2">
-                    <div className="flex-1">
-                      <InstanceCard
-                        instance={instance}
-                        onClick={() => handleInstanceClick(instance.name)}
-                      />
-                    </div>
-                    <span className="shrink-0 text-[10px] text-text-muted">{projectName}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })()}
-
-      {/* Projects */}
-      <div>
-        <div className="mb-2 flex items-center justify-between">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
-            projects ({hierarchy.projects.length})
-          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => refresh()}
+            disabled={loading}
+            className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
+            refresh
+          </button>
           <button
             onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
+            className="flex items-center gap-1.5 rounded border border-purple-400/30 px-3 py-1.5 text-xs text-purple-400 transition-colors hover:bg-purple-400/10"
+          >
+            <MessageSquare className="h-3 w-3" />
+            ask commander
+          </button>
+        </div>
+      </div>
+
+      {/* Metric cards */}
+      {metrics && (
+        <div className="grid grid-cols-4 gap-3">
+          <div className="rounded border border-border p-3.5 space-y-1">
+            <div className="text-[10px] font-medium text-text-muted">// active projects</div>
+            <div className="text-2xl font-bold text-text">{metrics.active_projects}</div>
+            {metrics.paused_projects > 0 && (
+              <div className="text-[10px] text-text-muted">{metrics.paused_projects} paused</div>
+            )}
+          </div>
+          <div className="rounded border border-border p-3.5 space-y-1">
+            <div className="text-[10px] font-medium text-text-muted">// running agents</div>
+            <div className="text-2xl font-bold text-green">{metrics.running_agents}</div>
+            <div className="text-[10px] text-text-muted">
+              {allCaptains} captain{allCaptains !== 1 ? "s" : ""} · {allTalons} talon{allTalons !== 1 ? "s" : ""}
+            </div>
+          </div>
+          <div className="rounded border border-border p-3.5 space-y-1">
+            <div className="text-[10px] font-medium text-text-muted">// instances</div>
+            <div className="text-2xl font-bold text-text">{metrics.total_instances}</div>
+            {metrics.busy_agents > 0 && (
+              <div className="text-[10px] text-yellow-400">{metrics.busy_agents} busy</div>
+            )}
+          </div>
+          <div className="rounded border border-border p-3.5 space-y-1">
+            <div className="text-[10px] font-medium text-text-muted">// stopped</div>
+            <div className={`text-2xl font-bold ${metrics.stopped_agents > 0 ? "text-yellow-400" : "text-text"}`}>
+              {metrics.stopped_agents}
+            </div>
+            {metrics.stopped_agents > 0 && (
+              <div className="flex items-center gap-1 text-[10px] text-yellow-400">
+                <AlertTriangle className="h-2.5 w-2.5" /> needs attention
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Projects grid */}
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+            // projects ({hierarchy.projects.length})
+          </span>
+          <button
+            onClick={() => navigate("/projects")}
             className="flex items-center gap-1 text-xs text-accent transition-colors hover:text-accent/80"
-            title="start a conversation with your commander to plan a new project"
           >
             <Plus className="h-3 w-3" /> new project
           </button>
@@ -646,23 +491,73 @@ export default function HierarchyPage() {
 
         {hierarchy.projects.length === 0 ? (
           <div className="rounded border border-border bg-surface p-6 text-center text-xs text-text-muted space-y-3">
-            <p>no projects yet — talk to your commander to plan one</p>
-            <button
-              onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
-              className="rounded bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent/80"
-            >
-              chat with {hierarchy.commander!.display_name || hierarchy.commander!.name}
-            </button>
+            <p>no projects yet</p>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                onClick={() => navigate("/projects")}
+                className="rounded bg-accent px-4 py-2 text-xs font-medium text-white transition-colors hover:bg-accent/80"
+              >
+                create project
+              </button>
+              <button
+                onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
+                className="rounded border border-border px-4 py-2 text-xs font-medium text-text-muted transition-colors hover:text-text"
+              >
+                ask commander
+              </button>
+            </div>
           </div>
         ) : (
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-2 xl:grid-cols-3">
             {hierarchy.projects.map((tree) => (
-              <ProjectSection
+              <button
                 key={tree.project.id}
-                tree={tree}
-                onInstanceClick={handleInstanceClick}
-                onProjectClick={(id) => navigate(`/projects/${id}`)}
-              />
+                onClick={() => navigate(`/projects/${tree.project.id}`)}
+                className="rounded border border-border p-4 text-left text-xs transition-all hover:border-accent/30 hover:bg-surface-hover/30 space-y-3"
+              >
+                {/* Project header */}
+                <div className="flex items-center gap-2">
+                  <Briefcase className="h-3.5 w-3.5 text-green" />
+                  <span className="font-semibold text-text">{tree.project.name}</span>
+                  <span className={`rounded px-1.5 py-0.5 text-[9px] font-medium ${
+                    tree.project.status === "active"
+                      ? "bg-green/10 text-green"
+                      : tree.project.status === "paused"
+                        ? "bg-yellow-400/10 text-yellow-400"
+                        : "bg-text-muted/10 text-text-muted"
+                  }`}>
+                    {tree.project.status}
+                  </span>
+                </div>
+
+                {/* Description */}
+                {tree.project.description && (
+                  <p className="text-text-muted line-clamp-2">{tree.project.description}</p>
+                )}
+
+                {/* Team summary */}
+                <div className="flex items-center gap-3 text-text-muted">
+                  {tree.captain && (
+                    <span className="flex items-center gap-1">
+                      <span className={`h-1.5 w-1.5 rounded-full ${tree.captain.status === "running" ? "bg-green" : "bg-text-muted"}`} />
+                      {tree.captain.display_name || tree.captain.name}
+                    </span>
+                  )}
+                  {tree.talons.length > 0 && (
+                    <span className="flex items-center gap-1">
+                      <Bot className="h-3 w-3" />
+                      {tree.talons.length} talon{tree.talons.length !== 1 ? "s" : ""}
+                    </span>
+                  )}
+                </div>
+
+                {/* Goal */}
+                {tree.project.goal && (
+                  <div className="flex items-center gap-1 text-[10px] text-green">
+                    <span>goal: {tree.project.goal}</span>
+                  </div>
+                )}
+              </button>
             ))}
           </div>
         )}

@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, GitBranch, Settings, Users } from "lucide-react";
+import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Settings, Users } from "lucide-react";
 import { useData } from "../lib/DataContext";
 
 function parseAgentRoute(pathname: string) {
@@ -49,8 +49,8 @@ export default function Sidebar() {
               : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
           }`}
         >
-          <GitBranch className="h-3.5 w-3.5" />
-          <span className="font-medium">hierarchy</span>
+          <LayoutDashboard className="h-3.5 w-3.5" />
+          <span className="font-medium">mission control</span>
         </Link>
 
         <div className={`flex items-center rounded text-xs transition-colors ${
