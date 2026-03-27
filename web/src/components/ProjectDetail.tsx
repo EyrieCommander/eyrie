@@ -195,6 +195,7 @@ export default function ProjectDetail() {
             if (confirm("delete this project?")) {
               try {
                 await deleteProject(project.id);
+                await ctxRefresh(false);
                 navigate("/projects");
               } catch (e) {
                 setLoadError(e instanceof Error ? e.message : "Failed to delete");

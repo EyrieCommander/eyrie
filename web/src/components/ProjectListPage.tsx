@@ -27,11 +27,6 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
-  const isMounted = useRef(true);
-
-  useEffect(() => {
-    return () => { isMounted.current = false; };
-  }, []);
 
   // Derived default captain name from project name
   const defaultCaptainName = `captain-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
@@ -44,10 +39,10 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
     if (step === 2) {
       setFetchCaptainError("");
       fetchInstances().then((all) => {
-        if (!isMounted.current) return;
+
         setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
       }).catch((err) => {
-        if (!isMounted.current) return;
+
         console.error("Failed to fetch instances:", err);
         setFetchCaptainError(err instanceof Error ? err.message : "Failed to load captain instances");
         setExistingCaptains([]);
@@ -99,11 +94,11 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
       await instanceAction(id, "start");
       // Poll until instance status updates (max 15s)
       for (let i = 0; i < 15; i++) {
-        if (!isMounted.current) return;
+
         await new Promise((r) => setTimeout(r, 1000));
-        if (!isMounted.current) return;
+
         const all = await fetchInstances();
-        if (!isMounted.current) return;
+
         const target = all.find((inst) => inst.id === id);
         if (target && target.status === "running") {
           setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
@@ -112,14 +107,11 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
         }
       }
       // Timeout — refresh anyway
-      if (!isMounted.current) return;
       setError("Captain may still be starting — check status and retry if needed");
       const all = await fetchInstances();
-      if (!isMounted.current) return;
       setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
       setStartingCaptain("");
     } catch (e) {
-      if (!isMounted.current) return;
       setError(e instanceof Error ? e.message : "Failed to start captain");
       setStartingCaptain("");
     }
@@ -259,15 +251,14 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
                           }`}
                         >
                           <button
-                            onClick={() => !inst.project_id && setSelectedCaptainId(inst.id)}
-                            disabled={!!inst.project_id}
-                            className={`flex flex-1 items-center gap-3 text-left ${inst.project_id ? "opacity-50 cursor-not-allowed" : ""}`}
+                            onClick={() => setSelectedCaptainId(inst.id)}
+                            className="flex flex-1 items-center gap-3 text-left"
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${isStopped ? "bg-text-muted" : "bg-green"}`} />
                             <span className="font-medium text-text">{inst.display_name}</span>
                             <span className="text-text-muted">{inst.framework}</span>
                             {inst.project_id && (
-                              <span className="text-[10px] text-text-muted">(assigned)</span>
+                              <span className="text-[10px] text-text-muted">(shared)</span>
                             )}
                           </button>
                           {isStopped && (
