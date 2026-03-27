@@ -249,8 +249,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           </div>
         )}
 
-        {/* Messages — always render all messages */}
-        {sortedMessages.map((msg) => {
+        {/* Messages — hide pre-chat system messages until chat has started */}
+        {sortedMessages
+          .filter((m) => messages.some((x) => x.role !== "system") || m.role !== "system")
+          .map((msg) => {
           const parts = msg.parts ?? [];
           const hasParts = parts.length > 0;
           const toolCount = parts.filter((p) => p.type === "tool_call").length;
