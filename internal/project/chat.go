@@ -37,13 +37,16 @@ type ChatMessage struct {
 
 // ChatStore manages the shared conversation for a project.
 // Messages are stored as append-only JSONL at ~/.eyrie/projects/{id}/chat.jsonl.
+// Package-level listening state — persists across ChatStore instances
+// since ChatStore is recreated on every HTTP request.
+var (
+	listeningMap = make(map[string]string) // projectID → agent name
+	listeningMu  sync.RWMutex
+)
+
 type ChatStore struct {
-	dir       string
-	mu        sync.RWMutex
-	// listening tracks which agent is in [LISTENING] state per project.
-	// Key: projectID, Value: agent name. Empty means nobody is listening.
-	listening map[string]string
-	lisMu     sync.RWMutex
+	dir string
+	mu  sync.RWMutex
 }
 
 func NewChatStore() (*ChatStore, error) {
@@ -52,28 +55,28 @@ func NewChatStore() (*ChatStore, error) {
 		return nil, err
 	}
 	dir := filepath.Join(home, ".eyrie", "projects")
-	return &ChatStore{dir: dir, listening: make(map[string]string)}, nil
+	return &ChatStore{dir: dir}, nil
 }
 
 // SetListening marks an agent as listening for the next message in a project.
 func (cs *ChatStore) SetListening(projectID, agentName string) {
-	cs.lisMu.Lock()
-	defer cs.lisMu.Unlock()
-	cs.listening[projectID] = agentName
+	listeningMu.Lock()
+	defer listeningMu.Unlock()
+	listeningMap[projectID] = agentName
 }
 
 // ClearListening removes the listening state for a project.
 func (cs *ChatStore) ClearListening(projectID string) {
-	cs.lisMu.Lock()
-	defer cs.lisMu.Unlock()
-	delete(cs.listening, projectID)
+	listeningMu.Lock()
+	defer listeningMu.Unlock()
+	delete(listeningMap, projectID)
 }
 
 // Listener returns the agent currently listening in a project, or "".
 func (cs *ChatStore) Listener(projectID string) string {
-	cs.lisMu.RLock()
-	defer cs.lisMu.RUnlock()
-	return cs.listening[projectID]
+	listeningMu.RLock()
+	defer listeningMu.RUnlock()
+	return listeningMap[projectID]
 }
 
 func (cs *ChatStore) chatPath(projectID string) string {
