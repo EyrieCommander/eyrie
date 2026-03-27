@@ -5,6 +5,12 @@ import { useData } from "../lib/DataContext";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
 
+const FRAMEWORK_EMOJI: Record<string, string> = {
+  zeroclaw: "🌀",
+  openclaw: "🦞",
+  hermes: "🔱",
+};
+
 function parseAgentRoute(pathname: string) {
   const match = pathname.match(/^\/agents\/([^/]+?)(?:\/(status|chat|logs|config))?$/);
   if (!match || match[1] === "overview") return null;
@@ -158,9 +164,10 @@ export default function Sidebar() {
                     }`}
                   >
                     <span
-                      className={`h-1.5 w-1.5 rounded-full ${pendingActions[agent.name] ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
+                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${pendingActions[agent.name] ? "bg-yellow-400 animate-pulse" : !agent.alive ? "bg-red" : agent.status?.provider_status === "error" ? "bg-yellow" : "bg-green"}`}
                     />
-                    {needsDisambig ? `${label} (${agent.framework})` : label}
+                    <span className="flex-1 truncate">{needsDisambig ? `${label} (${agent.framework})` : label}</span>
+                    <span className="shrink-0 text-[10px] leading-none">{FRAMEWORK_EMOJI[agent.framework] || ""}</span>
                   </Link>
                 );
               });
