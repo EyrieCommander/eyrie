@@ -104,41 +104,80 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// Each agent has its own session for this project
 	sessionKey := "project-" + projectID
 
-	// Track prior responses in this turn so later agents see what earlier
-	// agents said
-	var turnHistory []string
-
-	// Broadcast to agents sequentially
-	for _, p := range participants {
-		// @mentions always take priority — if the user explicitly asked
-		// for a specific agent, honor that regardless of other rules.
-		if mention != "" {
-			if !strings.EqualFold(mention, p.name) && !strings.EqualFold(mention, p.role) {
-				continue
+	// Determine which agent should respond.
+	// Priority: @mention > [LISTENING] agent > first-message commander > captain (default)
+	var respondent *projectParticipant
+	if mention != "" {
+		// Explicit @mention — find the mentioned agent
+		for i := range participants {
+			if strings.EqualFold(mention, participants[i].name) || strings.EqualFold(mention, participants[i].role) {
+				respondent = &participants[i]
+				break
 			}
-		} else if firstMessage && p.role != "commander" {
-			// On the first message with no mention, only commander responds
-			continue
-		} else if !firstMessage && p.role == "commander" {
-			// After the first message, commander only responds when @mentioned.
-			// Captain is the default responder for ongoing conversation.
+		}
+	} else if listener := o.chatStore.Listener(projectID); listener != "" {
+		// An agent is in [LISTENING] state — route to it
+		for i := range participants {
+			if participants[i].name == listener {
+				respondent = &participants[i]
+				break
+			}
+		}
+		// Clear listening — agent must re-assert [LISTENING] in its response
+		o.chatStore.ClearListening(projectID)
+	} else if firstMessage {
+		// First message: commander introduces and hands off
+		for i := range participants {
+			if participants[i].role == "commander" {
+				respondent = &participants[i]
+				break
+			}
+		}
+	} else {
+		// Default: captain responds
+		for i := range participants {
+			if participants[i].role == "captain" {
+				respondent = &participants[i]
+				break
+			}
+		}
+	}
+
+	if respondent == nil {
+		sse.WriteDone()
+		return fmt.Errorf("no agent available to respond")
+	}
+
+	// Build context: prepend recent chat history so the agent has full context
+	// without needing cross-agent sync.
+	recentMsgs, _ := o.chatStore.Messages(projectID, 20)
+	var contextLines []string
+	for _, m := range recentMsgs {
+		// Skip the message we just stored (already in the labeled message)
+		if m.ID == userMsg.ID {
 			continue
 		}
-
-		agent := discovery.NewAgent(p.agent)
-
-		// Build the message for this agent
-		var labeledMsg string
-		if firstMessage && p.role == "commander" {
-			labeledMsg = fmt.Sprintf("[system]: %s\n\n[user]: %s", initContent, message)
+		if m.Role == "system" {
+			contextLines = append(contextLines, fmt.Sprintf("[system]: %s", m.Content))
+		} else if m.Role == "user" {
+			contextLines = append(contextLines, fmt.Sprintf("[user]: %s", m.Content))
 		} else {
-			labeledMsg = fmt.Sprintf("[user]: %s", message)
+			contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", m.Sender, m.Role, m.Content))
 		}
+	}
 
-		// Prepend earlier agents' responses from this turn
-		if len(turnHistory) > 0 {
-			labeledMsg = strings.Join(turnHistory, "\n\n") + "\n\n" + labeledMsg
-		}
+	p := *respondent
+	agent := discovery.NewAgent(p.agent)
+
+	// Build the message with context
+	var labeledMsg string
+	if firstMessage && p.role == "commander" {
+		labeledMsg = fmt.Sprintf("[system]: %s\n\n[user]: %s", initContent, message)
+	} else if len(contextLines) > 0 {
+		labeledMsg = strings.Join(contextLines, "\n") + "\n\n[user]: " + message
+	} else {
+		labeledMsg = fmt.Sprintf("[user]: %s", message)
+	}
 
 		ch, err := agent.StreamMessage(agentCtx, labeledMsg, sessionKey)
 		if err != nil {
@@ -149,7 +188,8 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 				"role":   p.role,
 				"event":  map[string]string{"type": "error", "content": err.Error()},
 			})
-			continue
+			sse.WriteDone()
+			return fmt.Errorf("failed to stream to %s: %w", p.name, err)
 		}
 
 		// Collect the response and tool calls, streaming intermediate events
@@ -186,79 +226,49 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			})
 		}
 
-		// Skip [PASS] responses
-		trimmed := strings.TrimSpace(responseContent)
-		if trimmed == "[PASS]" || trimmed == "" {
-			continue
-		}
-
-		// Track this response so later agents in the sequence see it
-		turnHistory = append(turnHistory, fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, trimmed))
-
-		// Build parts from tool calls + final text
-		var parts []project.ChatPart
-		if len(toolCalls) > 0 {
-			parts = append(parts, toolCalls...)
-			if trimmed != "" {
-				parts = append(parts, project.ChatPart{Type: "text", Text: trimmed})
-			}
-		}
-
-		// Store the agent's response
-		agentMsg := project.ChatMessage{
-			ID:        uuid.New().String(),
-			Sender:    p.name,
-			Role:      p.role,
-			Content:   trimmed,
-			Timestamp: time.Now(),
-			Parts:     parts,
-		}
-		if err := o.chatStore.Append(projectID, agentMsg); err != nil {
-			slog.Warn("failed to save agent response", "agent", p.name, "error", err)
-		}
-
-		// Cross-agent sync: inform other participants of this agent's response.
-		// Retries up to 2 times with backoff; surfaces failures as system messages.
-		labeled := fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, trimmed)
-		for _, other := range participants {
-			if other.name == p.name {
-				continue
-			}
-			otherAgent := discovery.NewAgent(other.agent)
-			go func(a adapter.Agent, msg, sk, senderName, targetName string) {
-				const maxRetries = 2
-				var lastErr error
-				for attempt := 0; attempt <= maxRetries; attempt++ {
-					if attempt > 0 {
-						time.Sleep(time.Duration(attempt) * 2 * time.Second)
-						slog.Info("retrying cross-agent sync", "sender", senderName, "target", targetName, "attempt", attempt+1)
-					}
-					bgCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					_, lastErr = a.SendMessage(bgCtx, msg, sk)
-					cancel()
-					if lastErr == nil {
-						return
-					}
-				}
-				slog.Warn("cross-agent sync failed after retries",
-					"sender", senderName, "target", targetName, "error", lastErr)
-				// Surface as a system message in the project chat
-				failMsg := project.ChatMessage{
-					ID:        uuid.New().String(),
-					Sender:    "eyrie",
-					Role:      "system",
-					Content:   fmt.Sprintf("failed to deliver %s's message to %s: %v", senderName, targetName, lastErr),
-					Timestamp: time.Now(),
-				}
-				if appendErr := o.chatStore.Append(projectID, failMsg); appendErr != nil {
-					slog.Warn("failed to store sync failure message", "error", appendErr)
-				}
-			}(otherAgent, labeled, sessionKey, p.name, other.name)
-		}
-
-		// Send the stored message as SSE event
-		sse.WriteEvent(map[string]any{"type": "message", "message": agentMsg})
+	// Skip [PASS] responses
+	trimmed := strings.TrimSpace(responseContent)
+	if trimmed == "[PASS]" || trimmed == "" {
+		sse.WriteDone()
+		return nil
 	}
+
+	// Parse [LISTENING] directive — agent wants the next user message routed to it
+	listening := false
+	if strings.HasSuffix(trimmed, "[LISTENING]") {
+		listening = true
+		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "[LISTENING]"))
+	}
+
+	if listening {
+		o.chatStore.SetListening(projectID, p.name)
+		slog.Info("agent set listening", "agent", p.name, "project", projectID)
+	}
+
+	// Build parts from tool calls + final text
+	var parts []project.ChatPart
+	if len(toolCalls) > 0 {
+		parts = append(parts, toolCalls...)
+		if trimmed != "" {
+			parts = append(parts, project.ChatPart{Type: "text", Text: trimmed})
+		}
+	}
+
+	// Store the agent's response
+	agentMsg := project.ChatMessage{
+		ID:        uuid.New().String(),
+		Sender:    p.name,
+		Role:      p.role,
+		Content:   trimmed,
+		Timestamp: time.Now(),
+		Parts:     parts,
+	}
+	if err := o.chatStore.Append(projectID, agentMsg); err != nil {
+		slog.Warn("failed to save agent response", "agent", p.name, "error", err)
+	}
+
+	// Send the stored message as SSE event
+	sse.WriteEvent(map[string]any{"type": "message", "message": agentMsg})
 
 	// Signal completion
 	sse.WriteDone()

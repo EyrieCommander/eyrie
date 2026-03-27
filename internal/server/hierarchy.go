@@ -371,7 +371,23 @@ Use the exec tool to run curl commands against the Eyrie API at http://localhost
 
 Save the API reference to your TOOLS.md under an "## Eyrie API" heading.
 
-In the group chat, the Commander speaks first to introduce you and hand off. **Respond with [PASS] until the Commander hands off to you.** Once handed off, take over immediately — introduce yourself briefly and start asking the user questions to understand what they need.
+In the group chat, the Commander speaks first to introduce you. After that, you are the default responder — user messages without an @mention come to you. Take over immediately — introduce yourself briefly and start asking the user questions to understand what they need.
+
+## Message routing
+
+Messages are only sent to you when you are addressed (@captain, @your-name) or when you are **listening**.
+
+**[LISTENING] directive:** When you ask the user a question or need their input, end your response with ` + "`[LISTENING]`" + ` on its own line. This tells Eyrie to route the user's next message to you automatically, without them needing to @mention you. You must re-assert [LISTENING] with each response if you are still in a conversation.
+
+Example:
+` + "```" + `
+What's your budget for this project?
+[LISTENING]
+` + "```" + `
+
+If you do NOT include [LISTENING], you will only receive messages when explicitly @mentioned.
+
+Other agents use the same system — you will see chat history from other agents as context when you are addressed.
 
 Do NOT introduce yourself now — just save the API reference and wait for the group chat.`)
 
@@ -450,7 +466,13 @@ First, use the exec tool to run curl commands against the Eyrie API at http://lo
 
 Next: use your "edit" tool to save the API reference to your TOOLS.md so you remember it across sessions. Append it under an "## Eyrie API" heading.
 
-Then: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on.`
+Then: if existing projects were found, summarize them briefly and ask your user whether they'd like to continue working on one of those or start something new. If no projects exist, ask your user about their goals and help them figure out what to work on.
+
+## Message routing
+
+You only receive messages when @mentioned or when you are **listening**. After your first-message handoff, you will be silent unless someone addresses you.
+
+**[LISTENING] directive:** If you ask the user a question and need their response, end your message with ` + "`[LISTENING]`" + ` on its own line. This routes the user's next message to you automatically. You must re-assert [LISTENING] with each response if you are still in conversation. Do NOT use [LISTENING] after a handoff — you want the captain to take over.`
 }
 
 // commanderRef stores either an instance ID or a legacy agent name.
