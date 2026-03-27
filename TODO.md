@@ -27,23 +27,25 @@
 
 ### Next steps (by phase):
 
-**Phase 1 — Fix Agent Reliability (unblock the factory)**
-1. [ ] **Fix captain not responding to briefing** — diagnose model/tool issue, test with different models
-2. [ ] **Fix cross-agent message delivery** — add retry logic, delivery confirmation, error logging
-3. [ ] **Test end-to-end flow** — commander → captain → talon creation → @mention response
+**Phase 1 — Fix Agent Reliability** ✅
+1. [x] **Sandbox + URL fix** — ZeroClaw seatbelt rejects 127.0.0.1 (#4764, fixed upstream by #4767). All URLs changed to localhost.
+2. [x] **Cross-agent message delivery** — retry with backoff (2x), warn-level logging, failures as system messages
+3. [x] **@mention routing** — mentions take priority over first-message-commander-only rule
+4. [x] **Disconnect resilience** — agent context detached from HTTP request; responses persist if client disconnects
+5. [x] **Captain background briefing** — briefing runs at captain assignment, not at chat start
 
-**Phase 2 — Activity Tracking (backend)**
-4. [ ] **Project activity endpoint** — `GET /api/projects/{id}/activity` aggregating events from all project agents
-5. [ ] **Agent status enrichment** — busy/idle inference, current task, last active
-6. [ ] **Project progress tracking** — progress %, deadline field on Project struct
-7. [ ] **Metrics endpoint** — `GET /api/metrics` for dashboard stats
+**Phase 2 — Activity Tracking (backend)** ✅
+6. [x] **Project activity endpoint** — `GET /api/projects/{id}/activity` aggregating events from all project agents
+7. [x] **Agent status enrichment** — `BusyState` + `CurrentTask` inferred from `LastTask` timestamp
+8. [x] **SSE event bus** — `GET /api/projects/{id}/events` with publishing from instance/project handlers
 
-**Phase 3 — Control Room UI (frontend)**
-8. [ ] **Real-time project events** — SSE event bus (`GET /api/projects/{id}/events`) for live UI updates
-9. [ ] **Project workspace** — live split view: hierarchy diagram + agent roster + chat workspace
-10. [ ] **Mission control** — dashboard with metrics, project cards, commander access
-11. [ ] **Agent profile** — identity/soul/memory display + 1:1 chat
-12. [ ] **Activity timeline** — chronological event feed with filters
+**Phase 3 — Control Room UI (frontend)** — in progress
+9. [x] **Project workspace** — split view: agent roster sidebar + hierarchy diagram + chat workspace
+10. [x] **Real-time SSE streaming** — project chat streams messages, tool calls, and deltas in real-time
+11. [x] **Commander/captain routing** — commander speaks first, captain takes over, @mention for specific agents
+12. [ ] **Mission control** — dashboard with metrics, project cards, commander access
+13. [ ] **Agent profile** — identity/soul/memory display + 1:1 chat
+14. [ ] **Activity timeline** — chronological event feed with filters
 
 **Phase 4 — Agent Context (backend)**
 13. [ ] **Project context in provisioning** — PROJECT.md in talon workspace with project info + team roster

@@ -119,6 +119,10 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		} else if firstMessage && p.role != "commander" {
 			// On the first message with no mention, only commander responds
 			continue
+		} else if !firstMessage && p.role == "commander" {
+			// After the first message, commander only responds when @mentioned.
+			// Captain is the default responder for ongoing conversation.
+			continue
 		}
 
 		agent := discovery.NewAgent(p.agent)

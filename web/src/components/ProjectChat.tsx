@@ -22,150 +22,108 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState("");
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [streamingSender, setStreamingSender] = useState<string | null>(null);
-  const [streamingRole, setStreamingRole] = useState<string | null>(null);
-  const [streamingContent, setStreamingContent] = useState("");
-  const [streamingToolCalls, setStreamingToolCalls] = useState<ChatPart[]>([]);
+  const [streamingText, setStreamingText] = useState("");
+  const [streamingAgent, setStreamingAgent] = useState("");
+  const [streamingRole, setStreamingRole] = useState("");
+  const [streamingTools, setStreamingTools] = useState<{ name: string; done: boolean }[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const streamControllerRef = useRef<AbortController | null>(null);
-  const mountedRef = useRef(true);
+  const abortRef = useRef<AbortController | null>(null);
 
-  // Load chat history on mount, poll when idle
+  // Load messages on mount
   useEffect(() => {
-    fetchProjectChat(projectId).then(setMessages).catch((err) => {
-      console.error("fetchProjectChat error:", err);
-      setFetchError(err instanceof Error ? err.message : "Failed to load chat");
-    });
+    fetchProjectChat(projectId).then(setMessages).catch(console.error);
   }, [projectId]);
 
-  // Poll for new messages only when NOT sending
+  // Poll for new messages when idle (not sending)
   useEffect(() => {
     if (sending) return;
-    const interval = setInterval(() => {
+    const id = setInterval(() => {
       fetchProjectChat(projectId).then((msgs) => {
-        setMessages((prev) => {
-          if (msgs.length !== prev.length) return msgs;
-          for (let i = 0; i < msgs.length; i++) {
-            if (msgs[i].id !== prev[i].id || msgs[i].timestamp !== prev[i].timestamp) {
-              return msgs;
-            }
-          }
-          return prev;
-        });
-      }).catch((err) => {
-        console.error("fetchProjectChat poll error:", err);
-      });
+        setMessages((prev) => msgs.length !== prev.length ? msgs : prev);
+      }).catch(() => {});
     }, 4000);
-    return () => clearInterval(interval);
+    return () => clearInterval(id);
   }, [projectId, sending]);
 
   // Auto-scroll
   useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, streamingContent]);
+    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
+  }, [messages, streamingText]);
 
-  useEffect(() => {
-    return () => {
-      mountedRef.current = false;
-      streamControllerRef.current?.abort();
-    };
-  }, []);
+  useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  const sendMsg = useCallback((msg: string) => {
-    if (!msg || sending) return;
+  // Send a message
+  const send = useCallback((text: string) => {
+    if (!text || sending) return;
     setSending(true);
     setChatError("");
-    setStreamingContent("");
-    setStreamingSender(null);
-    setStreamingToolCalls([]);
+    setStreamingText("");
+    setStreamingAgent("");
 
-    // Optimistic: show user message immediately
-    setMessages((prev) => [...prev, {
-      id: `optimistic-${Date.now()}`,
-      sender: "user",
-      role: "user",
-      content: msg,
-      timestamp: new Date().toISOString(),
-    }]);
+    const ctrl = streamProjectChat(projectId, text, (event) => {
 
-    const controller = streamProjectChat(projectId, msg, (event) => {
-      if (!mountedRef.current) return;
-      if (event.type === "message" && event.message) {
-        const msg = event.message;
-        setMessages((prev) => {
-          // Skip if this is the user message we already added optimistically
-          if (msg.role === "user" && prev.some((m) => m.id.startsWith("optimistic-") && m.content === msg.content)) {
-            return prev.map((m) => m.id.startsWith("optimistic-") && m.content === msg.content ? msg : m);
+      switch (event.type) {
+        case "message":
+          if (event.message) {
+            setMessages((prev) => [...prev, event.message!]);
           }
-          return [...prev, msg];
-        });
-        // Only clear streaming state for agent responses (not user/system echoes)
-        if (msg.role !== "user" && msg.role !== "system") {
-          setStreamingContent("");
-          setStreamingSender(null);
-          setStreamingRole(null);
-          setStreamingToolCalls([]);
-        }
-      } else if (event.type === "agent_event" && event.event) {
-        const ev = event.event;
-        if (ev.type === "delta") {
-          setStreamingSender(event.sender || null);
-          setStreamingRole(event.role || null);
-          setStreamingContent((prev) => prev + (ev.content || ""));
-        } else if (ev.type === "tool_start") {
-          setStreamingSender(event.sender || null);
-          setStreamingRole(event.role || null);
-          setStreamingToolCalls((prev) => [...prev, {
-            type: "tool_call",
-            id: ev.tool_id,
-            name: ev.tool,
-            pending: true,
-          }]);
-        } else if (ev.type === "tool_result") {
-          setStreamingToolCalls((prev) => {
-            const updated = [...prev];
-            for (let i = updated.length - 1; i >= 0; i--) {
-              if ((ev.tool_id && updated[i].id === ev.tool_id) ||
-                  (!ev.tool_id && updated[i].name === ev.tool && updated[i].pending)) {
-                updated[i] = { ...updated[i], output: ev.output, pending: false };
-                break;
-              }
+          break;
+
+        case "agent_event":
+          if (event.event) {
+            const ev = event.event;
+            if (ev.type === "delta") {
+              setStreamingAgent(event.sender || "");
+              setStreamingRole(event.role || "");
+              setStreamingText((p) => p + (ev.content || ""));
+            } else if (ev.type === "tool_start") {
+              setStreamingAgent(event.sender || "");
+              setStreamingRole(event.role || "");
+              setStreamingTools((p) => [...p, { name: ev.tool || "tool", done: false }]);
+            } else if (ev.type === "tool_result") {
+              setStreamingTools((p) => {
+                const updated = [...p];
+                for (let i = updated.length - 1; i >= 0; i--) {
+                  if (!updated[i].done) { updated[i] = { ...updated[i], done: true }; break; }
+                }
+                return updated;
+              });
+            } else if (ev.type === "done" && ev.content) {
+              setStreamingText("");
+              setStreamingAgent("");
+              setStreamingTools([]);
+            } else if (ev.type === "error") {
+              setMessages((prev) => [...prev, {
+                id: `err-${Date.now()}`,
+                sender: event.sender || "agent",
+                role: event.role || "system",
+                content: `error: ${ev.content || ev.error || "unknown"}`,
+                timestamp: new Date().toISOString(),
+              }]);
             }
-            return updated;
-          });
-        } else if (ev.type === "error") {
-          const agentName = event.sender || "agent";
-          const errContent = ev.content || "unknown error";
-          setMessages((prev) => [...prev, {
-            id: `err-${Date.now()}`,
-            sender: agentName,
-            role: event.role || "system",
-            content: `error: ${errContent}`,
-            timestamp: new Date().toISOString(),
-          }]);
-          setStreamingContent("");
-          setStreamingSender(null);
-          setStreamingRole(null);
-        }
-      } else if (event.type === "done") {
-        setSending(false);
-        setStreamingContent("");
-        setStreamingSender(null);
-        setStreamingRole(null);
-        setStreamingToolCalls([]);
-      } else if (event.type === "error") {
-        setSending(false);
-        setChatError(event.error || "failed to send message");
+          }
+          break;
+
+        case "done":
+          setSending(false);
+          setStreamingText("");
+          setStreamingAgent("");
+          setStreamingTools([]);
+          // Final sync
+          fetchProjectChat(projectId).then(setMessages).catch(() => {});
+          break;
+
+        case "error":
+          setSending(false);
+          setChatError(event.error || "failed");
+          break;
       }
     });
-    streamControllerRef.current = controller;
+    abortRef.current = ctrl;
   }, [sending, projectId]);
 
   const handleSend = useCallback(() => {
@@ -173,25 +131,21 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     if (!msg) return;
     setInput("");
     if (inputRef.current) inputRef.current.style.height = "auto";
-    sendMsg(msg);
-  }, [input, sendMsg]);
+    send(msg);
+  }, [input, send]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      {/* Messages */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
+        {/* Empty state */}
         {messages.length === 0 && !sending && (
           <div className="text-center py-10 space-y-4">
-            <p className="text-xs text-text-muted">
-              start the project chat to bring the team together
-            </p>
+            <p className="text-xs text-text-muted">start the project chat to bring the team together</p>
             {chatError && (
-              <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red max-w-sm mx-auto">
-                {chatError}
-              </div>
+              <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red max-w-sm mx-auto">{chatError}</div>
             )}
             <button
-              onClick={() => sendMsg("Let's get started on this project.")}
+              onClick={() => send("Let's get started on this project.")}
               disabled={sending}
               className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
             >
@@ -199,10 +153,20 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             </button>
           </div>
         )}
-        {messages.map((msg) => {
+
+        {/* Messages — sort system messages before user messages at the same timestamp */}
+        {[...messages].sort((a, b) => {
+          // System messages go before user messages when timestamps are within 1 second
+          const ta = new Date(a.timestamp).getTime();
+          const tb = new Date(b.timestamp).getTime();
+          if (Math.abs(ta - tb) < 1000) {
+            if (a.role === "system" && b.role === "user") return -1;
+            if (a.role === "user" && b.role === "system") return 1;
+          }
+          return ta - tb;
+        }).map((msg) => {
           const parts = msg.parts ?? [];
           const toolParts = parts.filter((p) => p.type === "tool_call");
-          const hasParts = toolParts.length > 0;
           return (
             <div key={msg.id} className="text-xs">
               <div className="flex items-baseline gap-2">
@@ -215,13 +179,11 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                 <span className="text-[10px] text-text-muted">
                   {new Date(msg.timestamp).toLocaleTimeString()}
                 </span>
-                {hasParts && (
-                  <span className="text-[10px] text-accent/60">
-                    [{toolParts.length} tool{toolParts.length > 1 ? "s" : ""}]
-                  </span>
+                {toolParts.length > 0 && (
+                  <span className="text-[10px] text-accent/60">[{toolParts.length} tool{toolParts.length > 1 ? "s" : ""}]</span>
                 )}
               </div>
-              {hasParts && (
+              {toolParts.length > 0 && (
                 <div className="mt-1 space-y-1">
                   {toolParts.map((tc, i) => (
                     <PartToolCallCard key={`${msg.id}-tc-${i}`} part={tc} />
@@ -232,50 +194,48 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             </div>
           );
         })}
-        {sending && !streamingSender && streamingToolCalls.length === 0 && messages.length > 0 && (
+
+        {/* Streaming indicator */}
+        {sending && streamingAgent && (
+          <div className="text-xs">
+            <div className="flex items-baseline gap-2">
+              <span className={`font-bold ${ROLE_COLORS[streamingRole] || "text-text"}`}>
+                {streamingRole || "agent"}
+              </span>
+              <span className="text-[10px] text-text-muted">({streamingAgent})</span>
+              {!streamingText && streamingTools.length === 0 && (
+                <span className="text-[10px] text-text-muted animate-pulse">thinking...</span>
+              )}
+            </div>
+            {streamingTools.length > 0 && (
+              <div className="mt-1 space-y-1">
+                {streamingTools.map((tc, i) => (
+                  <div key={i} className="flex items-center gap-2 rounded border border-border bg-surface px-2 py-1">
+                    <span className="text-accent text-[10px] font-mono">{tc.name}</span>
+                    {tc.done
+                      ? <span className="text-[10px] text-green">OK</span>
+                      : <span className="text-[10px] text-text-muted animate-pulse">running...</span>
+                    }
+                  </div>
+                ))}
+              </div>
+            )}
+            {streamingText && (
+              <div className="mt-0.5 text-text whitespace-pre-wrap">
+                {streamingText}<StreamingCursor />
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Waiting indicator (before any agent starts) */}
+        {sending && !streamingAgent && messages.length > 0 && (
           <div className="text-xs py-1 flex items-center gap-2 text-text-muted">
             <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
             waiting for agent response...
           </div>
         )}
-        {streamingSender && (
-          <div className="text-xs">
-            <div className="flex items-baseline gap-2">
-              <span className={`font-bold ${ROLE_COLORS[streamingRole || "captain"] || "text-text"}`}>
-                {streamingRole || "agent"}
-              </span>
-              <span className="text-[10px] text-text-muted">({streamingSender})</span>
-              {!streamingContent && streamingToolCalls.length === 0 && (
-                <span className="text-[10px] text-text-muted animate-pulse">thinking...</span>
-              )}
-            </div>
-            {streamingToolCalls.length > 0 && (
-              <div className="mt-1 space-y-1">
-                {streamingToolCalls.map((tc, i) => (
-                  <div key={`stc-${i}`} className="rounded border border-border bg-surface px-2 py-1">
-                    <div className="flex items-center gap-2">
-                      <span className="text-accent text-[10px] font-mono">{tc.name}</span>
-                      {!tc.output && <span className="text-[10px] text-text-muted animate-pulse">running...</span>}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-            {streamingContent && (
-              <div className="mt-0.5 text-text whitespace-pre-wrap">
-                {streamingContent}
-                <StreamingCursor />
-              </div>
-            )}
-          </div>
-        )}
       </div>
-
-      {fetchError && !sending && messages.length === 0 && (
-        <div className="text-center py-4">
-          <p className="text-xs text-red">{fetchError}</p>
-        </div>
-      )}
 
       {/* Input */}
       <div className="relative border-t border-border p-3 flex gap-2">
@@ -289,8 +249,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                   key={p.name}
                   onClick={() => {
                     const atIdx = input.lastIndexOf("@");
-                    const before = atIdx >= 0 ? input.slice(0, atIdx) : input;
-                    setInput(before + "@" + p.role + " ");
+                    setInput((atIdx >= 0 ? input.slice(0, atIdx) : input) + "@" + p.role + " ");
                     setShowMentions(false);
                     inputRef.current?.focus();
                   }}
@@ -308,15 +267,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           rows={1}
           value={input}
           onChange={(e) => {
-            const val = e.target.value;
-            setInput(val);
-            // Auto-resize: reset height then set to scrollHeight
+            setInput(e.target.value);
             e.target.style.height = "auto";
             e.target.style.height = Math.min(e.target.scrollHeight, 150) + "px";
-            const atIdx = val.lastIndexOf("@");
-            if (atIdx >= 0 && (atIdx === 0 || val[atIdx - 1] === " ")) {
-              const partial = val.slice(atIdx + 1).toLowerCase();
-              setMentionFilter(partial);
+            const atIdx = e.target.value.lastIndexOf("@");
+            if (atIdx >= 0 && (atIdx === 0 || e.target.value[atIdx - 1] === " ")) {
+              setMentionFilter(e.target.value.slice(atIdx + 1).toLowerCase());
               setShowMentions(true);
               setMentionIdx(0);
             } else {
@@ -327,15 +283,13 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             if (e.key === "Escape") { setShowMentions(false); return; }
             if (showMentions) {
               const filtered = participants.filter((p) => !mentionFilter || p.role.toLowerCase().includes(mentionFilter) || p.name.toLowerCase().includes(mentionFilter));
-              if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((prev) => Math.min(prev + 1, filtered.length - 1)); return; }
-              if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((prev) => Math.max(prev - 1, 0)); return; }
+              if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
+              if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, 0)); return; }
               if ((e.key === "Enter" || e.key === "Tab") && filtered.length > 0) {
                 e.preventDefault();
-                const idx = Math.min(mentionIdx, filtered.length - 1);
-                const p = filtered[idx];
+                const p = filtered[Math.min(mentionIdx, filtered.length - 1)];
                 const atIdx = input.lastIndexOf("@");
-                const before = atIdx >= 0 ? input.slice(0, atIdx) : input;
-                setInput(before + "@" + p.role + " ");
+                setInput((atIdx >= 0 ? input.slice(0, atIdx) : input) + "@" + p.role + " ");
                 setShowMentions(false);
                 return;
               }

@@ -55,6 +55,7 @@ export default function ProjectDetail() {
   const [commanderName, setCommanderName] = useState("");
   const [commanderStatus, setCommanderStatus] = useState("");
   const [startingAgent, setStartingAgent] = useState("");
+  const [chatKey, setChatKey] = useState(0); // increment to remount ProjectChat
   const hasLoadedRef = useRef(false);
   const pollRef = useRef<{ interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null }>({ interval: null, timeout: null });
 
@@ -108,13 +109,18 @@ export default function ProjectDetail() {
     return () => clearInterval(interval);
   }, [instances, refresh]);
 
-  // Subscribe to project events for real-time updates
+  // Subscribe to project events for real-time updates.
+  // Only refresh the agent roster, NOT the full context (which would
+  // cause ProjectChat to unmount/remount and lose its state).
   useEffect(() => {
     if (!id) return;
     const evtSource = new EventSource(`/api/projects/${id}/events`);
     evtSource.onmessage = () => {
-      // Any structural event → refresh data
-      refresh();
+      // Refresh instances only (sidebar roster), not the full context
+      ctxRefresh();
+    };
+    evtSource.onerror = () => {
+      // SSE connection failed — silently ignore, will reconnect
     };
     return () => evtSource.close();
   }, [id, refresh]);
@@ -150,9 +156,9 @@ export default function ProjectDetail() {
     }
   };
 
-  // Check if required agents are stopped
+  // Check if required agents are stopped (only after initial load)
   const needsStart: { name: string; role: string; isInstance: boolean; id: string }[] = [];
-  if (commanderName && commanderStatus !== "running") {
+  if (commanderName && commanderStatus && commanderStatus !== "running") {
     const cmdInst = instances.find((i) => i.name === commanderName);
     needsStart.push({ name: commanderName, role: "commander", isInstance: !!cmdInst, id: cmdInst?.id || commanderName });
   }
@@ -364,7 +370,7 @@ export default function ProjectDetail() {
                   for (const name of allAgents) {
                     await fetch(`/api/agents/${name}/sessions/${sessionKey}/reset`, { method: "POST" }).catch(() => {});
                   }
-                  window.location.reload();
+                  setChatKey((k) => k + 1); // remount ProjectChat with fresh state
                 } catch (e) {
                   setLoadError(e instanceof Error ? e.message : "reset failed");
                 }
@@ -410,34 +416,32 @@ export default function ProjectDetail() {
           </div>
         </div>
 
-        {/* Main workspace area */}
-        <div className="flex flex-1 flex-col overflow-hidden">
-          {!commanderName ? (
-            <div className="flex flex-1 items-center justify-center">
+        {/* Main workspace area — ProjectChat is ALWAYS mounted to preserve
+            streaming state. Setup prompts overlay on top when needed. */}
+        <div className="relative flex flex-1 flex-col overflow-hidden">
+          {/* Setup overlays */}
+          {!commanderName && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-3">
                 <p className="text-xs text-text-muted">no commander set up yet</p>
-                <button
-                  onClick={() => navigate("/hierarchy")}
-                  className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80"
-                >
+                <button onClick={() => navigate("/hierarchy")} className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80">
                   set up commander
                 </button>
               </div>
             </div>
-          ) : !hasCaptain ? (
-            <div className="flex flex-1 items-center justify-center">
+          )}
+          {commanderName && !hasCaptain && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-3">
                 <p className="text-xs text-text-muted">assign a captain to start</p>
-                <button
-                  onClick={() => setShowSetOrchestrator(true)}
-                  className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80"
-                >
+                <button onClick={() => setShowSetOrchestrator(true)} className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80">
                   assign captain
                 </button>
               </div>
             </div>
-          ) : needsStart.length > 0 ? (
-            <div className="flex flex-1 items-center justify-center">
+          )}
+          {commanderName && hasCaptain && needsStart.length > 0 && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-4">
                 <p className="text-xs text-text-muted">agents need to be running</p>
                 <div className="flex flex-col items-center gap-2">
@@ -458,17 +462,19 @@ export default function ProjectDetail() {
                 </div>
               </div>
             </div>
-          ) : (
-            <ProjectChat
-              projectId={project.id}
-              participants={[
-                { name: commanderName, role: "commander" },
-                ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
-                ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
-                ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
-              ]}
-            />
           )}
+
+          {/* Always-mounted chat */}
+          <ProjectChat
+            key={chatKey}
+            projectId={project.id}
+            participants={[
+              ...(commanderName ? [{ name: commanderName, role: "commander" }] : []),
+              ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
+              ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
+              ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
+            ]}
+          />
         </div>
       </div>
 
