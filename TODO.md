@@ -98,8 +98,7 @@
 ## Bugs
 
 - [x] **Config editor corrupts TOML**: Fixed — raw text editor writes directly to disk (`WriteRawAtomic`); inline field editor coerces JSON `float64` back to `int64` before TOML encoding (`CoerceJSONNumbers`).
-- [ ] **Discovery timing**: Newly created instances show "Agent not found" for a few seconds before discovery picks them up. Added yellow provisioning state but race window still exists.
-- [ ] **DestroySession TOCTOU**: `DestroySession` in `openclaw.go` reads, modifies, and rewrites `sessions.json` without file locking. If OpenClaw writes to the file concurrently, Eyrie's write clobbers it. Fix with `flock` around the read-modify-write, or add a `sessions.destroy` RPC to OpenClaw and call that instead of doing file surgery.
+- [x] **DestroySession TOCTOU**: Fixed — replaced file surgery on `sessions.json` with OpenClaw's native `sessions.delete` RPC (which was already available). Eyrie no longer touches `sessions.json` directly for active session deletion.
 - [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
 - [ ] **Vite proxy buffers SSE responses**: The Vite dev server proxy (`http-proxy`) buffers SSE POST responses instead of streaming them. Events only appear when the response completes. Workaround: bypass proxy for SSE by calling Go backend directly (`SSE_BASE = "http://localhost:7200"` in dev) + CORS handler. Doesn't affect production (same-origin, no proxy).
 

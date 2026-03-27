@@ -9,7 +9,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -1171,82 +1170,22 @@ func (o *OpenClawAdapter) ResetSession(ctx context.Context, sessionKey string) e
 
 // DestroySession completely removes a session — deletes the JSONL transcript
 // and removes the entry from sessions.json. Works for both active and archived sessions.
+//
+// For active sessions this delegates to OpenClaw's sessions.delete RPC, which
+// handles its own locking and transcript cleanup. Previous versions did file
+// surgery on sessions.json from Eyrie, which was racy (TOCTOU) when OpenClaw
+// wrote to the same file concurrently.
 func (o *OpenClawAdapter) DestroySession(ctx context.Context, sessionKey string) error {
-	// For archived sessions, just delete the file
+	// For archived sessions, just delete the file (no sessions.json entry)
 	if strings.HasPrefix(sessionKey, "archive:") {
 		return o.DeleteSession(ctx, sessionKey)
 	}
 
-	agentsDir := o.agentsDir()
-	if agentsDir == "" {
-		return fmt.Errorf("cannot determine agents directory")
-	}
-
-	entries, err := os.ReadDir(agentsDir)
+	_, err := o.rpcCall(ctx, "sessions.delete", map[string]any{"key": sessionKey})
 	if err != nil {
-		return fmt.Errorf("reading agents dir: %w", err)
+		return fmt.Errorf("sessions.delete: %w", err)
 	}
-
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		sessJSONPath := filepath.Join(agentsDir, entry.Name(), "sessions", "sessions.json")
-		data, err := os.ReadFile(sessJSONPath)
-		if err != nil {
-			continue
-		}
-
-		var store map[string]json.RawMessage
-		if json.Unmarshal(data, &store) != nil {
-			continue
-		}
-
-		raw, ok := store[sessionKey]
-		if !ok {
-			continue
-		}
-
-		// Parse to get the session file path
-		var meta struct {
-			SessionID   string `json:"sessionId"`
-			SessionFile string `json:"sessionFile"`
-		}
-		if err := json.Unmarshal(raw, &meta); err != nil {
-			return fmt.Errorf("parsing session metadata for %q: %w", sessionKey, err)
-		}
-
-		// Remove from sessions.json first (atomic write via temp file + rename)
-		// so the index never points at a missing transcript on partial failure.
-		delete(store, sessionKey)
-		updated, err := json.MarshalIndent(store, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshaling sessions.json: %w", err)
-		}
-		tmpPath := sessJSONPath + ".tmp"
-		if err := os.WriteFile(tmpPath, updated, 0o600); err != nil {
-			return fmt.Errorf("writing sessions.json tmp: %w", err)
-		}
-		if err := os.Rename(tmpPath, sessJSONPath); err != nil {
-			os.Remove(tmpPath)
-			return fmt.Errorf("renaming sessions.json: %w", err)
-		}
-
-		// Delete the JSONL transcript file (non-fatal if already gone)
-		if meta.SessionFile != "" {
-			if err := os.Remove(meta.SessionFile); err != nil && !os.IsNotExist(err) {
-				slog.Warn("failed to remove transcript file", "path", meta.SessionFile, "error", err)
-			}
-		} else if meta.SessionID != "" {
-			jsonlPath := filepath.Join(agentsDir, entry.Name(), "sessions", meta.SessionID+".jsonl")
-			if err := os.Remove(jsonlPath); err != nil && !os.IsNotExist(err) {
-				slog.Warn("failed to remove transcript file", "path", jsonlPath, "error", err)
-			}
-		}
-		return nil
-	}
-
-	return fmt.Errorf("session %q not found", sessionKey)
+	return nil
 }
 
 func (o *OpenClawAdapter) DeleteSession(_ context.Context, sessionKey string) error {
