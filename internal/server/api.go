@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strings"
@@ -413,12 +415,14 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
-	// Find agent to get config path and format
+	// Find agent to get config path, format, and liveness
 	result := s.runDiscovery(ctx)
 	var discoveredAgent *adapter.DiscoveredAgent
+	var agentAlive bool
 	for _, ar := range result.Agents {
 		if ar.Agent.Name == name {
 			discoveredAgent = &ar.Agent
+			agentAlive = ar.Alive
 			break
 		}
 	}
@@ -463,6 +467,31 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid %s config: %v", format, valErr)})
 			return
 		}
+
+		// When the agent is online, its GET /api/config response masks
+		// sensitive fields (api_key becomes "***MASKED***"). Proxy saves
+		// through the agent's own PUT /api/config so it can restore the
+		// real values from memory. Writing masked values directly to disk
+		// would replace actual secrets with the literal mask string.
+		if agentAlive && discoveredAgent.Framework == "zeroclaw" {
+			if err := proxyConfigSave(ctx, discoveredAgent, rawStr); err == nil {
+				writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "configuration saved successfully"})
+				return
+			}
+			// Proxy failed (agent went offline between discovery and save).
+			// Fall through to direct disk write with safety check below.
+		}
+
+		// Safety net: reject direct disk writes that contain masked
+		// secret placeholders. These come from the agent's API response
+		// and would corrupt the config if written to disk.
+		if containsMaskedSecrets(rawStr) {
+			writeJSON(w, http.StatusBadRequest, map[string]string{
+				"error": "config contains masked secret placeholders (***MASKED***) that would overwrite real API keys — restart the agent and try again",
+			})
+			return
+		}
+
 		if err := config.WriteRawAtomic(configPath, rawStr); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to write config: %v", err)})
 			return
@@ -477,6 +506,15 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	// Fix by converting whole-number floats back to int64.
 	config.CoerceJSONNumbers(body.Config)
 
+	// Safety net: check the structured config for masked secret placeholders
+	// before writing to disk.
+	if configJSON, err := json.Marshal(body.Config); err == nil && containsMaskedSecrets(string(configJSON)) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{
+			"error": "config contains masked secret placeholders (***MASKED***) that would overwrite real API keys — restart the agent and try again",
+		})
+		return
+	}
+
 	// Write config atomically
 	if err := config.WriteConfigAtomic(configPath, format, body.Config); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("failed to write config: %v", err)})
@@ -484,6 +522,41 @@ func (s *Server) handleAgentConfigUpdate(w http.ResponseWriter, r *http.Request)
 	}
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "configuration saved successfully"})
+}
+
+// proxyConfigSave forwards a config save to the agent's own PUT /api/config
+// endpoint. This lets the agent restore masked secret placeholders
+// (***MASKED***) with the real values from its in-memory config before
+// writing to disk.
+func proxyConfigSave(ctx context.Context, agent *adapter.DiscoveredAgent, rawConfig string) error {
+	apiURL := agent.URL() + "/api/config"
+	req, err := http.NewRequestWithContext(ctx, "PUT", apiURL, bytes.NewReader([]byte(rawConfig)))
+	if err != nil {
+		return fmt.Errorf("creating proxy request: %w", err)
+	}
+	req.Header.Set("Content-Type", "text/plain")
+	if agent.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+agent.Token)
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("proxy request to %s: %w", apiURL, err)
+	}
+	defer resp.Body.Close()
+	io.Copy(io.Discard, resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("agent returned %d", resp.StatusCode)
+	}
+	return nil
+}
+
+// containsMaskedSecrets checks whether a config string contains masked secret
+// placeholders that would corrupt the config if saved to disk. These come from
+// agent API responses that mask sensitive fields for display.
+func containsMaskedSecrets(s string) bool {
+	return strings.Contains(s, "***MASKED***")
 }
 
 func (s *Server) handleAgentConfigValidate(w http.ResponseWriter, r *http.Request) {

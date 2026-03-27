@@ -54,16 +54,19 @@
 16. [ ] **Persona picker** — grid of persona cards for talon provisioning
 17. [ ] **Project creation with commander** — option to create via UI or ask commander
 
-### Dashboard improvements:
-- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
-- [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
+---
 
 ### ZeroClaw PRs:
 - **#4275 (named sessions)**: Merged ✅ (our #4267 was superseded)
 - **#4350 (streaming tool events)**: Closed — superseded by upstream #4175
-- **#4584 (proxy tool event parsing)**: Open, rebased on #4175. 4 files: StreamEvent::PreExecutedToolResult, parse_proxy_tool_event, turn_streamed forwarding
+- **#4584 (proxy tool event parsing)**: Closed — functionality landed upstream on master
+- **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
 
 ---
+
+## Dashboard improvements:
+- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
+- [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 
 ## Security
 
@@ -97,6 +100,8 @@
 - [x] **Config editor corrupts TOML**: Fixed — raw text editor writes directly to disk (`WriteRawAtomic`); inline field editor coerces JSON `float64` back to `int64` before TOML encoding (`CoerceJSONNumbers`).
 - [ ] **Discovery timing**: Newly created instances show "Agent not found" for a few seconds before discovery picks them up. Added yellow provisioning state but race window still exists.
 - [ ] **DestroySession TOCTOU**: `DestroySession` in `openclaw.go` reads, modifies, and rewrites `sessions.json` without file locking. If OpenClaw writes to the file concurrently, Eyrie's write clobbers it. Fix with `flock` around the read-modify-write, or add a `sessions.destroy` RPC to OpenClaw and call that instead of doing file surgery.
+- [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
+- [ ] **Vite proxy buffers SSE responses**: The Vite dev server proxy (`http-proxy`) buffers SSE POST responses instead of streaming them. Events only appear when the response completes. Workaround: bypass proxy for SSE by calling Go backend directly (`SSE_BASE = "http://localhost:7200"` in dev) + CORS handler. Doesn't affect production (same-origin, no proxy).
 
 ## UI
 
