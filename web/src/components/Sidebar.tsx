@@ -1,6 +1,6 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Layers, Settings, Users } from "lucide-react";
+import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
@@ -32,6 +32,22 @@ export default function Sidebar() {
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
   const [frameworksExpanded, setFrameworksExpanded] = useState(true);
+  const [windMode, setWindMode] = useState(false);
+  const prevPendingRef = useRef(0);
+  const windTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Bird flies away when an agent action starts
+  useEffect(() => {
+    const count = Object.keys(pendingActions).length;
+    if (count > prevPendingRef.current && !windTimerRef.current) {
+      setWindMode(true);
+      windTimerRef.current = setTimeout(() => {
+        setWindMode(false);
+        windTimerRef.current = null;
+      }, 2000);
+    }
+    prevPendingRef.current = count;
+  }, [pendingActions]);
 
   const activeFramework = pathname.startsWith("/frameworks/") ? pathname.split("/")[2] : null;
 
@@ -51,7 +67,10 @@ export default function Sidebar() {
     <aside className="flex h-screen w-56 shrink-0 flex-col bg-bg-sidebar border-r border-border">
       <div className="px-5 pt-7 pb-6">
         <Link to="/agents/overview" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
-          <Bird className="h-5 w-5 text-accent" />
+          <span className="relative h-5 w-5">
+            <Bird className={`h-5 w-5 text-accent absolute inset-0 transition-all duration-500 ${windMode ? "opacity-0 translate-x-3 -translate-y-2 scale-75" : "opacity-100"}`} />
+            <Wind className={`h-5 w-5 text-accent absolute inset-0 transition-all duration-500 ${windMode ? "opacity-100" : "opacity-0 -translate-x-2 scale-75"}`} />
+          </span>
           <span className="text-base font-bold text-text">eyrie</span>
         </Link>
       </div>
