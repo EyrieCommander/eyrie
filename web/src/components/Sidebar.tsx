@@ -1,9 +1,38 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
+import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, GripVertical, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
+
+function useSortOrder<T extends { id: string }>(key: string, items: T[]) {
+  const [order, setOrder] = useState<string[]>(() => {
+    try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : []; } catch { return []; }
+  });
+
+  const sorted = useMemo(() => {
+    const pos = new Map(order.map((id, i) => [id, i]));
+    return [...items].sort((a, b) => {
+      const pa = pos.get(a.id) ?? Infinity;
+      const pb = pos.get(b.id) ?? Infinity;
+      return pa - pb;
+    });
+  }, [items, order]);
+
+  const reorder = useCallback((fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    const ids = sorted.map((i) => i.id);
+    const fromIdx = ids.indexOf(fromId);
+    const toIdx = ids.indexOf(toId);
+    if (fromIdx < 0 || toIdx < 0) return;
+    ids.splice(fromIdx, 1);
+    ids.splice(toIdx, 0, fromId);
+    setOrder(ids);
+    try { localStorage.setItem(key, JSON.stringify(ids)); } catch {}
+  }, [key, sorted]);
+
+  return { sorted, reorder };
+}
 
 const FRAMEWORK_EMOJI: Record<string, string> = {
   zeroclaw: "🌀",
@@ -27,6 +56,9 @@ export default function Sidebar() {
   const { pathname } = useLocation();
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
   const activeAgent = useMemo(() => parseAgentRoute(pathname), [pathname]);
+  const { sorted: sortedProjects, reorder: reorderProjects } = useSortOrder("eyrie-project-order", projects);
+  const [dragOverId, setDragOverId] = useState<string | null>(null);
+  const dragIdRef = useRef<string | null>(null);
   const activeProject = useMemo(() => parseProjectRoute(pathname), [pathname]);
 
   const [agentsExpanded, setAgentsExpanded] = useState(true);
@@ -115,24 +147,46 @@ export default function Sidebar() {
           </button>
         </div>
 
-        {projectsExpanded && projects.length > 0 && (
+        {projectsExpanded && sortedProjects.length > 0 && (
           <div id="projects-list" className="ml-4 border-l border-border pl-2 space-y-px">
-            {projects.map((project) => {
+            {sortedProjects.map((project) => {
               const isActive = activeProject === project.id;
+              const isDragOver = dragOverId === project.id;
               return (
                 <Link
                   key={project.id}
                   to={`/projects/${project.id}`}
-                  className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                    isActive
-                      ? "bg-surface-hover text-accent font-medium"
-                      : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+                  draggable
+                  onDragStart={(e) => {
+                    dragIdRef.current = project.id;
+                    e.dataTransfer.effectAllowed = "move";
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    setDragOverId(project.id);
+                  }}
+                  onDragLeave={() => setDragOverId(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverId(null);
+                    if (dragIdRef.current) reorderProjects(dragIdRef.current, project.id);
+                    dragIdRef.current = null;
+                  }}
+                  onDragEnd={() => { setDragOverId(null); dragIdRef.current = null; }}
+                  className={`group flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                    isDragOver
+                      ? "border-t border-accent"
+                      : isActive
+                        ? "bg-surface-hover text-accent font-medium"
+                        : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
                   }`}
                 >
+                  <GripVertical className="h-2.5 w-2.5 shrink-0 opacity-0 group-hover:opacity-40 cursor-grab" />
                   <span
-                    className={`h-1.5 w-1.5 rounded-full ${project.status === "active" ? "bg-green" : "bg-text-muted/30"}`}
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${project.status === "active" ? "bg-green" : "bg-text-muted/30"}`}
                   />
-                  {project.name}
+                  <span className="truncate">{project.name}</span>
                 </Link>
               );
             })}

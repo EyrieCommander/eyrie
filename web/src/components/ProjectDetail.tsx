@@ -361,7 +361,7 @@ export default function ProjectDetail() {
                   // Reset project chat
                   await fetch(`/api/projects/${project.id}/chat`, { method: "DELETE" });
                   // Reset each agent's project session
-                  const sessionKey = `project-${project.id}`;
+                  const sessionKey = project.session_key || `project-${project.id}`;
                   const allAgents = [
                     commanderName,
                     ...(captainInstance ? [captainInstance.name] : []),

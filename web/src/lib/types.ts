@@ -226,6 +226,7 @@ export interface Project {
   created_at: string;
   updated_at: string;
   created_by: string;
+  session_key?: string;
 }
 
 export interface CreateProjectRequest {

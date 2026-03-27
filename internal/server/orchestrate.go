@@ -103,7 +103,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	}
 
 	// Each agent has its own session for this project
-	sessionKey := "project-" + projectID
+	sessionKey := projectSessionKey(proj)
 
 	// Build ordered priority list of who should respond.
 	// Each agent gets a chance; if it responds with [PASS], the next one tries.
@@ -180,6 +180,29 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		labeledMsg = fmt.Sprintf("[user]: %s", message)
 	}
 
+	// Prepend routing rules so the agent knows about [LISTENING] and [PASS]
+	// on its first message in this project session.
+	if firstMessage {
+		routingRules := `[system]: CONVERSATION RULES for this project chat:
+- You are in a multi-agent project chat with the user, a Commander, and a Captain.
+- End your response with [LISTENING] if you are asking the user a question or need their input. This routes their next message directly to you.
+- End your response with [PASS] to hand off to the next agent (e.g. Commander passes to Captain after briefing).
+- If you include neither, you go idle and only respond when @mentioned.
+- You MUST use one of these directives at the end of every response.`
+		labeledMsg = routingRules + "\n\n" + labeledMsg
+	}
+
+		sse.WriteEvent(map[string]any{
+			"type": "debug",
+			"msg":  fmt.Sprintf("routing to %s (%s)", p.name, p.role),
+			"detail": map[string]any{
+				"firstMessage": firstMessage,
+				"mention":      mention,
+				"listener":     o.chatStore.Listener(projectID),
+				"msgPreview":   labeledMsg[:min(len(labeledMsg), 200)],
+			},
+		})
+
 		ch, err := agent.StreamMessage(agentCtx, labeledMsg, sessionKey)
 		if err != nil {
 			slog.Warn("failed to send to participant", "agent", p.name, "error", err)
@@ -232,6 +255,16 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	isPassing := strings.HasSuffix(trimmed, "[PASS]") || trimmed == "[PASS]"
 	isListening := strings.HasSuffix(trimmed, "[LISTENING]")
 
+	sse.WriteEvent(map[string]any{
+		"type": "debug",
+		"msg":  fmt.Sprintf("%s responded", p.name),
+		"detail": map[string]any{
+			"isPassing":   isPassing,
+			"isListening": isListening,
+			"responseEnd": trimmed[max(0, len(trimmed)-50):],
+		},
+	})
+
 	// Strip directives from the display content
 	displayContent := trimmed
 	if isPassing {
@@ -282,114 +315,6 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	} // end priority loop
 
 	// Signal completion
-	sse.WriteDone()
-	return nil
-}
-
-// RunIntakeChat executes the 1:1 intake conversation between the user
-// and the commander agent, streaming events via SSE.
-func (o *ChatOrchestrator) RunIntakeChat(ctx context.Context, proj *project.Project, message string, commanderName string, sse *SSEWriter) error {
-	projectID := proj.ID
-
-	// Find commander agent via discovery
-	disc := o.cfg(ctx)
-	var commanderAgent adapter.DiscoveredAgent
-	found := false
-	for _, ar := range disc.Agents {
-		if ar.Agent.Name == commanderName && ar.Alive {
-			commanderAgent = ar.Agent
-			found = true
-			break
-		}
-	}
-	if !found {
-		return fmt.Errorf("commander not running")
-	}
-
-	agent := discovery.NewAgent(commanderAgent)
-
-	// Check if this is the first intake message
-	intakeMessages, intakeErr := o.chatStore.IntakeMessages(projectID, 1)
-	if intakeErr != nil {
-		return fmt.Errorf("failed to check intake messages for project %s: %w", projectID, intakeErr)
-	}
-	firstIntake := len(intakeMessages) == 0
-
-	// Store user message
-	userMsg := project.ChatMessage{
-		ID:        uuid.New().String(),
-		Sender:    "user",
-		Role:      "user",
-		Content:   message,
-		Timestamp: time.Now(),
-	}
-	if err := o.chatStore.AppendIntake(projectID, userMsg); err != nil {
-		return fmt.Errorf("failed to save message: %w", err)
-	}
-
-	// Build the message to send to the commander
-	sessionKey := "project-" + projectID + "-intake"
-	var labeledMsg string
-	if firstIntake {
-		intakePrompt := fmt.Sprintf(`Your user is setting up a new project called "%s".`, proj.Name)
-		if proj.Goal != "" {
-			intakePrompt += fmt.Sprintf("\nThey've noted the goal: %s", proj.Goal)
-		}
-		if proj.Description != "" {
-			intakePrompt += fmt.Sprintf("\nDescription: %s", proj.Description)
-		}
-		intakePrompt += `
-
-Have a brief conversation with them to understand what they want to accomplish. Ask about:
-- What they want to build or achieve
-- Their motivation and why this matters to them
-- Any constraints, preferences, or context that would help the project team
-
-Keep it conversational — 2-3 focused questions. Don't plan the project or propose a team yet. You're just gathering context so you can introduce the user and their goals to the project captain later.`
-		labeledMsg = fmt.Sprintf("[system]: %s\n\n[user]: %s", intakePrompt, message)
-	} else {
-		labeledMsg = fmt.Sprintf("[user]: %s", message)
-	}
-
-	// Send user message event
-	sse.WriteEvent(map[string]any{"type": "message", "message": userMsg})
-
-	// Stream commander response
-	ch, err := agent.StreamMessage(ctx, labeledMsg, sessionKey)
-	if err != nil {
-		sse.WriteError(err.Error())
-		return fmt.Errorf("failed to stream to commander: %w", err)
-	}
-
-	var responseContent string
-	for ev := range ch {
-		if ev.Type == "done" {
-			responseContent = ev.Content
-		}
-		sse.WriteEvent(map[string]any{
-			"type":   "agent_event",
-			"sender": commanderName,
-			"role":   "commander",
-			"event":  ev,
-		})
-	}
-
-	// Store commander response
-	if responseContent != "" {
-		cmdMsg := project.ChatMessage{
-			ID:        uuid.New().String(),
-			Sender:    commanderName,
-			Role:      "commander",
-			Content:   responseContent,
-			Timestamp: time.Now(),
-		}
-		if err := o.chatStore.AppendIntake(projectID, cmdMsg); err != nil {
-			slog.Warn("failed to save intake response", "project", projectID, "error", err)
-		}
-
-		sse.WriteEvent(map[string]any{"type": "message", "message": cmdMsg})
-	}
-
 	sse.WriteDone()
 	return nil
 }

@@ -310,7 +310,7 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 
 	agent := discovery.NewAgent(found.Agent)
 	briefing := composeCaptainBriefing(proj)
-	sessionName := fmt.Sprintf("project-%s-briefing", proj.Name)
+	sessionName := "eyrie-captain-briefing"
 
 	sse, err := NewSSEWriter(w)
 	if err != nil {

@@ -82,7 +82,8 @@ type Project struct {
 	Deadline       *time.Time    `json:"deadline,omitempty"`          // target completion date
 	CreatedAt      time.Time     `json:"created_at"`
 	UpdatedAt      time.Time     `json:"updated_at"`
-	CreatedBy      string        `json:"created_by"` // "user" or coordinator instance ID
+	CreatedBy      string        `json:"created_by"`            // "user" or coordinator instance ID
+	SessionKey     string        `json:"session_key,omitempty"` // human-readable session slug, e.g. "chess-coach"
 }
 
 // CreateRequest holds parameters for creating a new project.
@@ -181,6 +182,7 @@ func (s *Store) Create(req CreateRequest) (*Project, error) {
 		CreatedAt:   time.Now(),
 		UpdatedAt:   time.Now(),
 		CreatedBy:   req.CreatedBy,
+		SessionKey:  s.uniqueSessionKey(req.Name),
 	}
 	if p.CreatedBy == "" {
 		p.CreatedBy = "user"
@@ -331,4 +333,41 @@ func (s *Store) RemoveAgent(projectID, instanceID string) error {
 
 func (s *Store) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
+}
+
+var nonAlphaNum = regexp.MustCompile(`[^a-z0-9]+`)
+
+// uniqueSessionKey generates a human-readable session slug from the project
+// name (e.g. "chess-coach"), appending "-2", "-3", etc. if needed to avoid
+// collisions with existing projects. Must be called under s.mu.
+func (s *Store) uniqueSessionKey(name string) string {
+	base := strings.ToLower(strings.TrimSpace(name))
+	base = nonAlphaNum.ReplaceAllString(base, "-")
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "project"
+	}
+
+	// Collect existing session keys
+	existing := map[string]bool{}
+	entries, _ := os.ReadDir(s.dir)
+	for _, e := range entries {
+		if !e.Type().IsRegular() || !strings.HasSuffix(e.Name(), ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, e.Name()))
+		if err != nil {
+			continue
+		}
+		var p struct{ SessionKey string `json:"session_key"` }
+		if json.Unmarshal(data, &p) == nil && p.SessionKey != "" {
+			existing[p.SessionKey] = true
+		}
+	}
+
+	candidate := base
+	for n := 2; existing[candidate]; n++ {
+		candidate = fmt.Sprintf("%s-%d", base, n)
+	}
+	return candidate
 }

@@ -86,7 +86,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		detail += fmt.Sprintf("\ngoal: %s", p.Goal)
 	}
 	if p.Description != "" {
-		detail += fmt.Sprintf("\n%s", p.Description)
+		detail += fmt.Sprintf("\ndescription: %s", p.Description)
 	}
 	injectSystemMessage(p.ID, detail)
 
@@ -200,6 +200,23 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Before deleting, clean up agent sessions for this project
+	proj, _ := store.Get(id)
+	if proj != nil {
+		sessionKey := projectSessionKey(proj)
+		disc := s.runDiscovery(r.Context())
+		participants := resolveProjectParticipants(proj, disc)
+		for _, p := range participants {
+			agent := discovery.NewAgent(p.agent)
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			if err := agent.DeleteSession(ctx, sessionKey); err != nil {
+				slog.Debug("could not delete project session", "agent", p.name, "session", sessionKey, "error", err)
+			}
+			cancel()
+		}
+	}
+
 	if err := store.Delete(id); err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -470,96 +487,6 @@ func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []
 	return participants
 }
 
-// handleProjectIntake manages the 1:1 commander intake conversation before
-// the group chat starts. The user chats with the commander to establish
-// project goals, motivation, and scope.
-// POST /api/projects/{id}/intake
-func (s *Server) handleProjectIntake(w http.ResponseWriter, r *http.Request) {
-	projectID := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	proj, err := store.Get(projectID)
-	if err != nil {
-		if errors.Is(err, project.ErrNotFound) {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
-		} else {
-			slog.Error("failed to load project", "id", projectID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
-		}
-		return
-	}
-
-	var body struct {
-		Message string `json:"message"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
-		return
-	}
-	if body.Message == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "message required"})
-		return
-	}
-
-	// Find commander
-	ref := loadCommanderRef()
-	commanderName := ref.AgentName
-	if commanderName == "" {
-		commanderName = ref.InstanceID
-	}
-	if commanderName == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no commander set"})
-		return
-	}
-
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
-		return
-	}
-
-	sse, err := NewSSEWriter(w)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-
-	orch := &ChatOrchestrator{
-		cfg:       s.runDiscovery,
-		chatStore: cs,
-	}
-	if err := orch.RunIntakeChat(r.Context(), proj, body.Message, commanderName, sse); err != nil {
-		if sse.Sent() {
-			sse.WriteError(err.Error())
-		} else {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		}
-	}
-}
-
-// handleProjectIntakeMessages returns the intake conversation for a project.
-// GET /api/projects/{id}/intake
-func (s *Server) handleProjectIntakeMessages(w http.ResponseWriter, r *http.Request) {
-	projectID := r.PathValue("id")
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	msgs, err := cs.IntakeMessages(projectID, 0)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	if msgs == nil {
-		msgs = []project.ChatMessage{}
-	}
-	writeJSON(w, http.StatusOK, msgs)
-}
-
 // ProjectActivityEvent is an ActivityEvent tagged with the agent that produced it.
 type ProjectActivityEvent struct {
 	adapter.ActivityEvent
@@ -756,4 +683,14 @@ func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
+// projectSessionKey returns the session key for a project. Uses the stored
+// SessionKey field if present, otherwise falls back to "project-<id>" for
+// projects created before session keys were introduced.
+func projectSessionKey(proj *project.Project) string {
+	if proj.SessionKey != "" {
+		return proj.SessionKey
+	}
+	return "project-" + proj.ID
 }

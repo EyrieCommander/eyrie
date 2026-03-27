@@ -610,45 +610,6 @@ export function streamCaptainBriefing(
   return { controller, sessionReady };
 }
 
-// --- Project Intake (1:1 with commander) ---
-
-export async function fetchProjectIntake(projectId: string): Promise<ProjectChatMessage[]> {
-  const res = await fetch(`${BASE}/api/projects/${projectId}/intake`);
-  if (!res.ok) {
-    throw new Error(`Failed to fetch project intake: ${res.status} ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export function streamProjectIntake(
-  projectId: string,
-  message: string,
-  onEvent: (event: ProjectChatEvent) => void,
-): AbortController {
-  const controller = new AbortController();
-  (async () => {
-    try {
-      const res = await fetch(`${BASE}/api/projects/${projectId}/intake`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText });
-        return;
-      }
-      await readSSEStream(res.body!, (data) => onEvent(data));
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        onEvent({ type: "error", error: e instanceof Error ? e.message : "Intake failed" });
-      }
-    }
-  })();
-  return controller;
-}
-
 // --- Project Chat ---
 
 export async function fetchProjectChat(projectId: string): Promise<ProjectChatMessage[]> {
@@ -660,12 +621,14 @@ export async function fetchProjectChat(projectId: string): Promise<ProjectChatMe
 }
 
 export interface ProjectChatEvent {
-  type: "message" | "agent_event" | "done" | "error";
+  type: "message" | "agent_event" | "done" | "error" | "debug";
   message?: ProjectChatMessage;
   sender?: string;
   role?: string;
   event?: ChatEvent;
   error?: string;
+  msg?: string;
+  detail?: Record<string, any>;
 }
 
 export function streamProjectChat(

@@ -290,6 +290,7 @@ export function ChatPanel({
       }
     }
 
+    let firstMsgHandled = false;
     if (activeGroup.current) {
       if (sortedArchived.length > 0) {
         flatItems.push({
@@ -300,7 +301,6 @@ export function ChatPanel({
       }
       const msgs = sessionMsgs.get(activeGroup.current.key) ?? [];
       let prevTime: number | null = null;
-      let firstMsgHandled = false;
       for (const msg of msgs) {
         if (msg.role === "assistant" && isNoReply(msg.content)) continue;
         const msgTime = msg.timestamp
@@ -340,6 +340,14 @@ export function ChatPanel({
       }
     }
 
+    if (pendingMsgs.length > 0 && !firstMsgHandled) {
+      const label = new Date().toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+        year: "numeric",
+      });
+      flatItems.push({ kind: "spacer", label });
+    }
     for (const msg of pendingMsgs) {
       flatItems.push({ kind: "message", msg, isCurrent: true, flatIdx });
       flatIdx++;

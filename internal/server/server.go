@@ -93,8 +93,6 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/projects/{id}/chat", s.handleProjectChatMessages)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat", s.handleProjectChatSend)
 	s.mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleProjectChatClear)
-	s.mux.HandleFunc("GET /api/projects/{id}/intake", s.handleProjectIntakeMessages)
-	s.mux.HandleFunc("POST /api/projects/{id}/intake", s.handleProjectIntake)
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
 	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)
 

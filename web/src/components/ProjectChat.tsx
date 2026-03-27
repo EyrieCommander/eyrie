@@ -63,6 +63,18 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [mentionIdx, setMentionIdx] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const RESPONSE_TIMEOUT = 60_000; // 60 seconds with no SSE activity
+
+  const resetTimeout = useCallback(() => {
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    timeoutRef.current = setTimeout(() => {
+      setSending(false);
+      setChatError("agent did not respond — try again or check agent status");
+      if (abortRef.current) abortRef.current.abort();
+    }, RESPONSE_TIMEOUT);
+  }, []);
   const abortRef = useRef<AbortController | null>(null);
 
   // Load messages on mount
@@ -132,7 +144,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       timestamp: new Date().toISOString(),
     }]);
 
+    resetTimeout(); // Start response timeout
     const ctrl = streamProjectChat(projectId, text, (event) => {
+      resetTimeout(); // Reset on any SSE activity
       switch (event.type) {
         case "message":
           if (event.message) {
@@ -186,6 +200,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           break;
 
         case "done":
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
           setSending(false);
           clearStreaming();
           // Merge server messages with local state rather than replacing,
@@ -201,7 +216,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           }).catch(() => {});
           break;
 
+        case "debug":
+          console.log(`[eyrie] ${event.msg}`, event.detail || "");
+          break;
+
         case "error":
+          if (timeoutRef.current) clearTimeout(timeoutRef.current);
           setSending(false);
           setChatError(event.error || "failed");
           break;
