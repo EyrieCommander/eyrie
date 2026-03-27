@@ -596,9 +596,11 @@ func (o *OpenClawAdapter) ChatHistory(_ context.Context, sessionKey string, limi
 		return nil, nil
 	}
 
-	sessionID, sessionFile := o.findSessionFile(agentsDir, sessionKey)
+	_, sessionFile := o.findSessionFile(agentsDir, sessionKey)
 	if sessionFile == "" {
-		return nil, fmt.Errorf("session %q not found (id=%s)", sessionKey, sessionID)
+		// New sessions have no transcript file yet — return empty history
+		// instead of erroring so the UI can show a blank chat.
+		return nil, nil
 	}
 
 	f, err := os.Open(sessionFile)
