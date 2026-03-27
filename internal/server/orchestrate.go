@@ -91,11 +91,6 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		}
 	}
 
-	// On the first message, reorder so commander goes first
-	if firstMessage {
-		reorderCommanderFirst(participants)
-	}
-
 	// Send init message event if present
 	if initMsg != nil {
 		sse.WriteEvent(map[string]any{"type": "message", "message": initMsg})
@@ -104,56 +99,55 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// Each agent has its own session for this project
 	sessionKey := "project-" + projectID
 
-	// Determine which agent should respond.
+	// Build ordered priority list of who should respond.
+	// Each agent gets a chance; if it responds with [PASS], the next one tries.
 	// Priority: @mention > [LISTENING] agent > first-message commander > captain (default)
-	var respondent *projectParticipant
+	var priority []projectParticipant
 	if mention != "" {
-		// Explicit @mention — find the mentioned agent
-		for i := range participants {
-			if strings.EqualFold(mention, participants[i].name) || strings.EqualFold(mention, participants[i].role) {
-				respondent = &participants[i]
+		for _, p := range participants {
+			if strings.EqualFold(mention, p.name) || strings.EqualFold(mention, p.role) {
+				priority = append(priority, p)
 				break
 			}
 		}
 	} else if listener := o.chatStore.Listener(projectID); listener != "" {
-		// An agent is in [LISTENING] state — route to it
-		for i := range participants {
-			if participants[i].name == listener {
-				respondent = &participants[i]
+		for _, p := range participants {
+			if p.name == listener {
+				priority = append(priority, p)
 				break
 			}
 		}
-		// Clear listening — agent must re-assert [LISTENING] in its response
 		o.chatStore.ClearListening(projectID)
 	} else if firstMessage {
-		// First message: commander introduces and hands off
-		for i := range participants {
-			if participants[i].role == "commander" {
-				respondent = &participants[i]
-				break
+		// Commander first, then captain as fallback if commander passes
+		for _, p := range participants {
+			if p.role == "commander" {
+				priority = append(priority, p)
+			}
+		}
+		for _, p := range participants {
+			if p.role == "captain" {
+				priority = append(priority, p)
 			}
 		}
 	} else {
-		// Default: captain responds
-		for i := range participants {
-			if participants[i].role == "captain" {
-				respondent = &participants[i]
-				break
+		// Captain first (default responder)
+		for _, p := range participants {
+			if p.role == "captain" {
+				priority = append(priority, p)
 			}
 		}
 	}
 
-	if respondent == nil {
+	if len(priority) == 0 {
 		sse.WriteDone()
 		return fmt.Errorf("no agent available to respond")
 	}
 
-	// Build context: prepend recent chat history so the agent has full context
-	// without needing cross-agent sync.
+	// Build context: prepend recent chat history so the agent has full picture
 	recentMsgs, _ := o.chatStore.Messages(projectID, 20)
 	var contextLines []string
 	for _, m := range recentMsgs {
-		// Skip the message we just stored (already in the labeled message)
 		if m.ID == userMsg.ID {
 			continue
 		}
@@ -166,7 +160,8 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		}
 	}
 
-	p := *respondent
+	// Try each agent in priority order; stop when one responds (not [PASS])
+	for _, p := range priority {
 	agent := discovery.NewAgent(p.agent)
 
 	// Build the message with context
@@ -226,49 +221,59 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			})
 		}
 
-	// Skip [PASS] responses
+	// Parse response directives
 	trimmed := strings.TrimSpace(responseContent)
-	if trimmed == "[PASS]" || trimmed == "" {
-		sse.WriteDone()
-		return nil
+	isPassing := strings.HasSuffix(trimmed, "[PASS]") || trimmed == "[PASS]"
+	isListening := strings.HasSuffix(trimmed, "[LISTENING]")
+
+	// Strip directives from the display content
+	displayContent := trimmed
+	if isPassing {
+		displayContent = strings.TrimSpace(strings.TrimSuffix(displayContent, "[PASS]"))
+	}
+	if isListening {
+		displayContent = strings.TrimSpace(strings.TrimSuffix(displayContent, "[LISTENING]"))
 	}
 
-	// Parse [LISTENING] directive — agent wants the next user message routed to it
-	listening := false
-	if strings.HasSuffix(trimmed, "[LISTENING]") {
-		listening = true
-		trimmed = strings.TrimSpace(strings.TrimSuffix(trimmed, "[LISTENING]"))
+	// Store and display the response if there's content (even with [PASS])
+	if displayContent != "" {
+		var parts []project.ChatPart
+		if len(toolCalls) > 0 {
+			parts = append(parts, toolCalls...)
+			parts = append(parts, project.ChatPart{Type: "text", Text: displayContent})
+		}
+
+		agentMsg := project.ChatMessage{
+			ID:        uuid.New().String(),
+			Sender:    p.name,
+			Role:      p.role,
+			Content:   displayContent,
+			Timestamp: time.Now(),
+			Parts:     parts,
+		}
+		if err := o.chatStore.Append(projectID, agentMsg); err != nil {
+			slog.Warn("failed to save agent response", "agent", p.name, "error", err)
+		}
+		sse.WriteEvent(map[string]any{"type": "message", "message": agentMsg})
+
+		// Add to context so the next agent in the chain sees this response
+		contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", p.name, p.role, displayContent))
 	}
 
-	if listening {
+	// Handle directives
+	if isListening {
 		o.chatStore.SetListening(projectID, p.name)
 		slog.Info("agent set listening", "agent", p.name, "project", projectID)
+		break // Agent is listening, don't try next in priority
+	}
+	if isPassing {
+		slog.Info("agent passed", "agent", p.name, "project", projectID)
+		continue // Try the next agent in priority
 	}
 
-	// Build parts from tool calls + final text
-	var parts []project.ChatPart
-	if len(toolCalls) > 0 {
-		parts = append(parts, toolCalls...)
-		if trimmed != "" {
-			parts = append(parts, project.ChatPart{Type: "text", Text: trimmed})
-		}
-	}
-
-	// Store the agent's response
-	agentMsg := project.ChatMessage{
-		ID:        uuid.New().String(),
-		Sender:    p.name,
-		Role:      p.role,
-		Content:   trimmed,
-		Timestamp: time.Now(),
-		Parts:     parts,
-	}
-	if err := o.chatStore.Append(projectID, agentMsg); err != nil {
-		slog.Warn("failed to save agent response", "agent", p.name, "error", err)
-	}
-
-	// Send the stored message as SSE event
-	sse.WriteEvent(map[string]any{"type": "message", "message": agentMsg})
+	// Normal response (no directive) — done
+	break
+	} // end priority loop
 
 	// Signal completion
 	sse.WriteDone()

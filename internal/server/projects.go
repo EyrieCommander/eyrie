@@ -459,20 +459,6 @@ func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []
 	return participants
 }
 
-// reorderCommanderFirst moves the commander to the front of the participant
-// list so it speaks first (e.g., to introduce a project before the captain).
-func reorderCommanderFirst(participants []projectParticipant) {
-	for i, p := range participants {
-		if p.role == "commander" && i > 0 {
-			// Shift earlier entries right, place commander at front
-			entry := participants[i]
-			copy(participants[1:i+1], participants[:i])
-			participants[0] = entry
-			return
-		}
-	}
-}
-
 // handleProjectIntake manages the 1:1 commander intake conversation before
 // the group chat starts. The user chats with the commander to establish
 // project goals, motivation, and scope.
