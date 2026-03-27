@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Settings, Users } from "lucide-react";
+import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, LayoutDashboard, Layers, Settings, Users } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
@@ -31,6 +31,13 @@ export default function Sidebar() {
 
   const [agentsExpanded, setAgentsExpanded] = useState(true);
   const [projectsExpanded, setProjectsExpanded] = useState(true);
+  const [frameworksExpanded, setFrameworksExpanded] = useState(true);
+
+  const activeFramework = pathname.startsWith("/frameworks/") ? pathname.split("/")[2] : null;
+
+  useEffect(() => {
+    if (activeFramework) setFrameworksExpanded(true);
+  }, [activeFramework]);
 
   useEffect(() => {
     if (activeAgent) setAgentsExpanded(true);
@@ -176,6 +183,68 @@ export default function Sidebar() {
         )}
 
         <div className="space-y-px">
+          {/* Frameworks */}
+          {(() => {
+            const frameworks = [...new Set(agents.map((a) => a.framework))];
+            return (
+              <>
+                <div className={`flex items-center rounded text-xs transition-colors ${
+                  pathname.startsWith("/frameworks") || pathname === "/install"
+                    ? "bg-surface-hover text-text"
+                    : "text-text-secondary hover:bg-surface-hover/50"
+                }`}>
+                  <span className="flex flex-1 items-center gap-2 px-3 py-1.5">
+                    <Layers className="h-3.5 w-3.5" />
+                    <span className="font-medium">frameworks</span>
+                  </span>
+                  <button
+                    onClick={() => setFrameworksExpanded((prev) => !prev)}
+                    aria-expanded={frameworksExpanded}
+                    aria-label={frameworksExpanded ? "Collapse frameworks" : "Expand frameworks"}
+                    className="px-3 py-1.5 hover:text-text transition-colors"
+                  >
+                    {frameworksExpanded ? (
+                      <ChevronDown className="h-3 w-3 text-green" />
+                    ) : (
+                      <ChevronRight className="h-3 w-3 text-text-muted" />
+                    )}
+                  </button>
+                </div>
+                {frameworksExpanded && (
+                  <div className="ml-4 border-l border-border pl-2 space-y-px">
+                    {frameworks.map((fw) => {
+                      const fwAgents = agents.filter((a) => a.framework === fw);
+                      return (
+                        <Link
+                          key={fw}
+                          to={`/frameworks/${fw}`}
+                          className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                            pathname === `/frameworks/${fw}`
+                              ? "bg-surface-hover text-accent font-medium"
+                              : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+                          }`}
+                        >
+                          <span className="truncate">{fw} ({fwAgents.length} {FRAMEWORK_EMOJI[fw] || ""})</span>
+                        </Link>
+                      );
+                    })}
+                    <Link
+                      to="/install"
+                      className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                        pathname === "/install"
+                          ? "bg-surface-hover text-accent font-medium"
+                          : "text-text-muted hover:text-text hover:bg-surface-hover/50"
+                      }`}
+                    >
+                      <span>install</span>
+                      <Download className="h-3 w-3" />
+                    </Link>
+                  </div>
+                )}
+              </>
+            );
+          })()}
+
           <Link
             to="/personas"
             className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
@@ -186,18 +255,6 @@ export default function Sidebar() {
           >
             <Users className="h-3.5 w-3.5" />
             <span className="font-medium">personas</span>
-          </Link>
-
-          <Link
-            to="/install"
-            className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
-              pathname === "/install"
-                ? "bg-surface-hover text-accent"
-                : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-            }`}
-          >
-            <Download className="h-3.5 w-3.5" />
-            <span className="font-medium">install</span>
           </Link>
 
           <Link

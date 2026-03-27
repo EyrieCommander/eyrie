@@ -11,6 +11,7 @@ import HierarchyPage from "./components/HierarchyPage";
 import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
 import SettingsPage from "./components/SettingsPage";
+import FrameworkDetail from "./components/FrameworkDetail";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
 
@@ -63,6 +64,7 @@ function AppContent() {
               element={<AgentDetailRoute />}
             />
                 <Route path="/install" element={<InstallPage />} />
+                <Route path="/frameworks/:id" element={<FrameworkDetail />} />
                 <Route path="/personas" element={<PersonasPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
               </Routes>
