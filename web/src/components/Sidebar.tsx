@@ -193,13 +193,17 @@ export default function Sidebar() {
             <span className="font-medium">install</span>
           </Link>
 
-          <div
-            className="flex items-center gap-2 rounded px-3 py-2 text-xs text-text-muted cursor-not-allowed opacity-50"
-            title="coming soon"
+          <Link
+            to="/settings"
+            className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${
+              pathname === "/settings"
+                ? "bg-surface-hover text-accent"
+                : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+            }`}
           >
             <Settings className="h-3.5 w-3.5" />
             <span className="font-medium">settings</span>
-          </div>
+          </Link>
         </div>
       </nav>
 

@@ -21,7 +21,7 @@ export function SetCaptainDialog({
   const [startingCaptain, setStartingCaptain] = useState("");
 
   // Create new form — default name derived from project
-  const defaultName = `captain-${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
+  const defaultName = `${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-captain`;
   const [name, setName] = useState("");
   const [framework, setFramework] = useState("openclaw");
   const [captainInstances, setCaptainInstances] = useState<AgentInstance[]>([]);

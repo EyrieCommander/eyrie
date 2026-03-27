@@ -1,4 +1,4 @@
-@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Source+Code+Pro:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 @theme {
@@ -17,6 +17,24 @@
   --color-red: #ef4444;
   --color-yellow: #eab308;
   --color-purple: #a78bfa;
+}
+
+html.light {
+  --color-bg: #f4f4f7;
+  --color-bg-sidebar: #eaeaef;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f0f0f5;
+  --color-border: #d2d2dc;
+  --color-border-strong: #b8b8c6;
+  --color-text: #1a1a2e;
+  --color-text-muted: #7a7a94;
+  --color-text-secondary: #52526c;
+  --color-accent: #00b06e;
+  --color-accent-hover: #009a5e;
+  --color-green: #00b06e;
+  --color-red: #dc2626;
+  --color-yellow: #ca8a04;
+  --color-purple: #7c5cbf;
 }
 
 body {

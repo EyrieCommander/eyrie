@@ -10,6 +10,9 @@ import PersonasPage from "./components/PersonasPage";
 import HierarchyPage from "./components/HierarchyPage";
 import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
+import SettingsPage from "./components/SettingsPage";
+import { useFont } from "./lib/useFont";
+import { useTheme } from "./lib/useTheme";
 
 export default function App() {
   return (
@@ -21,6 +24,8 @@ export default function App() {
 
 function AppContent() {
   const { agents, loading, error, refresh } = useData();
+  useFont(); // Apply saved font on mount
+  useTheme(); // Apply saved theme on mount
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -59,6 +64,7 @@ function AppContent() {
             />
                 <Route path="/install" element={<InstallPage />} />
                 <Route path="/personas" element={<PersonasPage />} />
+                <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </div>
           } />
