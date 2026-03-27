@@ -180,16 +180,38 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		labeledMsg = fmt.Sprintf("[user]: %s", message)
 	}
 
-	// Prepend routing rules so the agent knows about [LISTENING] and [PASS]
-	// on its first message in this project session.
+	// Inject role instructions + routing rules on first message.
+	// This replaces the separate briefing sessions — agents get their
+	// instructions inline when the conversation starts.
 	if firstMessage {
-		routingRules := `[system]: CONVERSATION RULES for this project chat:
-- You are in a multi-agent project chat with the user, a Commander, and a Captain.
-- End your response with [LISTENING] if you are asking the user a question or need their input. This routes their next message directly to you.
-- End your response with [PASS] to hand off to the next agent (e.g. Commander passes to Captain after briefing).
-- If you include neither, you go idle and only respond when @mentioned.
-- You MUST use one of these directives at the end of every response.`
-		labeledMsg = routingRules + "\n\n" + labeledMsg
+		var roleInstructions string
+		switch p.role {
+		case "commander":
+			roleInstructions = `[system]: You are the COMMANDER in this project chat. Your job:
+1. Assess the project goals. If clear, briefly introduce the Captain and hand off with [PASS].
+2. If goals are vague, ask 1-3 focused questions with [LISTENING] to clarify before handing off.
+3. After handoff, you are SILENT unless @mentioned or the Captain reports back for review.
+Keep it brief. Do NOT plan the project — that's the Captain's job.`
+		case "captain":
+			roleInstructions = fmt.Sprintf(`[system]: You are the CAPTAIN of project "%s". Your job:
+1. After the Commander hands off, take over immediately.
+2. Ask the user detailed questions about requirements and constraints with [LISTENING].
+3. Once satisfied, propose a plan and ask the user to confirm with [LISTENING].
+4. After user approval, report to the Commander with @commander for final review.
+5. Then begin execution — create Talons via the Eyrie API (see your TOOLS.md).
+You own this project end-to-end: planning, execution, coordination.`, proj.Name)
+		default:
+			roleInstructions = `[system]: You are a TALON (specialist agent) in this project chat.
+Respond when @mentioned with your expertise. Use [LISTENING] if you need follow-up from the user.`
+		}
+
+		routingRules := `
+ROUTING RULES — you MUST end every response with one of:
+- [LISTENING] — you asked a question and need the user's next message
+- [PASS] — you're done, hand off to the next agent
+If you include neither, you go idle (only respond when @mentioned).`
+
+		labeledMsg = roleInstructions + routingRules + "\n\n" + labeledMsg
 	}
 
 		sse.WriteEvent(map[string]any{
