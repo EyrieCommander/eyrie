@@ -41,12 +41,18 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		return fmt.Errorf("no agents available — make sure the commander is running")
 	}
 
-	// Check if this is the first message
-	existing, err := o.chatStore.Messages(projectID, 1)
+	// Check if this is the first user message (system messages from provisioning don't count)
+	existing, err := o.chatStore.Messages(projectID, 0)
 	if err != nil {
 		return fmt.Errorf("failed to check existing messages for project %s: %w", projectID, err)
 	}
-	firstMessage := len(existing) == 0
+	firstMessage := true
+	for _, m := range existing {
+		if m.Role == "user" || m.Role == "commander" || m.Role == "captain" || m.Role == "talon" {
+			firstMessage = false
+			break
+		}
+	}
 
 	// Parse @mentions
 	mention := parseMention(message)

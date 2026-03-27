@@ -254,7 +254,7 @@ export default function ProjectDetail() {
                   >
                     <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${commanderStatus === "running" ? "bg-green" : "bg-text-muted"}`} />
                     <div className="flex-1 min-w-0">
-                      <div className="font-medium text-text truncate">{cmdAgent.name}</div>
+                      <div className="font-medium text-text truncate">{cmdAgent.display_name || cmdAgent.name}</div>
                       <div className="text-text-muted truncate">{cmdAgent.framework} · :{cmdAgent.port}</div>
                     </div>
                     <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400 opacity-50 hover:opacity-100" />
@@ -295,7 +295,7 @@ export default function ProjectDetail() {
               >
                 <span className={`h-1.5 w-1.5 rounded-full ${captainAgent.alive ? "bg-green" : "bg-text-muted"}`} />
                 <div className="flex-1">
-                  <div className="font-medium text-text">{captainAgent.name}</div>
+                  <div className="font-medium text-text">{captainAgent.display_name || captainAgent.name}</div>
                   <div className="text-text-muted">{captainAgent.framework} · :{captainAgent.port}</div>
                 </div>
               </button>

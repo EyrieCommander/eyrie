@@ -79,6 +79,17 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+
+	// Inject system message about project creation
+	detail := fmt.Sprintf("project created: %s", p.Name)
+	if p.Goal != "" {
+		detail += fmt.Sprintf("\ngoal: %s", p.Goal)
+	}
+	if p.Description != "" {
+		detail += fmt.Sprintf("\n%s", p.Description)
+	}
+	injectSystemMessage(p.ID, detail)
+
 	writeJSON(w, http.StatusCreated, p)
 }
 

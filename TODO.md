@@ -87,12 +87,12 @@
 
 ## Functionality
 
-- [ ] **Project intake + group chat**: Test end-to-end flow (intake with commander → group chat → captain takes over)
-- [ ] **Captain briefing**: Captain should silently bootstrap (fetch API ref, save TOOLS.md) without introducing itself — introduction happens in group chat
+- [x] **Project group chat**: Real-time SSE streaming with @mention routing — commander introduces, captain takes over
+- [x] **Captain briefing**: Runs in background at captain assignment, not at chat start
+- [x] **Captain creating talons**: Captain calls `POST /api/instances` via curl — tested end-to-end
+- [x] **Cross-agent messaging**: Retry with backoff, failures surfaced as system messages
 - [ ] **Instance provisioning for all frameworks**: Currently only ZeroClaw tested. Need OpenClaw and Hermes instance provisioning (config gen, port alloc, startup)
-- [ ] **Captain creating talons**: Captain should be able to call `POST /api/instances` via curl to create talons during conversation
 - [ ] **Commander creating captains**: Commander should provision captain instances when setting up new projects
-- [ ] **Cross-agent messaging**: After an agent responds in project chat, sync the response to other participants' sessions
 - [ ] **Daily sync cron**: Captains sync progress with commander daily; commander aggregates and syncs with user
 - [ ] **ZeroClaw observe-group**: Cherry-pick or reimplement `observe_group` from closed PR #4328 so ZeroClaw agents can store group history without responding
 - [ ] **OpenClaw observe-group**: Use native `requireMention: true` in group config for project chat participants
@@ -102,7 +102,7 @@
 - [x] **Config editor corrupts TOML**: Fixed — raw text editor writes directly to disk (`WriteRawAtomic`); inline field editor coerces JSON `float64` back to `int64` before TOML encoding (`CoerceJSONNumbers`).
 - [x] **DestroySession TOCTOU**: Fixed — replaced file surgery on `sessions.json` with OpenClaw's native `sessions.delete` RPC (which was already available). Eyrie no longer touches `sessions.json` directly for active session deletion.
 - [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
-- [ ] **Vite proxy buffers SSE responses**: The Vite dev server proxy (`http-proxy`) buffers SSE POST responses instead of streaming them. Events only appear when the response completes. Workaround: bypass proxy for SSE by calling Go backend directly (`SSE_BASE = "http://localhost:7200"` in dev) + CORS handler. Doesn't affect production (same-origin, no proxy).
+- [x] **SSE streaming not rendering**: Root cause was `mountedRef` pattern — React re-renders briefly unmounted ProjectChat, causing the SSE callback to hold a stale ref and silently drop all events. Fixed by removing mountedRef, always-mounting ProjectChat (overlays for setup prompts), and using AbortController for cleanup. Vite proxy streams SSE fine.
 
 ## UI
 

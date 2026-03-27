@@ -25,7 +25,7 @@ function MessageHeader({ role, sender, displayName, time, toolCount }: {
   return (
     <div className="flex items-baseline gap-2">
       <span className={`font-bold ${ROLE_COLORS[role] || "text-text"}`}>
-        {role === "user" ? "you" : name ? `${role} ${name}` : role}
+        {role === "user" ? "you" : name || role}
       </span>
       <span className="text-[10px] text-text-muted">{time}</span>
       {(toolCount ?? 0) > 0 && (
@@ -42,16 +42,10 @@ export interface ProjectChatProps {
 
 export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const { agents, instances } = useData();
-
-  // Map agent/instance names to display names for chat headers
   const displayNames = useMemo(() => {
     const map = new Map<string, string>();
-    for (const a of agents) {
-      if (a.display_name) map.set(a.name, a.display_name);
-    }
-    for (const i of instances) {
-      if (i.display_name) map.set(i.name, i.display_name);
-    }
+    for (const a of agents) { if (a.display_name) map.set(a.name, a.display_name); }
+    for (const i of instances) { if (i.display_name) map.set(i.name, i.display_name); }
     return map;
   }, [agents, instances]);
 
@@ -85,7 +79,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     if (sending) return;
     const id = setInterval(() => {
       fetchProjectChat(projectId).then((msgs) => {
-        setMessages((prev) => msgs.length !== prev.length ? msgs : prev);
+        setMessages((prev) => {
+          if (msgs.length === prev.length) return prev;
+          const ids = new Set(msgs.map((m) => m.id));
+          const extras = prev.filter((m) => !ids.has(m.id) && !m.id.startsWith("optimistic-"));
+          return [...msgs, ...extras];
+        });
       }).catch(() => {});
     }, 4000);
     return () => clearInterval(id);
@@ -189,7 +188,17 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         case "done":
           setSending(false);
           clearStreaming();
-          fetchProjectChat(projectId).then(setMessages).catch(() => {});
+          // Merge server messages with local state rather than replacing,
+          // so messages received via SSE aren't lost if they haven't been
+          // written to disk yet (race with detached context storage).
+          fetchProjectChat(projectId).then((serverMsgs) => {
+            setMessages((prev) => {
+              const ids = new Set(serverMsgs.map((m) => m.id));
+              // Keep any local messages not yet on server (SSE-received)
+              const extras = prev.filter((m) => !ids.has(m.id) && !m.id.startsWith("optimistic-"));
+              return [...serverMsgs, ...extras];
+            });
+          }).catch(() => {});
           break;
 
         case "error":
@@ -240,12 +249,8 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           </div>
         )}
 
-        {/* Messages — hide system-only messages until chat has started */}
-        {sortedMessages.filter((msg) => {
-          // If no user/agent messages exist yet, hide system messages (they show after chat starts)
-          if (!messages.some((m) => m.role !== "system")) return msg.role !== "system";
-          return true;
-        }).map((msg) => {
+        {/* Messages — always render all messages */}
+        {sortedMessages.map((msg) => {
           const parts = msg.parts ?? [];
           const hasParts = parts.length > 0;
           const toolCount = parts.filter((p) => p.type === "tool_call").length;
@@ -340,7 +345,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                   className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left ${i === mentionIdx ? "bg-surface-hover" : "hover:bg-surface-hover"}`}
                 >
                   <span className={`font-bold ${ROLE_COLORS[p.role] || "text-text"}`}>{p.role}</span>
-                  <span className="text-text-muted">{displayNames.get(p.name) || p.name}</span>
+                  <span className="text-text-muted">{p.name}</span>
                 </button>
               ))}
             </div>
