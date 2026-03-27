@@ -4,6 +4,12 @@ import type { ChatPart } from "../../lib/types";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
+function looksLikeError(output: string | undefined): boolean {
+  if (!output) return false;
+  const lower = output.trimStart().toLowerCase();
+  return lower.startsWith("error:") || lower.startsWith("error -") || lower.startsWith("fatal:") || lower.startsWith("fail");
+}
+
 export function toolCallSummary(
   _tool: string,
   args: Record<string, any>,
@@ -83,7 +89,7 @@ export function PartToolCallCard({
           </span>
         )}
         <span className="ml-auto flex items-center gap-1.5">
-          {part.error ? (
+          {part.error || looksLikeError(part.output) ? (
             <span className="text-red text-[10px]">FAIL</span>
           ) : part.output != null ? (
             <span className="text-green text-[10px]">OK</span>
@@ -187,7 +193,7 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
   const [expanded, setExpanded] = useState(true);
   const generatedId = useId();
   const panelId = `toolrun-${generatedId}`;
-  const failCount = tools.filter((t) => t.error).length;
+  const failCount = tools.filter((t) => t.error || looksLikeError(t.output)).length;
 
   // Single tool: render one PartToolCallCard directly (no outer header)
   // to avoid showing the tool name twice.

@@ -420,7 +420,7 @@ export default function ProjectDetail() {
             streaming state. Setup prompts overlay on top when needed. */}
         <div className="relative flex flex-1 flex-col overflow-hidden">
           {/* Setup overlays */}
-          {!commanderName && (
+          {hasLoadedRef.current && !commanderName && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-3">
                 <p className="text-xs text-text-muted">no commander set up yet</p>
@@ -430,7 +430,7 @@ export default function ProjectDetail() {
               </div>
             </div>
           )}
-          {commanderName && !hasCaptain && (
+          {hasLoadedRef.current && commanderName && !hasCaptain && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-3">
                 <p className="text-xs text-text-muted">assign a captain to start</p>
@@ -440,7 +440,7 @@ export default function ProjectDetail() {
               </div>
             </div>
           )}
-          {commanderName && hasCaptain && needsStart.length > 0 && (
+          {hasLoadedRef.current && commanderName && hasCaptain && needsStart.length > 0 && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-4">
                 <p className="text-xs text-text-muted">agents need to be running</p>

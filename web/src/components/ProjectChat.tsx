@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Send } from "lucide-react";
-import type { ProjectChatMessage, ChatPart } from "../lib/types";
+import type { ProjectChatMessage } from "../lib/types";
 import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
 import { fetchProjectChat, streamProjectChat } from "../lib/api";
+import { useData } from "../lib/DataContext";
 
 const ROLE_COLORS: Record<string, string> = {
   user: "text-green",
@@ -12,20 +13,57 @@ const ROLE_COLORS: Record<string, string> = {
   system: "text-text-muted",
 };
 
+type StreamingPart =
+  | { kind: "tool"; name: string; done: boolean; args?: any; output?: string }
+  | { kind: "text"; content: string };
+
+// Shared message header: role label + display name + timestamp + tool count
+function MessageHeader({ role, sender, displayName, time, toolCount }: {
+  role: string; sender?: string; displayName?: string; time: string; toolCount?: number;
+}) {
+  const name = displayName || sender;
+  return (
+    <div className="flex items-baseline gap-2">
+      <span className={`font-bold ${ROLE_COLORS[role] || "text-text"}`}>
+        {role === "user" ? "you" : name ? `${role} ${name}` : role}
+      </span>
+      <span className="text-[10px] text-text-muted">{time}</span>
+      {(toolCount ?? 0) > 0 && (
+        <span className="text-[10px] text-accent/60">[{toolCount} tool{toolCount! > 1 ? "s" : ""}]</span>
+      )}
+    </div>
+  );
+}
+
 export interface ProjectChatProps {
   projectId: string;
   participants: { name: string; role: string }[];
 }
 
 export function ProjectChat({ projectId, participants }: ProjectChatProps) {
+  const { agents, instances } = useData();
+
+  // Map agent/instance names to display names for chat headers
+  const displayNames = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const a of agents) {
+      if (a.display_name) map.set(a.name, a.display_name);
+    }
+    for (const i of instances) {
+      if (i.display_name) map.set(i.name, i.display_name);
+    }
+    return map;
+  }, [agents, instances]);
+
   const [messages, setMessages] = useState<ProjectChatMessage[]>([]);
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState("");
-  const [streamingText, setStreamingText] = useState("");
+  const [chatLoaded, setChatLoaded] = useState(false);
   const [streamingAgent, setStreamingAgent] = useState("");
   const [streamingRole, setStreamingRole] = useState("");
-  const [streamingTools, setStreamingTools] = useState<{ name: string; done: boolean }[]>([]);
+  const [streamingTime, setStreamingTime] = useState("");
+  const [streamingParts, setStreamingParts] = useState<StreamingPart[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -35,10 +73,14 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
   // Load messages on mount
   useEffect(() => {
-    fetchProjectChat(projectId).then(setMessages).catch(console.error);
+    setChatLoaded(false);
+    fetchProjectChat(projectId)
+      .then(setMessages)
+      .catch(console.error)
+      .finally(() => setChatLoaded(true));
   }, [projectId]);
 
-  // Poll for new messages when idle (not sending)
+  // Poll for new messages when idle
   useEffect(() => {
     if (sending) return;
     const id = setInterval(() => {
@@ -52,24 +94,57 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   // Auto-scroll
   useEffect(() => {
     scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-  }, [messages, streamingText]);
+  }, [messages, streamingParts]);
 
   useEffect(() => () => { abortRef.current?.abort(); }, []);
 
-  // Send a message
+  // Helper: mark agent as streaming (sets agent + time on first call)
+  const markStreaming = (sender: string, role: string) => {
+    setStreamingAgent((prev) => {
+      if (!prev) setStreamingTime(new Date().toLocaleTimeString());
+      return sender;
+    });
+    setStreamingRole(role);
+  };
+
+  // Helper: clear all streaming state
+  const clearStreaming = () => {
+    setStreamingAgent("");
+    setStreamingParts([]);
+    setStreamingTime("");
+  };
+
+  // Helper: filter participants for @mention autocomplete
+  const filteredParticipants = (filter: string) =>
+    participants.filter((p) => !filter || p.role.toLowerCase().includes(filter) || p.name.toLowerCase().includes(filter));
+
   const send = useCallback((text: string) => {
     if (!text || sending) return;
     setSending(true);
     setChatError("");
-    setStreamingText("");
-    setStreamingAgent("");
+    clearStreaming();
+
+    // Optimistic: show user message immediately
+    setMessages((prev) => [...prev, {
+      id: `optimistic-${Date.now()}`,
+      sender: "user",
+      role: "user",
+      content: text,
+      timestamp: new Date().toISOString(),
+    }]);
 
     const ctrl = streamProjectChat(projectId, text, (event) => {
-
       switch (event.type) {
         case "message":
           if (event.message) {
-            setMessages((prev) => [...prev, event.message!]);
+            setMessages((prev) => {
+              // Replace optimistic user message with server version
+              const m = event.message!;
+              if (m.role === "user" && prev.some((p) => p.id.startsWith("optimistic-") && p.content === m.content)) {
+                return prev.map((p) => p.id.startsWith("optimistic-") && p.content === m.content ? m : p);
+              }
+              return [...prev, m];
+            });
           }
           break;
 
@@ -77,25 +152,28 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           if (event.event) {
             const ev = event.event;
             if (ev.type === "delta") {
-              setStreamingAgent(event.sender || "");
-              setStreamingRole(event.role || "");
-              setStreamingText((p) => p + (ev.content || ""));
+              markStreaming(event.sender || "", event.role || "");
+              setStreamingParts((prev) => {
+                const last = prev[prev.length - 1];
+                if (last && last.kind === "text") {
+                  return [...prev.slice(0, -1), { kind: "text", content: last.content + (ev.content || "") }];
+                }
+                return [...prev, { kind: "text", content: ev.content || "" }];
+              });
             } else if (ev.type === "tool_start") {
-              setStreamingAgent(event.sender || "");
-              setStreamingRole(event.role || "");
-              setStreamingTools((p) => [...p, { name: ev.tool || "tool", done: false }]);
+              markStreaming(event.sender || "", event.role || "");
+              setStreamingParts((prev) => [...prev, { kind: "tool", name: ev.tool || "tool", done: false, args: ev.args }]);
             } else if (ev.type === "tool_result") {
-              setStreamingTools((p) => {
-                const updated = [...p];
+              setStreamingParts((prev) => {
+                const updated = [...prev];
                 for (let i = updated.length - 1; i >= 0; i--) {
-                  if (!updated[i].done) { updated[i] = { ...updated[i], done: true }; break; }
+                  const p = updated[i];
+                  if (p.kind === "tool" && !p.done) { updated[i] = { ...p, done: true, output: ev.output }; break; }
                 }
                 return updated;
               });
-            } else if (ev.type === "done" && ev.content) {
-              setStreamingText("");
-              setStreamingAgent("");
-              setStreamingTools([]);
+            } else if (ev.type === "done") {
+              clearStreaming();
             } else if (ev.type === "error") {
               setMessages((prev) => [...prev, {
                 id: `err-${Date.now()}`,
@@ -110,10 +188,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
         case "done":
           setSending(false);
-          setStreamingText("");
-          setStreamingAgent("");
-          setStreamingTools([]);
-          // Final sync
+          clearStreaming();
           fetchProjectChat(projectId).then(setMessages).catch(() => {});
           break;
 
@@ -134,11 +209,22 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     send(msg);
   }, [input, send]);
 
+  // Sort messages: system before user when timestamps are within 1 second
+  const sortedMessages = [...messages].sort((a, b) => {
+    const ta = new Date(a.timestamp).getTime();
+    const tb = new Date(b.timestamp).getTime();
+    if (Math.abs(ta - tb) < 1000) {
+      if (a.role === "system" && b.role === "user") return -1;
+      if (a.role === "user" && b.role === "system") return 1;
+    }
+    return ta - tb;
+  });
+
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
         {/* Empty state */}
-        {messages.length === 0 && !sending && (
+        {chatLoaded && !sending && !messages.some((m) => m.role !== "system") && (
           <div className="text-center py-10 space-y-4">
             <p className="text-xs text-text-muted">start the project chat to bring the team together</p>
             {chatError && (
@@ -154,43 +240,37 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           </div>
         )}
 
-        {/* Messages — sort system messages before user messages at the same timestamp */}
-        {[...messages].sort((a, b) => {
-          // System messages go before user messages when timestamps are within 1 second
-          const ta = new Date(a.timestamp).getTime();
-          const tb = new Date(b.timestamp).getTime();
-          if (Math.abs(ta - tb) < 1000) {
-            if (a.role === "system" && b.role === "user") return -1;
-            if (a.role === "user" && b.role === "system") return 1;
-          }
-          return ta - tb;
+        {/* Messages — hide system-only messages until chat has started */}
+        {sortedMessages.filter((msg) => {
+          // If no user/agent messages exist yet, hide system messages (they show after chat starts)
+          if (!messages.some((m) => m.role !== "system")) return msg.role !== "system";
+          return true;
         }).map((msg) => {
           const parts = msg.parts ?? [];
-          const toolParts = parts.filter((p) => p.type === "tool_call");
+          const hasParts = parts.length > 0;
+          const toolCount = parts.filter((p) => p.type === "tool_call").length;
           return (
             <div key={msg.id} className="text-xs">
-              <div className="flex items-baseline gap-2">
-                <span className={`font-bold ${ROLE_COLORS[msg.role] || "text-text"}`}>
-                  {msg.role === "user" ? "you" : msg.role}
-                </span>
-                {msg.role !== "user" && msg.sender !== msg.role && (
-                  <span className="text-[10px] text-text-muted">({msg.sender})</span>
-                )}
-                <span className="text-[10px] text-text-muted">
-                  {new Date(msg.timestamp).toLocaleTimeString()}
-                </span>
-                {toolParts.length > 0 && (
-                  <span className="text-[10px] text-accent/60">[{toolParts.length} tool{toolParts.length > 1 ? "s" : ""}]</span>
-                )}
-              </div>
-              {toolParts.length > 0 && (
+              <MessageHeader
+                role={msg.role}
+                sender={msg.sender}
+                displayName={displayNames.get(msg.sender)}
+                time={new Date(msg.timestamp).toLocaleTimeString()}
+                toolCount={toolCount}
+              />
+              {hasParts ? (
                 <div className="mt-1 space-y-1">
-                  {toolParts.map((tc, i) => (
-                    <PartToolCallCard key={`${msg.id}-tc-${i}`} part={tc} />
-                  ))}
+                  {parts.map((part, i) =>
+                    part.type === "tool_call" ? (
+                      <PartToolCallCard key={`${msg.id}-p-${i}`} part={part} />
+                    ) : part.type === "text" && part.text ? (
+                      <div key={`${msg.id}-p-${i}`} className="text-text whitespace-pre-wrap">{part.text}</div>
+                    ) : null
+                  )}
                 </div>
+              ) : (
+                <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
               )}
-              <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
             </div>
           );
         })}
@@ -198,37 +278,41 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         {/* Streaming indicator */}
         {sending && streamingAgent && (
           <div className="text-xs">
-            <div className="flex items-baseline gap-2">
-              <span className={`font-bold ${ROLE_COLORS[streamingRole] || "text-text"}`}>
-                {streamingRole || "agent"}
-              </span>
-              <span className="text-[10px] text-text-muted">({streamingAgent})</span>
-              {!streamingText && streamingTools.length === 0 && (
-                <span className="text-[10px] text-text-muted animate-pulse">thinking...</span>
-              )}
-            </div>
-            {streamingTools.length > 0 && (
-              <div className="mt-1 space-y-1">
-                {streamingTools.map((tc, i) => (
-                  <div key={i} className="flex items-center gap-2 rounded border border-border bg-surface px-2 py-1">
-                    <span className="text-accent text-[10px] font-mono">{tc.name}</span>
-                    {tc.done
-                      ? <span className="text-[10px] text-green">OK</span>
-                      : <span className="text-[10px] text-text-muted animate-pulse">running...</span>
-                    }
-                  </div>
-                ))}
-              </div>
+            <MessageHeader
+              role={streamingRole || "agent"}
+              sender={streamingAgent}
+              displayName={displayNames.get(streamingAgent)}
+              time={streamingTime}
+            />
+            {streamingParts.length === 0 && (
+              <div className="mt-0.5 text-text-muted animate-pulse">thinking...</div>
             )}
-            {streamingText && (
-              <div className="mt-0.5 text-text whitespace-pre-wrap">
-                {streamingText}<StreamingCursor />
+            {streamingParts.length > 0 && (
+              <div className="mt-1 space-y-1">
+                {streamingParts.map((part, i) =>
+                  part.kind === "tool" ? (
+                    <PartToolCallCard
+                      key={i}
+                      part={{
+                        type: "tool_call",
+                        name: part.name,
+                        args: part.args,
+                        output: part.output,
+                        pending: !part.done,
+                      }}
+                    />
+                  ) : (
+                    <div key={i} className="text-text whitespace-pre-wrap">
+                      {part.content}<StreamingCursor />
+                    </div>
+                  )
+                )}
               </div>
             )}
           </div>
         )}
 
-        {/* Waiting indicator (before any agent starts) */}
+        {/* Waiting indicator */}
         {sending && !streamingAgent && messages.length > 0 && (
           <div className="text-xs py-1 flex items-center gap-2 text-text-muted">
             <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
@@ -240,7 +324,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       {/* Input */}
       <div className="relative border-t border-border p-3 flex gap-2">
         {showMentions && (() => {
-          const filtered = participants.filter((p) => !mentionFilter || p.role.toLowerCase().includes(mentionFilter) || p.name.toLowerCase().includes(mentionFilter));
+          const filtered = filteredParticipants(mentionFilter);
           if (filtered.length === 0) return null;
           return (
             <div className="absolute bottom-full left-3 mb-1 rounded border border-border bg-bg shadow-lg py-1 min-w-[160px]">
@@ -256,7 +340,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                   className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left ${i === mentionIdx ? "bg-surface-hover" : "hover:bg-surface-hover"}`}
                 >
                   <span className={`font-bold ${ROLE_COLORS[p.role] || "text-text"}`}>{p.role}</span>
-                  <span className="text-text-muted">{p.name}</span>
+                  <span className="text-text-muted">{displayNames.get(p.name) || p.name}</span>
                 </button>
               ))}
             </div>
@@ -282,7 +366,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           onKeyDown={(e) => {
             if (e.key === "Escape") { setShowMentions(false); return; }
             if (showMentions) {
-              const filtered = participants.filter((p) => !mentionFilter || p.role.toLowerCase().includes(mentionFilter) || p.name.toLowerCase().includes(mentionFilter));
+              const filtered = filteredParticipants(mentionFilter);
               if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => Math.min(i + 1, filtered.length - 1)); return; }
               if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => Math.max(i - 1, 0)); return; }
               if ((e.key === "Enter" || e.key === "Tab") && filtered.length > 0) {

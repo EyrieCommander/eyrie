@@ -10,6 +10,12 @@ export function formatUptime(nanoseconds: number | null | undefined): string {
   return `${mins}m`;
 }
 
+/** Strip markdown bold markers (e.g., "** Magnus" → "Magnus") from display names. */
+export function cleanDisplayName(name: string | undefined): string | undefined {
+  if (!name) return name;
+  return name.replace(/\*+/g, "").trim() || name;
+}
+
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null) return "-";
   if (bytes <= 0) return "0KB";

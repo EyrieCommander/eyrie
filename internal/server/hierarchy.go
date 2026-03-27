@@ -405,6 +405,9 @@ func readWorkspaceField(configPath, filename, label string) string {
 	for _, line := range strings.Split(string(data), "\n") {
 		if idx := strings.Index(line, label); idx >= 0 {
 			val := strings.TrimSpace(line[idx+len(label):])
+			// Strip markdown bold markers (e.g., "** Danya" from "- **Name:** Danya")
+			val = strings.Trim(val, "*")
+			val = strings.TrimSpace(val)
 			return val
 		}
 	}

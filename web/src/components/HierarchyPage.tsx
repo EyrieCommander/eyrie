@@ -34,107 +34,87 @@ function MetricCard({ label, value, valueColor, sub }: {
 // Currently renders with placeholder blocks. The data layer needs an
 // aggregated cross-project events endpoint to populate real content.
 
-interface SwimLaneProject {
-  name: string;
-  status: string;
-  goal?: string;
-  agents: { name: string; role: string; status: string }[];
+// Collect timestamped events from project trees for the timeline.
+interface TimelineEvent {
+  label: string;
+  type: "project-created" | "captain-assigned" | "talon-added";
+  date: string; // ISO timestamp
 }
 
-// Example projects shown when no real projects exist, so the timeline
-// structure is visible during development.
-const EXAMPLE_PROJECTS: SwimLaneProject[] = [
-  {
-    name: "finance tracker",
-    status: "active",
-    goal: "mvp ready for demo by end of week",
-    agents: [
-      { name: "captain-finance", role: "captain", status: "running" },
-      { name: "talon-researcher", role: "talon", status: "running" },
-      { name: "talon-developer", role: "talon", status: "running" },
-    ],
-  },
-  {
-    name: "chess coach",
-    status: "active",
-    goal: "teach positional chess concepts",
-    agents: [
-      { name: "captain-chess", role: "captain", status: "running" },
-      { name: "talon-curriculum", role: "talon", status: "running" },
-    ],
-  },
-  {
-    name: "blog migration",
-    status: "paused",
-    goal: "migrate wordpress to astro",
-    agents: [
-      { name: "captain-blog", role: "captain", status: "stopped" },
-      { name: "talon-writer", role: "talon", status: "stopped" },
-    ],
-  },
-];
+function collectProjectEvents(tree: ProjectTree): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+  if (tree.project.created_at) {
+    events.push({ label: "project created", type: "project-created", date: tree.project.created_at });
+  }
+  if (tree.captain?.created_at) {
+    events.push({
+      label: `captain: ${tree.captain.display_name || tree.captain.name}`,
+      type: "captain-assigned",
+      date: tree.captain.created_at,
+    });
+  }
+  for (const talon of tree.talons) {
+    if (talon.created_at) {
+      events.push({
+        label: `talon: ${talon.display_name || talon.name}`,
+        type: "talon-added",
+        date: talon.created_at,
+      });
+    }
+  }
+  return events;
+}
 
-function buildSwimLaneProjects(trees: ProjectTree[]): SwimLaneProject[] {
-  // Real projects first, then example projects for visual structure.
-  const real: SwimLaneProject[] = trees.map((t) => ({
-    name: t.project.name,
-    status: t.project.status,
-    goal: t.project.goal,
-    agents: [
-      ...(t.captain
-        ? [{ name: t.captain.display_name || t.captain.name, role: "captain", status: t.captain.status }]
-        : []),
-      ...t.talons.map((tl) => ({
-        name: tl.display_name || tl.name,
-        role: "talon",
-        status: tl.status,
-      })),
-    ],
-  }));
-  // Filter out examples whose names collide with real projects
-  const realNames = new Set(real.map((p) => p.name));
-  const examples = EXAMPLE_PROJECTS.filter((e) => !realNames.has(e.name));
-  return [...real, ...examples];
+const EVENT_COLORS: Record<TimelineEvent["type"], string> = {
+  "project-created": "bg-accent",
+  "captain-assigned": "bg-purple-400",
+  "talon-added": "bg-amber-400",
+};
+
+function sameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 }
 
 function SwimLaneTimeline({ projects, onProjectClick }: {
   projects: ProjectTree[];
   onProjectClick?: (id: string) => void;
 }) {
-  const swimProjects = buildSwimLaneProjects(projects);
-
-  // Date columns: today and 2 days prior
+  // Date columns: today and 6 days prior (1 week view)
   const today = new Date();
-  const days = Array.from({ length: 3 }, (_, i) => {
+  const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(today);
-    d.setDate(d.getDate() - (2 - i));
+    d.setDate(d.getDate() - (6 - i));
     return d;
   });
 
   const formatDay = (d: Date) => {
     const dayNames = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
     const monthNames = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
-    const isToday = d.toDateString() === today.toDateString();
+    const isToday = sameDay(d, today);
     return isToday
-      ? `${monthNames[d.getMonth()]} ${d.getDate()} (today)`
-      : `${monthNames[d.getMonth()]} ${d.getDate()} (${dayNames[d.getDay()]})`;
+      ? `today`
+      : `${dayNames[d.getDay()]} ${monthNames[d.getMonth()]} ${d.getDate()}`;
   };
 
-  const ROW_H = "h-10";
+  if (projects.length === 0) {
+    return (
+      <div className="flex h-full items-center justify-center">
+        <p className="text-xs text-text-muted">no projects yet — create one to see the timeline</p>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto">
-        {/* Shared date headers */}
+        {/* Date headers */}
         <div className="flex sticky top-0 z-10 bg-bg">
-          {/* Corner: project column header */}
-          <div className="flex-shrink-0 w-[220px] border-r border-b border-border px-3 py-2">
+          <div className="flex-shrink-0 w-[200px] border-r border-b border-border px-3 py-2">
             <span className="text-[9px] font-medium text-text-muted">// projects</span>
           </div>
-          {/* Date columns */}
           <div className="flex flex-1">
             {days.map((day, di) => {
-              const isToday = day.toDateString() === today.toDateString();
+              const isToday = sameDay(day, today);
               return (
                 <div
                   key={di}
@@ -151,19 +131,18 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
           </div>
         </div>
 
-        {/* Per-project sections */}
-        {swimProjects.map((proj) => {
-          const realTree = projects.find((t) => t.project.name === proj.name);
-          const isExample = !realTree;
+        {/* Project rows */}
+        {projects.map((tree) => {
+          const proj = tree.project;
+          const events = collectProjectEvents(tree);
+          const agentCount = (tree.captain ? 1 : 0) + tree.talons.length;
           return (
-            <div key={proj.name} className={`flex border-b border-border ${isExample ? "opacity-50" : ""}`}>
+            <div key={proj.id} className="flex border-b border-border">
               {/* Project card */}
               <div
-                onClick={() => realTree && onProjectClick?.(realTree.project.id)}
-                role={realTree ? "button" : undefined}
-                className={`flex-shrink-0 w-[220px] border-r border-border p-3 space-y-2 ${
-                  realTree ? "cursor-pointer hover:bg-surface-hover/30 transition-colors" : ""
-                }`}
+                onClick={() => onProjectClick?.(proj.id)}
+                role="button"
+                className="flex-shrink-0 w-[200px] border-r border-border p-3 space-y-1.5 cursor-pointer hover:bg-surface-hover/30 transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
@@ -172,55 +151,35 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
                       : "bg-text-muted"
                   }`} />
                   <span className="text-[11px] font-semibold text-text truncate">{proj.name}</span>
-                  <span className={`rounded px-1 py-0.5 text-[8px] font-medium ${
-                    proj.status === "active"
-                      ? "bg-green/10 text-green"
-                      : proj.status === "paused"
-                        ? "bg-purple-400/10 text-purple-400"
-                        : "bg-text-muted/10 text-text-muted"
-                  }`}>
-                    {proj.status}
-                  </span>
                 </div>
                 {proj.goal && (
                   <div className="text-[9px] text-green truncate">{proj.goal}</div>
                 )}
-                <div className="space-y-1 pt-1">
-                  {proj.agents.map((agent) => (
-                    <div key={agent.name} className="flex items-center gap-1.5">
-                      <span className={`h-1 w-1 flex-shrink-0 rounded-full ${
-                        agent.status === "running" ? "bg-green"
-                          : agent.status === "starting" ? "bg-green animate-pulse"
-                          : agent.status === "error" ? "bg-red"
-                          : "bg-text-muted/50"
-                      }`} />
-                      <span className={`text-[9px] truncate ${
-                        agent.role === "captain" ? "text-text-secondary" : "text-text-muted"
-                      }`}>
-                        {agent.name}
-                      </span>
-                    </div>
-                  ))}
+                <div className="text-[9px] text-text-muted">
+                  {agentCount} agent{agentCount !== 1 ? "s" : ""}
                 </div>
               </div>
 
-              {/* Day columns with agent rows */}
+              {/* Day columns with real events */}
               <div className="flex flex-1">
                 {days.map((day, di) => {
-                  const isToday = day.toDateString() === today.toDateString();
+                  const isToday = sameDay(day, today);
+                  const dayEvents = events.filter((e) => sameDay(new Date(e.date), day));
                   return (
                     <div
                       key={di}
-                      className={`flex-1 flex flex-col ${di < days.length - 1 ? "border-r border-border" : ""}`}
+                      className={`flex-1 flex flex-col items-start justify-center gap-1 px-1.5 py-1 ${
+                        di < days.length - 1 ? "border-r border-border" : ""
+                      } ${isToday ? "bg-accent/5" : ""}`}
                     >
-                      {proj.agents.map((agent, ai) => (
+                      {dayEvents.map((evt, ei) => (
                         <div
-                          key={agent.name}
-                          className={`${ROW_H} flex items-center gap-1 px-2 ${
-                            ai < proj.agents.length - 1 ? "border-b border-border/50" : ""
-                          }`}
+                          key={ei}
+                          className={`flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[9px] truncate max-w-full ${EVENT_COLORS[evt.type]}/20`}
+                          title={evt.label}
                         >
-                          {renderPlaceholderBlocks(agent.name, agent.status, di, isToday)}
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_COLORS[evt.type]}`} />
+                          <span className="truncate text-text-secondary">{evt.label}</span>
                         </div>
                       ))}
                     </div>
@@ -234,11 +193,10 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
 
       {/* Legend */}
       <div className="flex items-center justify-end gap-5 border-t border-border px-4 py-2">
-        <span className="text-[9px] text-text-muted">legend:</span>
-        <LegendItem color="bg-green/30" label="research" />
-        <LegendItem color="bg-purple-400/30" label="development" />
-        <LegendItem color="bg-amber-400/30" label="coordination" />
-        <LegendItem color="bg-surface-hover border border-border" label="planned" />
+        <span className="text-[9px] text-text-muted">events:</span>
+        <LegendItem color="bg-accent" label="project created" />
+        <LegendItem color="bg-purple-400" label="captain assigned" />
+        <LegendItem color="bg-amber-400" label="talon added" />
       </div>
     </div>
   );
@@ -247,41 +205,10 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
 function LegendItem({ color, label }: { color: string; label: string }) {
   return (
     <div className="flex items-center gap-1.5">
-      <div className={`h-2.5 w-4 rounded-sm ${color}`} />
+      <div className={`h-2 w-2 rounded-full ${color}`} />
       <span className="text-[9px] text-text-muted">{label}</span>
     </div>
   );
-}
-
-// Placeholder block renderer — deterministic mock blocks from agent name + day.
-// Replace with real event data when the activity endpoint is wired up.
-function renderPlaceholderBlocks(agentName: string, agentStatus: string, dayIndex: number, isToday: boolean) {
-  const seed = agentName.length + dayIndex * 7;
-  const blockCount = seed % 3;
-
-  if (agentStatus !== "running" && agentStatus !== "starting") {
-    return null; // stopped agents show no activity
-  }
-
-  const colors = [
-    "bg-green/30",        // research
-    "bg-purple-400/30",   // development
-    "bg-amber-400/30",    // coordination
-  ];
-
-  const blocks = [];
-  for (let i = 0; i < blockCount; i++) {
-    const colorIdx = (seed + i) % colors.length;
-    const width = 30 + ((seed * (i + 1)) % 60);
-    blocks.push(
-      <div
-        key={i}
-        className={`h-5 rounded-sm ${colors[colorIdx]} ${isToday ? "opacity-80" : "opacity-50"}`}
-        style={{ width: `${width}px` }}
-      />
-    );
-  }
-  return <>{blocks}</>;
 }
 
 // ─── Commander Setup ───

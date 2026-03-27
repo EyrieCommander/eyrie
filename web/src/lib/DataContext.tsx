@@ -1,6 +1,7 @@
 import { createContext, useContext, useCallback, useEffect, useState, type ReactNode } from "react";
 import type { AgentInfo, Project, AgentInstance } from "./types";
 import { fetchAgents, fetchProjects, fetchInstances } from "./api";
+import { cleanDisplayName } from "./format";
 
 interface DataContextValue {
   agents: AgentInfo[];
@@ -46,7 +47,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       ]);
 
       if (agentResult.status === "fulfilled") {
-        setAgents(agentResult.value);
+        setAgents(agentResult.value.map((a) => ({ ...a, display_name: cleanDisplayName(a.display_name) })));
       } else {
         errors.push(`agents: ${agentResult.reason?.message || "fetch failed"}`);
       }
@@ -58,7 +59,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       }
 
       if (instanceResult.status === "fulfilled") {
-        setInstances(instanceResult.value);
+        setInstances(instanceResult.value.map((i) => ({ ...i, display_name: cleanDisplayName(i.display_name) || i.display_name })));
       } else {
         errors.push(`instances: ${instanceResult.reason?.message || "fetch failed"}`);
       }
