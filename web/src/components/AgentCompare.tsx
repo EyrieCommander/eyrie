@@ -142,10 +142,10 @@ export default function AgentCompare() {
   return (
     <div className="space-y-6">
       <div className="text-xs text-text-muted">
-        <Link to="/agents/overview" className="hover:text-text transition-colors">
-          ~/agents
+        <Link to="/hierarchy" className="hover:text-text transition-colors">
+          ~/mission control
         </Link>
-        /compare
+        /compare agents
       </div>
 
       <div>

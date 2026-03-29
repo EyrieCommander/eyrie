@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Plus, RefreshCw, Crown, ChevronRight, MessageSquare, ChevronLeft } from "lucide-react";
+import { BarChart3, Plus, RefreshCw, Crown, ChevronRight, MessageSquare, ChevronLeft } from "lucide-react";
 import type { HierarchyTree, Persona, ProjectTree } from "../lib/types";
 import { fetchHierarchy, fetchPersonas, fetchFrameworks, createInstance, setCommander } from "../lib/api";
 import { useData } from "../lib/DataContext";
@@ -632,6 +632,13 @@ export default function HierarchyPage() {
           >
             <RefreshCw className={`h-3 w-3 ${loading ? "animate-spin" : ""}`} />
             refresh
+          </button>
+          <button
+            onClick={() => navigate("/agents/compare")}
+            className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs text-text-muted transition-colors hover:text-text"
+          >
+            <BarChart3 className="h-3 w-3" />
+            compare agents
           </button>
           <button
             onClick={() => navigate(`/agents/${hierarchy.commander!.name}/chat`)}
