@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -281,7 +282,7 @@ func (p *PicoClawAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error)
 func (p *PicoClawAdapter) pollLogs(ctx context.Context, offset int, runID string) ([]LogEntry, int, string) {
 	url := fmt.Sprintf("/api/gateway/logs?log_offset=%d", offset)
 	if runID != "" {
-		url += "&log_run_id=" + runID
+		url += "&log_run_id=" + neturl.QueryEscape(runID)
 	}
 
 	var resp struct {
@@ -495,8 +496,10 @@ func (p *PicoClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 				if len(sess.Title) > 60 {
 					sess.Title = sess.Title[:60] + "..."
 				}
-			} else {
+			} else if len(s.ID) >= 8 {
 				sess.Title = "Session " + s.ID[:8]
+			} else {
+				sess.Title = "Session " + s.ID
 			}
 		}
 		if t, err := time.Parse(time.RFC3339Nano, s.Updated); err == nil {
@@ -568,14 +571,17 @@ func (p *PicoClawAdapter) chatHistoryFromDisk(sessionKey string, limit int) ([]C
 
 	var messages []ChatMessage
 	dec := json.NewDecoder(f)
-	for dec.More() {
+	for {
 		var entry struct {
 			Role      string `json:"role"`
 			Content   string `json:"content"`
 			Timestamp string `json:"timestamp"`
 		}
-		if dec.Decode(&entry) != nil {
-			continue
+		if err := dec.Decode(&entry); err != nil {
+			if err == io.EOF {
+				break
+			}
+			continue // skip malformed lines
 		}
 		if entry.Role != "user" && entry.Role != "assistant" {
 			continue

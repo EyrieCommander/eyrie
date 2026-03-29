@@ -99,6 +99,9 @@ func (cs *ChatStore) chatPath(projectID string) string {
 
 // ClearChat removes the project's chat history file.
 func (cs *ChatStore) ClearChat(projectID string) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
 	cs.mu.Lock()
 	defer cs.mu.Unlock()
 	path := cs.chatPath(projectID)

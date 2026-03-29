@@ -3,6 +3,7 @@ package persona
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"text/template/parse"
 )
@@ -67,8 +68,9 @@ func (p Persona) Validate() error {
 // validateTemplateEntry checks that a single identity template entry has a
 // safe filename and valid, non-dangerous template content.
 func validateTemplateEntry(filename, tmplStr string) error {
-	// Filename safety: no path separators, no . or ..
-	if filename == "" || filepath.Base(filename) != filename || filename == "." || filename == ".." {
+	// Filename safety: no path separators (/ or \), no . or ..
+	if filename == "" || filepath.Base(filename) != filename || filename == "." || filename == ".." ||
+		strings.ContainsAny(filename, "/\\") {
 		return fmt.Errorf("invalid identity template filename %q", filename)
 	}
 
@@ -153,6 +155,24 @@ func walkTemplateNode(node parse.Node) error {
 		}
 	case *parse.TemplateNode:
 		return fmt.Errorf("{{template}} action is not allowed")
+	case *parse.BranchNode:
+		if err := walkTemplatePipe(n.Pipe); err != nil {
+			return err
+		}
+		if n.List != nil {
+			for _, child := range n.List.Nodes {
+				if err := walkTemplateNode(child); err != nil {
+					return err
+				}
+			}
+		}
+		if n.ElseList != nil {
+			for _, child := range n.ElseList.Nodes {
+				if err := walkTemplateNode(child); err != nil {
+					return err
+				}
+			}
+		}
 	case *parse.ListNode:
 		if n != nil {
 			for _, child := range n.Nodes {

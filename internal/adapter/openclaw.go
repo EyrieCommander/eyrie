@@ -1364,7 +1364,7 @@ func (o *OpenClawAdapter) getCachedConn(ctx context.Context) (*websocket.Conn, e
 	defer o.connMu.Unlock()
 
 	const maxAge = 30 * time.Second
-	if o.cachedConn != nil && time.Since(o.cachedConnAt) < maxAge {
+	if o.cachedConn != nil && !o.cachedConnInvalidated && time.Since(o.cachedConnAt) < maxAge {
 		o.cachedConnRef++
 		return o.cachedConn, nil
 	}

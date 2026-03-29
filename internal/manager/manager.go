@@ -315,8 +315,12 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 				time.Sleep(100 * time.Millisecond)
 				found, err := processExistsByConfigDir(configDir)
 				if err != nil || !found {
-					break // no matching process found, safe to start new one
+					break
 				}
+			}
+			// Verify the old process actually exited before spawning a new one
+			if still, _ := processExistsByConfigDir(configDir); still {
+				return fmt.Errorf("old process for config-dir %s still running after 1s — not starting duplicate", configDir)
 			}
 			return runDetached(ctx, logDir, "zeroclaw", "daemon", "--config-dir", configDir)
 		default:

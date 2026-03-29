@@ -48,13 +48,12 @@ func NewCatalogClient(catalogURL string) (*CatalogClient, error) {
 	if catalogURL == "" {
 		catalogURL = DefaultCatalogURL()
 	}
-	home, err := os.UserHomeDir()
-	if err != nil || home == "" {
-		home = "."
-	}
-	cacheDir := filepath.Join(home, ".eyrie", "cache")
-	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
-		return nil, err
+	var cacheDir string
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		cacheDir = filepath.Join(home, ".eyrie", "cache")
+		if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+			cacheDir = "" // caching disabled
+		}
 	}
 	return &CatalogClient{
 		catalogURL: catalogURL,
@@ -145,6 +144,9 @@ func (c *CatalogClient) Fetch(ctx context.Context) (*PersonaRegistry, error) {
 }
 
 func (c *CatalogClient) loadCache() (*PersonaRegistry, error) {
+	if c.cacheDir == "" {
+		return nil, fmt.Errorf("caching disabled")
+	}
 	path := filepath.Join(c.cacheDir, "personas.json")
 	stat, err := os.Stat(path)
 	if err != nil {
@@ -173,6 +175,9 @@ func (c *CatalogClient) loadCache() (*PersonaRegistry, error) {
 }
 
 func (c *CatalogClient) saveCache(reg *PersonaRegistry) error {
+	if c.cacheDir == "" {
+		return nil // caching disabled
+	}
 	data, err := json.MarshalIndent(reg, "", "  ")
 	if err != nil {
 		return err

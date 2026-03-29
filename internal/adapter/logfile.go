@@ -295,9 +295,9 @@ func parsePicoClawLogLine(raw string) *LogEntry {
 	}
 
 	// Build fields map from everything except the known keys
-	fields := make(map[string]any, len(allFields)-3)
+	fields := make(map[string]any, len(allFields)-4)
 	for k, v := range allFields {
-		if k != "level" && k != "message" && k != "time" {
+		if k != "level" && k != "message" && k != "time" && k != "component" {
 			fields[k] = v
 		}
 	}
@@ -325,7 +325,17 @@ func parsePicoClawLogLine(raw string) *LogEntry {
 // Returns nil for noise lines.
 func parsePicoClawActivityLine(raw string) *ActivityEvent {
 	entry := parsePicoClawLogLine(raw)
-	if entry == nil || len(strings.TrimSpace(entry.Message)) < 3 {
+	if entry == nil {
+		return nil
+	}
+	// Check the raw message content, not the prefixed form.
+	// parsePicoClawLogLine prepends "[component] " which inflates length,
+	// letting empty messages pass the threshold.
+	rawMsg := entry.Message
+	if idx := strings.Index(rawMsg, "] "); idx >= 0 && strings.HasPrefix(rawMsg, "[") {
+		rawMsg = rawMsg[idx+2:]
+	}
+	if len(strings.TrimSpace(rawMsg)) < 3 {
 		return nil
 	}
 	// Reuse the canonical classifier from picoclaw.go

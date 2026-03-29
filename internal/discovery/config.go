@@ -63,8 +63,11 @@ func WriteIdentityName(configPath, name string) error {
 				break
 			}
 		}
-		lines = append(lines[:insertAt+1], lines[insertAt:]...)
-		lines[insertAt] = "- **Name:** " + name
+		if insertAt > len(lines) {
+			insertAt = len(lines)
+		}
+		newLine := "- **Name:** " + name
+		lines = append(lines[:insertAt], append([]string{newLine}, lines[insertAt:]...)...)
 	}
 
 	return os.WriteFile(identityPath, []byte(strings.Join(lines, "\n")), 0o644)

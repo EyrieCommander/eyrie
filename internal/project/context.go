@@ -42,7 +42,14 @@ func RenderProjectMD(proj Project, members []TeamMember) string {
 	if len(members) > 0 {
 		b.WriteString("\n## Team\n\n")
 		for _, m := range members {
-			line := fmt.Sprintf("- **%s** (%s, %s)", m.DisplayName, m.Role, m.Framework)
+			displayName := m.DisplayName
+			if displayName == "" {
+				displayName = m.Name
+			}
+			if displayName == "" {
+				continue
+			}
+			line := fmt.Sprintf("- **%s** (%s, %s)", displayName, m.Role, m.Framework)
 			if m.Description != "" {
 				line += " — " + m.Description
 			}
