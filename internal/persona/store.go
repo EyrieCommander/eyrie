@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/Audacity88/eyrie/internal/fileutil"
 )
 
 // ErrNotFound is returned when a persona does not exist on disk.
@@ -104,7 +106,7 @@ func (s *Store) Save(p Persona) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(s.path(p.ID), data, 0o644)
+	return fileutil.AtomicWrite(s.path(p.ID), data, 0o644)
 }
 
 // Delete removes a persona from disk.
