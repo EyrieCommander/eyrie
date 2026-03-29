@@ -79,5 +79,10 @@ export function useAgentMetrics() {
     setMetrics(readStore());
   }, []);
 
-  return { metrics, record };
+  const reset = useCallback(() => {
+    try { localStorage.removeItem(STORAGE_KEY); } catch {}
+    setMetrics({});
+  }, []);
+
+  return { metrics, record, reset };
 }

@@ -119,7 +119,7 @@ function formatMs(ms: number): string {
 
 export default function AgentCompare() {
   const { agents, loading } = useData();
-  const { metrics } = useAgentMetrics();
+  const { metrics, reset: resetMetrics } = useAgentMetrics();
 
   // Build latency data for charts
   const latencyItems = agents
@@ -152,8 +152,16 @@ export default function AgentCompare() {
         <h1 className="text-xl font-bold">
           <span className="text-accent">&gt;</span> agent comparison
         </h1>
-        <p className="mt-1 text-xs text-text-muted">
-          // latency is measured from send to first token — send messages to collect data
+        <p className="mt-1 text-xs text-text-muted flex items-center gap-2">
+          <span>// latency is measured from send to first token — send messages to collect data</span>
+          {Object.keys(metrics).length > 0 && (
+            <button
+              onClick={resetMetrics}
+              className="text-text-muted/60 hover:text-red transition-colors"
+            >
+              (reset)
+            </button>
+          )}
         </p>
       </div>
 
