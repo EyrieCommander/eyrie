@@ -12,6 +12,7 @@ import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
 import SettingsPage from "./components/SettingsPage";
 import FrameworkDetail from "./components/FrameworkDetail";
+import AgentCompare from "./components/AgentCompare";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
 
@@ -59,6 +60,7 @@ function AppContent() {
                 />
               }
             />
+            <Route path="/agents/compare" element={<AgentCompare />} />
             <Route
               path="/agents/:name/:tab?"
               element={<AgentDetailRoute />}
