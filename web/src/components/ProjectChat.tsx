@@ -1,3 +1,39 @@
+// ProjectChat.tsx — Real-time project group chat with SSE streaming.
+//
+// WHY no mountedRef pattern:
+//   DO NOT add a `mountedRef` (useRef tracking mount state) to guard SSE
+//   callbacks. If a parent re-render causes even a brief unmount/remount,
+//   the SSE callback retains a reference to the OLD mountedRef (set to false),
+//   silently dropping ALL subsequent events. This was the root cause of
+//   "streaming events not rendering" — events arrived through the proxy but
+//   the callback discarded them. Use AbortController for cleanup instead.
+//   See: ProjectDetail.tsx always-mounts this component to avoid the issue.
+//
+// WHY merge-based sync (not replace) on `done` event:
+//   When the SSE stream completes, we fetch server messages and MERGE them
+//   with local state rather than replacing. The agent's response is written
+//   to chat.jsonl by a detached goroutine (see orchestrate.go) that may not
+//   have flushed to disk by the time the SSE `done` event fires. Replacing
+//   would lose messages received via SSE that haven't been persisted yet.
+//
+// WHY optimistic user messages:
+//   The user message appears immediately in the UI (with an "optimistic-"
+//   prefixed ID) before the server acknowledges it. This provides instant
+//   feedback while the SSE round-trip completes. The optimistic message is
+//   replaced with the server version when it arrives.
+//
+// WHY 60s response timeout:
+//   If no SSE activity arrives for 60 seconds, we assume the agent is stuck
+//   and abort. This is generous enough for slow LLM responses (which stream
+//   deltas within seconds of starting) but catches genuine failures like
+//   agent crashes or network partitions.
+//
+// WHY 4s polling interval:
+//   When idle (not streaming), we poll for new messages every 4 seconds. This
+//   catches messages from other sources (agents talking to each other, system
+//   events) without hammering the server. During streaming, SSE provides
+//   real-time updates so polling is disabled.
+
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
@@ -256,6 +292,15 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     send(msg);
   }, [input, send]);
 
+  // Auto-start project chat when first loaded with no messages
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (chatLoaded && !autoStartedRef.current && !sending && messages.length === 0) {
+      autoStartedRef.current = true;
+      send("Let's get started on this project.");
+    }
+  }, [chatLoaded, sending, messages.length, send]);
+
   // Sort messages: system before user when timestamps are within 1 second
   const sortedMessages = [...messages].sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -270,21 +315,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
-        {/* Empty state */}
-        {chatLoaded && !sending && !messages.some((m) => m.role !== "system") && (
-          <div className="text-center py-10 space-y-4">
-            <p className="text-xs text-text-muted">start the project chat to bring the team together</p>
-            {chatError && (
-              <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red max-w-sm mx-auto">{chatError}</div>
-            )}
-            <button
-              onClick={() => send("Let's get started on this project.")}
-              disabled={sending}
-              className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
-            >
-              start project chat
-            </button>
-          </div>
+        {/* Error display */}
+        {chatError && (
+          <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red">{chatError}</div>
         )}
 
         {/* Messages — hide pre-chat system messages until chat has started */}

@@ -727,7 +727,7 @@ function EditableInfoCard({
               {!providerModels.includes(editValue) && (
                 <option value={editValue}>{editValue}</option>
               )}
-              {providerModels.map((m) => (
+              {[...providerModels].sort().map((m) => (
                 <option key={m} value={m}>{m}</option>
               ))}
             </select>

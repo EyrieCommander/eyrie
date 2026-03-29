@@ -9,6 +9,12 @@ export default defineConfig({
     emptyOutDir: true,
   },
   server: {
+    hmr: {
+      // Reduce console noise when backend is down — Vite's HMR client
+      // retries every 1s by default, flooding the console with WebSocket
+      // errors. A longer interval keeps the connection alive without spam.
+      timeout: 30000,
+    },
     proxy: {
       "/api": {
         target: "http://127.0.0.1:7200",

@@ -70,6 +70,14 @@
 - [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
 - [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 
+## Rich tool output display:
+- [ ] **Canvas/frame renders**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content
+- [ ] **HTML content preview**: When tool args contain `content_type: "html"`, render a sandboxed iframe preview of the HTML content inline in the tool card
+- [ ] **Image outputs**: Detect image URLs or base64 image data in tool outputs, render inline `<img>` previews
+- [ ] **Structured JSON responses**: Syntax-highlight JSON tool outputs (API responses, config reads) with collapsible sections for large payloads
+- [ ] **File path links**: Detect file paths in tool outputs, make them clickable to open in the agent's file browser or navigate to the file
+- [ ] **Diff display**: For tool outputs containing unified diffs, render with color-coded additions/deletions
+
 ## Security
 
 - [ ] **Agent-to-Eyrie API access**: Currently agents use `curl` via `exec` tool to reach Eyrie's API at localhost:7200. OpenClaw's `web_fetch` blocks private IPs (SSRF policy). For production, explore:
@@ -91,6 +99,7 @@
 - [x] **Captain briefing**: Runs in background at captain assignment, not at chat start
 - [x] **Captain creating talons**: Captain calls `POST /api/instances` via curl — tested end-to-end
 - [x] **Cross-agent messaging**: Retry with backoff, failures surfaced as system messages
+- [ ] **Trim commander API briefing**: Commander's TOOLS.md currently has the full endpoint reference (~40 lines), but most of it (instance CRUD, lifecycle, chat) is captain work. Commander only needs orientation endpoints: `GET /api/projects`, `GET /api/hierarchy`, `GET /api/projects/{id}`. Trim `composeBriefing()` in hierarchy.go to advise saving only what the commander actually uses.
 - [ ] **Instance provisioning for all frameworks**: Currently only ZeroClaw tested. Need OpenClaw and Hermes instance provisioning (config gen, port alloc, startup)
 - [ ] **Commander creating captains**: Commander should provision captain instances when setting up new projects
 - [ ] **Daily sync cron**: Captains sync progress with commander daily; commander aggregates and syncs with user
@@ -103,6 +112,7 @@
 - [x] **DestroySession TOCTOU**: Fixed — replaced file surgery on `sessions.json` with OpenClaw's native `sessions.delete` RPC (which was already available). Eyrie no longer touches `sessions.json` directly for active session deletion.
 - [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
 - [x] **SSE streaming not rendering**: Root cause was `mountedRef` pattern — React re-renders briefly unmounted ProjectChat, causing the SSE callback to hold a stale ref and silently drop all events. Fixed by removing mountedRef, always-mounting ProjectChat (overlays for setup prompts), and using AbortController for cleanup. Vite proxy streams SSE fine.
+- [ ] **Config editor expands all defaults**: When saving config through the dashboard, ZeroClaw's GET /api/config returns all fields (including defaults). The editor writes the full config back to disk, bloating a 24-line provisioner config to 724 lines. Fix: read from disk for editing instead of from the API, so only user overrides are displayed and saved.
 
 ## UI
 
@@ -123,6 +133,7 @@
 
 - [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/Hermes (like Telegram/Discord). Deeper integration than WebSocket-based project chat.
 - [ ] **PicoClaw support**: Fourth framework option — lighter than ZeroClaw for simple Talon roles
+- [x] **Nanobot / ShibaClaw evaluation**: Cloned both to `claws/nanobot/` and `claws/shibaclaw/`. Security audit found critical issues inherited from Nanobot (blocklist-only shell exec, `0.0.0.0` default bind, `restrict_to_workspace: False`, unrestricted `os.execv` restart) plus ShibaClaw-specific WebUI issues (CORS wildcard, API key exposure, auth token in query params). ShibaClaw also still depends on `litellm`, which had a supply chain attack (HKUDS/nanobot#2439). Posted findings to zeroclaw-labs/zeroclaw/discussions/4876. Not integrating either — revisit if security posture improves.
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
 - [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)
 - [ ] **Server middleware layer**: Request logging, panic recovery, and rate limiting middleware — per PLAN.md `internal/server/middleware.go`. Currently all 52 routes are registered bare with no central error handling or observability.

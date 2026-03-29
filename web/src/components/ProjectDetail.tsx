@@ -1,3 +1,28 @@
+// ProjectDetail.tsx — Project workspace with live split view.
+//
+// WHY always-mount for ProjectChat:
+//   ProjectChat is ALWAYS rendered (never conditionally unmounted). Setup
+//   prompts (assign captain, assign commander) render as absolute overlays
+//   ON TOP of the chat, not as replacements. This preserves:
+//   - Active SSE streaming connections (AbortController, event handlers)
+//   - In-flight optimistic messages
+//   - Scroll position and message history state
+//   If ProjectChat were conditionally rendered, any parent re-render that
+//   briefly removed it would kill the SSE connection and drop events (the
+//   mountedRef anti-pattern — see ProjectChat.tsx header comment).
+//
+// WHY chatKey increment for reset:
+//   When the user clicks "reset project", we clear the chat on the server and
+//   increment `chatKey`. React uses the key to force a clean remount of
+//   ProjectChat — fresh state, new SSE connection, no stale messages. This
+//   avoids a full page reload while ensuring clean state.
+//
+// WHY overlays instead of conditional rendering:
+//   Setup prompts (no captain, no commander) use absolute positioning to
+//   overlay the chat area. This means the chat component stays mounted
+//   underneath. When the user completes setup, the overlay disappears and
+//   the chat is immediately ready — no mount delay, no lost state.
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
@@ -114,15 +139,33 @@ export default function ProjectDetail() {
   // cause ProjectChat to unmount/remount and lose its state).
   useEffect(() => {
     if (!id) return;
-    const evtSource = new EventSource(`/api/projects/${id}/events`);
-    evtSource.onmessage = () => {
-      // Refresh instances only (sidebar roster), not the full context
-      ctxRefresh();
+    let cancelled = false;
+    let reconnectDelay = 2000; // 2s initial, doubles up to 30s
+    let timeoutId: ReturnType<typeof setTimeout>;
+    let es: EventSource;
+
+    const connect = () => {
+      if (cancelled) return;
+      es = new EventSource(`/api/projects/${id}/events`);
+      es.onmessage = () => {
+        reconnectDelay = 2000; // reset backoff on success
+        ctxRefresh();
+      };
+      es.onerror = () => {
+        es.close(); // stop browser's aggressive ~3s auto-reconnect
+        if (!cancelled) {
+          timeoutId = setTimeout(connect, reconnectDelay);
+          reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+        }
+      };
     };
-    evtSource.onerror = () => {
-      // SSE connection failed — silently ignore, will reconnect
+    connect();
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timeoutId);
+      es?.close();
     };
-    return () => evtSource.close();
   }, [id, refresh]);
 
   if (loading && !project) {
@@ -425,7 +468,7 @@ export default function ProjectDetail() {
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-3">
                 <p className="text-xs text-text-muted">no commander set up yet</p>
-                <button onClick={() => navigate("/hierarchy")} className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80">
+                <button onClick={() => navigate("/mission-control")} className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80">
                   set up commander
                 </button>
               </div>
