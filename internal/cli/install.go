@@ -127,7 +127,7 @@ func runInstall(cmd *cobra.Command, args []string) error {
 }
 
 func listFrameworks(ctx context.Context, client *registry.Client) error {
-	frameworks, err := client.ListFrameworks(ctx)
+	frameworks, err := client.ListFrameworks(ctx, false)
 	if err != nil {
 		return fmt.Errorf("failed to fetch registry: %w", err)
 	}

@@ -96,6 +96,7 @@ export function AddAgentDialog({
             <option value="zeroclaw">ZeroClaw</option>
             <option value="openclaw">OpenClaw</option>
             <option value="hermes">Hermes</option>
+            <option value="picoclaw">PicoClaw</option>
           </select>
         </div>
 

@@ -268,3 +268,10 @@ export interface ProjectChatMessage {
   mention?: string;
   parts?: ChatPart[];
 }
+
+export const FRAMEWORK_EMOJI: Record<string, string> = {
+  zeroclaw: "🌀",
+  openclaw: "🦞",
+  hermes: "🔱",
+  picoclaw: "🎯",
+};

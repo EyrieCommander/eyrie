@@ -3,13 +3,8 @@ import { useData } from "../lib/DataContext";
 import { formatBytes } from "../lib/format";
 import { useAgentMetrics, latencyPercentiles } from "../lib/useAgentMetrics";
 import { useLatencyThresholds, latencyColor } from "../lib/useLatencyThresholds";
+import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { AgentInfo } from "../lib/types";
-
-const FRAMEWORK_EMOJI: Record<string, string> = {
-  zeroclaw: "🌀",
-  openclaw: "🦞",
-  hermes: "🔱",
-};
 
 function StatusBadge({ alive }: { alive: boolean }) {
   return (

@@ -107,6 +107,69 @@ func scanZeroClawConfig(path string) (*adapter.DiscoveredAgent, error) {
 	}, nil
 }
 
+// isPicoClawConfig checks whether a JSON config file belongs to PicoClaw by
+// looking for the PicoClaw-specific "channels.pico" field as a non-null object.
+// This discriminator is called before scanOpenClawConfig in all .json branches.
+func isPicoClawConfig(data []byte) bool {
+	var cfg struct {
+		Channels struct {
+			Pico json.RawMessage `json:"pico"`
+		} `json:"channels"`
+	}
+	if json.Unmarshal(data, &cfg) != nil {
+		return false
+	}
+	// channels.pico must be present and be a JSON object (not null, not a string)
+	if len(cfg.Channels.Pico) == 0 {
+		return false
+	}
+	trimmed := strings.TrimSpace(string(cfg.Channels.Pico))
+	return strings.HasPrefix(trimmed, "{")
+}
+
+// scanPicoClawConfig reads a PicoClaw config.json and extracts gateway address and token.
+func scanPicoClawConfig(path string) (*adapter.DiscoveredAgent, error) {
+	path = config.ExpandHome(path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var cfg struct {
+		Gateway struct {
+			Port int    `json:"port"`
+			Host string `json:"host"`
+		} `json:"gateway"`
+		Channels struct {
+			Pico struct {
+				Token string `json:"token"`
+			} `json:"pico"`
+		} `json:"channels"`
+	}
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+
+	host := cfg.Gateway.Host
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := cfg.Gateway.Port
+	if port == 0 {
+		port = 18790 // PicoClaw default gateway port
+	}
+
+	return &adapter.DiscoveredAgent{
+		Name:        "picoclaw",
+		DisplayName: readIdentityName(path),
+		Framework:   "picoclaw",
+		Host:        host,
+		Port:        port,
+		ConfigPath:  path,
+		Token:       cfg.Channels.Pico.Token,
+	}, nil
+}
+
 // scanOpenClawConfig reads an OpenClaw openclaw.json and extracts the gateway address.
 func scanOpenClawConfig(path string) (*adapter.DiscoveredAgent, error) {
 	path = config.ExpandHome(path)

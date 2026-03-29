@@ -1,15 +1,10 @@
 import { useEffect, useState } from "react";
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { ArrowLeft, ExternalLink } from "lucide-react";
+import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { Framework } from "../lib/types";
 import { getFrameworkDetail } from "../lib/api";
 import { useData } from "../lib/DataContext";
-
-const FRAMEWORK_EMOJI: Record<string, string> = {
-  zeroclaw: "🌀",
-  openclaw: "🦞",
-  hermes: "🔱",
-};
 
 function statusDotClass(alive: boolean, providerStatus?: string): string {
   if (!alive) return "bg-red";

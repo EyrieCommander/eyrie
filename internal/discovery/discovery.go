@@ -119,7 +119,12 @@ func scanInstances() []adapter.DiscoveredAgent {
 		case ".toml":
 			agent, err = scanZeroClawConfig(expanded)
 		case ".json":
-			agent, err = scanOpenClawConfig(expanded)
+			// Try PicoClaw first (discriminated by channels.pico field), fall through to OpenClaw
+			if data, readErr := os.ReadFile(expanded); readErr == nil && isPicoClawConfig(data) {
+				agent, err = scanPicoClawConfig(expanded)
+			} else {
+				agent, err = scanOpenClawConfig(expanded)
+			}
 		case ".yaml", ".yml":
 			agent, err = scanYAMLConfig(expanded)
 		default:
@@ -156,7 +161,12 @@ func scanConfigFiles(paths []string) []adapter.DiscoveredAgent {
 		if strings.HasSuffix(expanded, ".toml") {
 			agent, err = scanZeroClawConfig(expanded)
 		} else if strings.HasSuffix(expanded, ".json") {
-			agent, err = scanOpenClawConfig(expanded)
+			// Try PicoClaw first (discriminated by channels.pico field), fall through to OpenClaw
+			if data, readErr := os.ReadFile(expanded); readErr == nil && isPicoClawConfig(data) {
+				agent, err = scanPicoClawConfig(expanded)
+			} else {
+				agent, err = scanOpenClawConfig(expanded)
+			}
 		} else if strings.HasSuffix(expanded, ".yaml") || strings.HasSuffix(expanded, ".yml") {
 			agent, err = scanYAMLConfig(expanded)
 		} else {
@@ -211,6 +221,10 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 		)
 	case "openclaw":
 		return adapter.NewOpenClawAdapter(
+			d.Name, d.Name, d.Host, d.Port, d.Token, d.ConfigPath,
+		)
+	case "picoclaw":
+		return adapter.NewPicoClawAdapter(
 			d.Name, d.Name, d.Host, d.Port, d.Token, d.ConfigPath,
 		)
 	case "hermes":

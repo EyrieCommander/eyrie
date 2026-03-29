@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updated_at": "2026-03-19T00:00:00Z",
+  "updated_at": "2026-03-29T00:00:00Z",
   "frameworks": [
     {
       "id": "zeroclaw",
@@ -248,6 +248,87 @@
           }
         ],
         "api_key_hint": "set API keys in ~/.hermes/.env file: ANTHROPIC_API_KEY, OPENROUTER_API_KEY, or OPENAI_API_KEY"
+      }
+    },
+    {
+      "id": "picoclaw",
+      "name": "PicoClaw",
+      "description": "Go-based lightweight agent (tiny, fast, deployable anywhere)",
+      "language": "go",
+      "repository": "https://github.com/sipeed/picoclaw",
+      "website": "https://picoclaw.io",
+      "install_method": "manual",
+      "install_cmd": "Download from https://picoclaw.io or https://github.com/sipeed/picoclaw/releases",
+      "requirements": [],
+      "config_format": "json",
+      "config_path": "~/.picoclaw/config.json",
+      "config_dir": "~/.picoclaw",
+      "binary_path": "~/go/bin/picoclaw",
+      "adapter_type": "hybrid",
+      "default_port": 18790,
+      "start_cmd": "picoclaw gateway",
+      "stop_cmd": "",
+      "status_cmd": "",
+      "restart_cmd": "",
+      "health_url": "http://localhost:18790/health",
+      "log_dir": "~/.picoclaw/logs",
+      "log_format": "json",
+      "config_schema": {
+        "common_fields": [
+          {
+            "key": "gateway.port",
+            "label": "gateway port",
+            "type": "number",
+            "default": 18790,
+            "required": true,
+            "description": "port for the gateway health and channel servers",
+            "min": 1024,
+            "max": 65535
+          },
+          {
+            "key": "gateway.host",
+            "label": "gateway host",
+            "type": "text",
+            "default": "127.0.0.1",
+            "required": true,
+            "description": "host address for gateway to bind to"
+          },
+          {
+            "key": "agents.defaults.provider",
+            "label": "LLM provider",
+            "type": "select",
+            "options": ["anthropic", "openai", "openrouter", "ollama"],
+            "default": "openrouter",
+            "required": true,
+            "description": "which LLM provider to use"
+          },
+          {
+            "key": "agents.defaults.model_name",
+            "label": "model",
+            "type": "text",
+            "default": "anthropic/claude-sonnet-4-20250514",
+            "required": true,
+            "description": "model identifier (provider/model format)"
+          },
+          {
+            "key": "agents.defaults.restrict_to_workspace",
+            "label": "restrict to workspace",
+            "type": "checkbox",
+            "default": true,
+            "required": false,
+            "description": "restrict file and shell access to the workspace directory"
+          },
+          {
+            "key": "channels",
+            "label": "enabled channels",
+            "type": "multiselect",
+            "options": ["telegram", "discord", "slack", "whatsapp", "weixin", "feishu", "dingtalk"],
+            "default": [],
+            "required": false,
+            "description": "messaging platforms to enable"
+          }
+        ],
+        "api_key_hint": "store API keys in ~/.picoclaw/.security.yml (chmod 600) or set PICOCLAW_CHANNELS_* environment variables"
       }
     }
   ]

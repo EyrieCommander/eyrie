@@ -99,7 +99,6 @@
 - [x] **Captain briefing**: Runs in background at captain assignment, not at chat start
 - [x] **Captain creating talons**: Captain calls `POST /api/instances` via curl — tested end-to-end
 - [x] **Cross-agent messaging**: Retry with backoff, failures surfaced as system messages
-- [ ] **Trim commander API briefing**: Commander's TOOLS.md currently has the full endpoint reference (~40 lines), but most of it (instance CRUD, lifecycle, chat) is captain work. Commander only needs orientation endpoints: `GET /api/projects`, `GET /api/hierarchy`, `GET /api/projects/{id}`. Trim `composeBriefing()` in hierarchy.go to advise saving only what the commander actually uses.
 - [ ] **Instance provisioning for all frameworks**: Currently only ZeroClaw tested. Need OpenClaw and Hermes instance provisioning (config gen, port alloc, startup)
 - [ ] **Commander creating captains**: Commander should provision captain instances when setting up new projects
 - [ ] **Daily sync cron**: Captains sync progress with commander daily; commander aggregates and syncs with user
@@ -132,7 +131,9 @@
 ## Architecture
 
 - [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/Hermes (like Telegram/Discord). Deeper integration than WebSocket-based project chat.
-- [ ] **PicoClaw support**: Fourth framework option — lighter than ZeroClaw for simple Talon roles
+- [x] **PicoClaw support**: Fourth framework — adapter (978 lines), discovery, provisioning, registry, install page all wired up. Pending:
+  - [ ] **Post-install onboarding UI**: After installing PicoClaw from the install page, launch the framework's onboard wizard (e.g., `picoclaw onboard`) from the dashboard so the config file gets created and discovery can pick it up. Currently requires manual CLI onboarding.
+  - [ ] **PicoClaw instance provisioning test**: Test end-to-end provisioning of PicoClaw instances from the hierarchy page (captain creating talons)
 - [x] **Nanobot / ShibaClaw evaluation**: Cloned both to `claws/nanobot/` and `claws/shibaclaw/`. Security audit found critical issues inherited from Nanobot (blocklist-only shell exec, `0.0.0.0` default bind, `restrict_to_workspace: False`, unrestricted `os.execv` restart) plus ShibaClaw-specific WebUI issues (CORS wildcard, API key exposure, auth token in query params). ShibaClaw also still depends on `litellm`, which had a supply chain attack (HKUDS/nanobot#2439). Posted findings to zeroclaw-labs/zeroclaw/discussions/4876. Not integrating either — revisit if security posture improves.
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
 - [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)

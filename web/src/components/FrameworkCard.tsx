@@ -1,17 +1,13 @@
 import { useEffect, useState } from "react";
 import { Download, CheckCircle, Loader2 } from "lucide-react";
+import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { Framework, InstallProgress } from "../lib/types";
-
-const FRAMEWORK_EMOJI: Record<string, string> = {
-  zeroclaw: "🌀",
-  openclaw: "🦞",
-  hermes: "🔱",
-};
 
 interface FrameworkCardProps {
   framework: Framework;
   installProgress?: InstallProgress;
   onInstall: () => void;
+  onManage?: () => void;
   disabled?: boolean;
 }
 
@@ -19,12 +15,13 @@ export default function FrameworkCard({
   framework,
   installProgress,
   onInstall,
+  onManage,
   disabled,
 }: FrameworkCardProps) {
   const isInstalling = installProgress?.status === "running";
   const isSuccess = installProgress?.status === "success";
-  const isError = installProgress?.status === "error";
-  const isAlreadyInstalled = framework.installed && !installProgress;
+  const isAlreadyInstalled = framework.installed && !isInstalling && !isSuccess;
+  const isError = installProgress?.status === "error" && !isAlreadyInstalled;
 
   const [, setTick] = useState(0);
 
@@ -95,11 +92,13 @@ export default function FrameworkCard({
 
       {/* Install button */}
       <button
-        onClick={onInstall}
-        disabled={disabled || isSuccess || isAlreadyInstalled}
+        onClick={(isAlreadyInstalled || isSuccess) && onManage ? onManage : onInstall}
+        disabled={disabled}
         className={`flex w-full items-center justify-center gap-2 rounded px-3 py-2 text-xs font-medium transition-colors ${
-          isAlreadyInstalled || isSuccess
-            ? "bg-green/10 text-green cursor-default"
+          isSuccess
+            ? "bg-green/10 text-green hover:bg-green/20"
+            : isAlreadyInstalled
+              ? "bg-green/10 text-green hover:bg-green/20"
             : isError
               ? "bg-red/10 text-red hover:bg-red/20"
               : isInstalling

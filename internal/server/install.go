@@ -170,7 +170,11 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	frameworks, err := client.ListFrameworks(ctx)
+	// WHY refresh param: The registry has a 24h cache. The refresh button on the
+	// install page sends ?refresh=true to bypass the cache so newly added
+	// frameworks appear without waiting for cache expiry.
+	forceRefresh := r.URL.Query().Get("refresh") == "true"
+	frameworks, err := client.ListFrameworks(ctx, forceRefresh)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -499,7 +503,7 @@ func setupAdapter(fw *registry.Framework, progress *installProgress) error {
 	progress.addLog(fmt.Sprintf("Setting up %s adapter", fw.AdapterType))
 
 	switch fw.AdapterType {
-	case "http", "websocket", "cli":
+	case "http", "websocket", "cli", "hybrid":
 		progress.addLog(fmt.Sprintf("Using %s adapter", fw.AdapterType))
 		return nil
 	default:

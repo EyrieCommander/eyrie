@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, Download, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
+import { FRAMEWORK_EMOJI } from "../lib/types";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
 
@@ -34,11 +35,6 @@ function useSortOrder<T extends { id: string }>(key: string, items: T[]) {
   return { sorted, reorder };
 }
 
-const FRAMEWORK_EMOJI: Record<string, string> = {
-  zeroclaw: "🌀",
-  openclaw: "🦞",
-  hermes: "🔱",
-};
 
 function parseAgentRoute(pathname: string) {
   const match = pathname.match(/^\/agents\/([^/]+?)(?:\/(status|chat|logs|config))?$/);

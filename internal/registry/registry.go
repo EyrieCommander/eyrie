@@ -121,9 +121,10 @@ func (c *Client) GetFramework(ctx context.Context, id string) (*Framework, error
 	return nil, fmt.Errorf("framework %q not found in registry", id)
 }
 
-// ListFrameworks returns all available frameworks
-func (c *Client) ListFrameworks(ctx context.Context) ([]Framework, error) {
-	reg, err := c.Fetch(ctx, false)
+// ListFrameworks returns all available frameworks.
+// When forceRefresh is true the cache is bypassed.
+func (c *Client) ListFrameworks(ctx context.Context, forceRefresh bool) ([]Framework, error) {
+	reg, err := c.Fetch(ctx, forceRefresh)
 	if err != nil {
 		return nil, err
 	}

@@ -48,6 +48,7 @@ func DefaultConfig() Config {
 			ConfigPaths: []string{
 				"~/.zeroclaw/config.toml",
 				"~/.openclaw/openclaw.json",
+				"~/.picoclaw/config.json",
 			},
 		},
 	}

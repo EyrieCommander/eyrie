@@ -57,6 +57,16 @@ export default function InstallPage() {
     }
   };
 
+  const handleManage = (frameworkId: string) => {
+    setSelectedFramework(frameworkId);
+    setInstallProgress((prev) => ({
+      ...prev,
+      [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success", progress: 100 },
+    }));
+    setInstallLogs((prev) => ({ ...prev, [frameworkId]: [`${frameworkId} is installed and ready.`] }));
+    setShowLogs(true);
+  };
+
   const handleInstall = (frameworkId: string) => {
     if (abortControllers.current[frameworkId]) {
       abortControllers.current[frameworkId].abort();
@@ -152,6 +162,7 @@ export default function InstallPage() {
               framework={fw}
               installProgress={installProgress[fw.id]}
               onInstall={() => handleInstall(fw.id)}
+              onManage={() => handleManage(fw.id)}
               disabled={loading}
             />
           ))}
