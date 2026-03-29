@@ -36,9 +36,23 @@ type ChatMessage struct {
 }
 
 // ChatStore manages the shared conversation for a project.
-// Messages are stored as append-only JSONL at ~/.eyrie/projects/{id}/chat.jsonl.
-// Package-level listening state — persists across ChatStore instances
-// since ChatStore is recreated on every HTTP request.
+//
+// WHY JSONL: Append-only file format. Each message is one JSON line. This is
+// simpler than SQLite for our use case (sequential chat), easy to inspect with
+// standard tools (cat, jq), and avoids WAL/locking complexity. The ChatStore
+// interface allows swapping for SQLite if we need random-access queries later.
+//
+// WHY package-level singleton for listening state:
+// ChatStore is recreated on every HTTP request (via NewChatStore()). If
+// listening state were stored on the ChatStore instance, it would be lost
+// between the POST that sets [LISTENING] and the next POST that checks it.
+// The package-level map survives across requests within the same process.
+//
+// WHY in-memory only (not persisted to disk):
+// If Eyrie restarts, the listening state is lost — the agent simply won't
+// claim the next message, and routing falls back to the default (captain).
+// This is acceptable: the user can @mention the agent to re-engage, and
+// persisting would add complexity for minimal benefit.
 var (
 	listeningMap = make(map[string]string) // projectID → agent name
 	listeningMu  sync.RWMutex

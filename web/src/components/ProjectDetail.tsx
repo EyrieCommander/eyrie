@@ -30,7 +30,7 @@ import {
   MessageSquare, Pause, Target,
 } from "lucide-react";
 import type { AgentInstance } from "../lib/types";
-import { fetchHierarchy, deleteProject, agentAction, instanceAction } from "../lib/api";
+import { fetchCommander, deleteProject, agentAction, instanceAction } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { SetCaptainDialog } from "./SetCaptainDialog";
 import { AddAgentDialog } from "./AddAgentDialog";
@@ -101,13 +101,13 @@ export default function ProjectDetail() {
     if (!id) return;
     try {
       setLoadError("");
-      const [hierarchy] = await Promise.all([
-        fetchHierarchy().catch(() => null),
+      const [commander] = await Promise.all([
+        fetchCommander().catch(() => null),
         ctxRefresh(),
       ]);
-      if (hierarchy?.commander) {
-        setCommanderName(hierarchy.commander.name);
-        setCommanderStatus(hierarchy.commander.status);
+      if (commander) {
+        setCommanderName(commander.name);
+        setCommanderStatus(commander.status);
       }
       hasLoadedRef.current = true;
     } catch (err) {

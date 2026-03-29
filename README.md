@@ -20,6 +20,15 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 - **Lifecycle management**: start, stop, restart any agent from one place
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
 
+### Project Orchestration
+
+- **Three-tier hierarchy**: Commander (strategy) → Captain (execution) → Talons (specialists)
+- **Project chat**: multi-agent group conversations with @mention routing and automatic agent-to-agent handoff
+- **Real-time control room**: mission control dashboard with metrics, swim-lane timeline, and commander bar
+- **Project workspace**: split view with agent roster, hierarchy diagram, and live chat
+- **Dual control**: anything an agent can do, the user can also do via UI, and vice versa
+- **Persona catalog**: browse and apply agent personalities from a curated registry
+
 ### In development
 
 - **Mission control**: cross-project dashboard with metrics, agent health, and commander access
