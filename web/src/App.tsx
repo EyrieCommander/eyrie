@@ -192,12 +192,14 @@ function AgentList({
       )}
 
       {agents.length > 0 && (
-        <Link
-          to="/agents/compare"
-          className="inline-flex items-center gap-1.5 text-xs text-text-muted hover:text-accent transition-colors"
-        >
-          compare agent performance →
-        </Link>
+        <div className="flex justify-end">
+          <Link
+            to="/agents/compare"
+            className="inline-flex items-center gap-1.5 text-xs font-medium text-text-secondary hover:text-accent transition-colors"
+          >
+            compare agent performance →
+          </Link>
+        </div>
       )}
     </div>
   );
