@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation } from "react-router-dom";
-import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, GripVertical, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
+import { Bird, Briefcase, Bot, ChevronDown, ChevronRight, Download, GripVertical, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
@@ -219,22 +219,6 @@ export default function Sidebar() {
             )}
           </button>
         </div>
-
-        {agentsExpanded && (
-          <div className="ml-4 border-l border-border pl-2">
-            <Link
-              to="/agents/compare"
-              className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                pathname === "/agents/compare"
-                  ? "bg-surface-hover text-accent font-medium"
-                  : "text-text-muted hover:text-text hover:bg-surface-hover/50"
-              }`}
-            >
-              <BarChart3 className="h-3 w-3" />
-              <span>compare</span>
-            </Link>
-          </div>
-        )}
 
         {agentsExpanded && agents.length > 0 && (
           <div id="agents-list" className="ml-4 border-l border-border pl-2 space-y-px">

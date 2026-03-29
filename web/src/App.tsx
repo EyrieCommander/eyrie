@@ -2,6 +2,7 @@ import { Routes, Route, Navigate, useParams, useNavigate } from "react-router-do
 import { RefreshCw } from "lucide-react";
 import type { AgentInfo } from "./lib/types";
 import { formatUptime, formatBytes } from "./lib/format";
+import { useAgentMetrics, latencyPercentiles } from "./lib/useAgentMetrics";
 import { DataProvider, useData } from "./lib/DataContext";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
@@ -12,7 +13,6 @@ import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
 import SettingsPage from "./components/SettingsPage";
 import FrameworkDetail from "./components/FrameworkDetail";
-import AgentCompare from "./components/AgentCompare";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
 
@@ -60,7 +60,6 @@ function AppContent() {
                 />
               }
             />
-            <Route path="/agents/compare" element={<AgentCompare />} />
             <Route
               path="/agents/:name/:tab?"
               element={<AgentDetailRoute />}
@@ -78,6 +77,20 @@ function AppContent() {
   );
 }
 
+function formatMs(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
+function MetricBar({ value, max, color }: { value: number; max: number; color: string }) {
+  const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
+  return (
+    <div className="h-3 w-full rounded bg-surface-hover/50">
+      <div className={`h-full rounded ${color}`} style={{ width: `${pct}%`, minWidth: pct > 0 ? "2px" : "0" }} />
+    </div>
+  );
+}
+
 function AgentList({
   agents,
   loading,
@@ -88,12 +101,25 @@ function AgentList({
   onRefresh: () => void;
 }) {
   const navigate = useNavigate();
+  const { metrics } = useAgentMetrics();
   const running = agents.filter((a) => a.alive).length;
   const totalUptime = agents.reduce(
     (sum, a) => sum + (a.health?.uptime ?? 0),
     0,
   );
   const avgUptime = agents.length > 0 ? totalUptime / agents.length : 0;
+
+  // Build latency data for bar charts
+  const latencyData = agents
+    .map((a) => {
+      const m = metrics[a.name];
+      const avg = m && m.latencies.length > 0
+        ? Math.round(m.latencies.reduce((s, v) => s + v, 0) / m.latencies.length)
+        : null;
+      const p = latencyPercentiles(a.name);
+      return { name: a.display_name || a.name, avg, p90: p?.p90 ?? null, samples: m?.latencies.length ?? 0 };
+    })
+    .filter((d) => d.avg !== null);
 
   return (
     <div className="space-y-6">
@@ -103,7 +129,7 @@ function AgentList({
         <div>
           <h1 className="text-xl font-bold"><span className="text-accent">&gt;</span> agent_overview</h1>
           <p className="mt-1 text-xs text-text-muted">
-            // monitor agent status and activity
+            // monitor agent status and performance
           </p>
         </div>
         <button
@@ -124,71 +150,165 @@ function AgentList({
 
       {loading && agents.length === 0 ? (
         <div className="py-12 text-center text-xs text-text-muted">
-          Discovering agents...
+          discovering agents...
         </div>
       ) : agents.length === 0 ? (
         <div className="rounded border border-border bg-surface p-8 text-center text-xs text-text-muted">
-          No agents discovered. Make sure ZeroClaw or OpenClaw is installed and
-          configured.
+          no agents discovered. install a framework to get started.
         </div>
       ) : (
-        <div className="overflow-hidden rounded border border-border">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-border bg-surface text-left text-text-muted">
-                <th className="px-4 py-2.5 font-medium">name</th>
-                <th className="px-4 py-2.5 font-medium">framework</th>
-                <th className="px-4 py-2.5 font-medium">status</th>
-                <th className="px-4 py-2.5 font-medium">port</th>
-                <th className="px-4 py-2.5 font-medium">memory</th>
-                <th className="px-4 py-2.5 font-medium">cpu</th>
-              </tr>
-            </thead>
-            <tbody className="[&>tr+tr]:border-t [&>tr+tr]:border-border">
-              {agents.map((agent) => (
-                <tr
-                  key={agent.name}
-                  onClick={() => navigate(`/agents/${agent.name}`)}
-                  className="group relative cursor-pointer transition-all hover:bg-surface-hover/50 hover:shadow-[inset_0_0_0_1px_var(--color-accent)] hover:z-10"
-                >
-                  <td className="px-4 py-2.5 transition-colors group-hover:text-accent">
-                    <span className="flex items-center gap-2">
-                      <span
-                        className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`}
-                      />
-                      {agent.display_name || agent.name}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
-                    {agent.framework}
-                  </td>
-                  <td className="px-4 py-2.5">
-                    <span
-                      className={`rounded px-2 py-0.5 text-[10px] font-medium uppercase ${
-                        agent.alive
-                          ? "bg-green/10 text-green"
-                          : "bg-red/10 text-red"
-                      }`}
-                    >
-                      {agent.alive ? "running" : "stopped"}
-                    </span>
-                  </td>
-                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
-                    :{agent.port}
-                  </td>
-                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
-                    {agent.health ? formatBytes(agent.health.ram_bytes) : "-"}
-                  </td>
-                  <td className="px-4 py-2.5 text-text-secondary transition-colors group-hover:text-accent">
-                    {agent.health?.cpu_percent != null
-                      ? `${agent.health.cpu_percent.toFixed(1)}%`
-                      : "-"}
-                  </td>
+        <>
+          <div className="overflow-x-auto overflow-hidden rounded border border-border">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-surface text-left text-text-muted">
+                  <th className="px-4 py-2.5 font-medium">name</th>
+                  <th className="px-4 py-2.5 font-medium">framework</th>
+                  <th className="px-4 py-2.5 font-medium">status</th>
+                  <th className="px-4 py-2.5 font-medium">model</th>
+                  <th className="px-4 py-2.5 font-medium">port</th>
+                  <th className="px-4 py-2.5 font-medium">provider</th>
+                  <th className="px-4 py-2.5 font-medium text-right">latency (avg)</th>
+                  <th className="px-4 py-2.5 font-medium text-right">latency (p90)</th>
+                  <th className="px-4 py-2.5 font-medium text-right">memory</th>
+                  <th className="px-4 py-2.5 font-medium text-right">cpu</th>
+                  <th className="px-4 py-2.5 font-medium text-right">errors (24h)</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="[&>tr+tr]:border-t [&>tr+tr]:border-border">
+                {agents.map((agent) => {
+                  const m = metrics[agent.name];
+                  const avg = m && m.latencies.length > 0
+                    ? Math.round(m.latencies.reduce((s, v) => s + v, 0) / m.latencies.length)
+                    : null;
+                  const p = latencyPercentiles(agent.name);
+                  return (
+                    <tr
+                      key={agent.name}
+                      onClick={() => navigate(`/agents/${agent.name}`)}
+                      className="group relative cursor-pointer transition-all hover:bg-surface-hover/50 hover:shadow-[inset_0_0_0_1px_var(--color-accent)] hover:z-10"
+                    >
+                      <td className="px-4 py-2.5 transition-colors group-hover:text-accent">
+                        <span className="flex items-center gap-2">
+                          <span className={`h-1.5 w-1.5 rounded-full ${agent.alive ? "bg-green" : "bg-red"}`} />
+                          {agent.display_name || agent.name}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-text-secondary">{agent.framework}</td>
+                      <td className="px-4 py-2.5">
+                        <span className={`rounded px-2 py-0.5 text-[10px] font-medium uppercase ${agent.alive ? "bg-green/10 text-green" : "bg-red/10 text-red"}`}>
+                          {agent.alive ? "running" : "stopped"}
+                        </span>
+                      </td>
+                      <td className="px-4 py-2.5 text-text-secondary truncate max-w-32">{agent.status?.model || "-"}</td>
+                      <td className="px-4 py-2.5 text-text-secondary">:{agent.port}</td>
+                      <td className="px-4 py-2.5 text-text-secondary">
+                        {agent.status?.provider || "-"}
+                        {agent.status?.provider_status && (
+                          <span className={`ml-1.5 text-[10px] ${agent.status.provider_status === "ok" ? "text-green" : "text-red"}`}>
+                            {agent.status.provider_status === "ok" ? "✓" : "✗"}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono">
+                        {avg !== null ? (
+                          <span className={avg > 10000 ? "text-red" : avg > 5000 ? "text-yellow" : "text-accent"}>{formatMs(avg)}</span>
+                        ) : <span className="text-text-muted">-</span>}
+                      </td>
+                      <td className="px-4 py-2.5 text-right font-mono text-text-secondary">
+                        {p?.p90 != null ? formatMs(p.p90) : "-"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-text-secondary">{agent.health ? formatBytes(agent.health.ram_bytes) : "-"}</td>
+                      <td className="px-4 py-2.5 text-right text-text-secondary">
+                        {agent.health?.cpu_percent != null ? `${agent.health.cpu_percent.toFixed(1)}%` : "-"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        {agent.status?.errors_24h != null ? (
+                          <span className={agent.status.errors_24h > 0 ? "text-red" : "text-text-secondary"}>{agent.status.errors_24h}</span>
+                        ) : <span className="text-text-muted">-</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Performance charts */}
+          {(latencyData.length > 0 || agents.some((a) => a.health)) && (
+            <div>
+              <h2 className="mb-3 text-[10px] font-medium uppercase tracking-wider text-text-muted">
+                performance comparison
+              </h2>
+              <div className="grid gap-4 md:grid-cols-2">
+                {latencyData.length > 0 && (
+                  <div className="rounded border border-border bg-surface p-4">
+                    <h3 className="mb-1 text-xs font-medium text-text-muted">avg latency</h3>
+                    <p className="mb-3 text-[10px] text-text-muted/60">time to first token — lower is better</p>
+                    <div className="space-y-2">
+                      {latencyData.map((d) => (
+                        <div key={d.name} className="flex items-center gap-3">
+                          <span className="w-20 shrink-0 truncate text-xs text-text-secondary">{d.name}</span>
+                          <div className="flex-1">
+                            <MetricBar value={d.avg!} max={Math.max(...latencyData.map((x) => x.avg!))} color="bg-accent" />
+                          </div>
+                          <span className="w-14 shrink-0 text-right text-xs text-text-muted">{formatMs(d.avg!)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {latencyData.filter((d) => d.p90 !== null).length > 0 && (
+                  <div className="rounded border border-border bg-surface p-4">
+                    <h3 className="mb-1 text-xs font-medium text-text-muted">p90 latency</h3>
+                    <p className="mb-3 text-[10px] text-text-muted/60">90th percentile — worst-case typical</p>
+                    <div className="space-y-2">
+                      {latencyData.filter((d) => d.p90 !== null).map((d) => (
+                        <div key={d.name} className="flex items-center gap-3">
+                          <span className="w-20 shrink-0 truncate text-xs text-text-secondary">{d.name}</span>
+                          <div className="flex-1">
+                            <MetricBar value={d.p90!} max={Math.max(...latencyData.map((x) => x.p90 ?? 0))} color="bg-yellow" />
+                          </div>
+                          <span className="w-14 shrink-0 text-right text-xs text-text-muted">{formatMs(d.p90!)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <div className="rounded border border-border bg-surface p-4">
+                  <h3 className="mb-3 text-xs font-medium text-text-muted">memory</h3>
+                  <div className="space-y-2">
+                    {agents.map((a) => (
+                      <div key={a.name} className="flex items-center gap-3">
+                        <span className="w-20 shrink-0 truncate text-xs text-text-secondary">{a.display_name || a.name}</span>
+                        <div className="flex-1">
+                          <MetricBar value={a.health?.ram_bytes ?? 0} max={Math.max(...agents.map((x) => x.health?.ram_bytes ?? 0))} color="bg-purple-400" />
+                        </div>
+                        <span className="w-14 shrink-0 text-right text-xs text-text-muted">{formatBytes(a.health?.ram_bytes)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded border border-border bg-surface p-4">
+                  <h3 className="mb-3 text-xs font-medium text-text-muted">cpu</h3>
+                  <div className="space-y-2">
+                    {agents.map((a) => (
+                      <div key={a.name} className="flex items-center gap-3">
+                        <span className="w-20 shrink-0 truncate text-xs text-text-secondary">{a.display_name || a.name}</span>
+                        <div className="flex-1">
+                          <MetricBar value={a.health?.cpu_percent ?? 0} max={Math.max(...agents.map((x) => x.health?.cpu_percent ?? 0), 1)} color="bg-accent" />
+                        </div>
+                        <span className="w-14 shrink-0 text-right text-xs text-text-muted">
+                          {a.health?.cpu_percent != null ? `${a.health.cpu_percent.toFixed(1)}%` : "-"}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
