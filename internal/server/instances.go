@@ -129,8 +129,8 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-link captain to project: if a captain is created for a project,
 	// set the project's orchestrator_id so it appears as the project captain.
-	// Also trigger a background briefing so the captain is ready when the
-	// user opens the project chat — no waiting required.
+	// No separate briefing needed — role instructions are injected inline
+	// when the project chat starts.
 	if req.HierarchyRole == "captain" && req.ProjectID != "" {
 		if projStore, pErr := project.NewStore(); pErr == nil {
 			if proj, pErr := projStore.Get(req.ProjectID); pErr == nil {
@@ -138,25 +138,6 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 				if pErr := projStore.Save(*proj); pErr != nil {
 					slog.Warn("failed to auto-link captain to project", "project", req.ProjectID, "error", pErr)
 				}
-				// Background briefing — fire and forget
-				go func(projCopy project.Project, instName string) {
-					briefCtx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
-					defer cancel()
-					// Wait for the agent to become reachable
-					time.Sleep(5 * time.Second)
-					agent, err := s.findAgent(briefCtx, instName)
-					if err != nil {
-						slog.Warn("background captain briefing skipped — agent not reachable", "agent", instName, "error", err)
-						return
-					}
-					briefing := composeCaptainBriefing(&projCopy)
-					_, err = agent.SendMessage(briefCtx, briefing, "project-"+projCopy.Name+"-briefing")
-					if err != nil {
-						slog.Warn("background captain briefing failed", "agent", instName, "error", err)
-					} else {
-						slog.Info("background captain briefing complete", "agent", instName, "project", projCopy.Name)
-					}
-				}(*proj, inst.Name)
 			}
 		}
 	}

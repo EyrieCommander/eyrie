@@ -1090,7 +1090,9 @@ func (z *ZeroClawAdapter) ResetSession(ctx context.Context, sessionKey string) e
 		return fmt.Errorf("deleting session: %w", err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= 400 {
+	// 404 is fine — session is already gone (e.g. project reset clears
+	// multiple agents and some may not have the session).
+	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
 		return fmt.Errorf("delete session returned %d", resp.StatusCode)
 	}
 	return nil

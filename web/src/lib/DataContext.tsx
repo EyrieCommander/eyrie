@@ -75,13 +75,18 @@ export function DataProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
     let cancelled = false;
+    let delay = 30000; // 30s normal polling
 
     const scheduleRefresh = () => {
       timeoutId = setTimeout(async () => {
         if (cancelled) return;
         await refresh(false);
-        if (!cancelled) scheduleRefresh();
-      }, 30000);
+        if (cancelled) return;
+        // Back off to 60s when all fetches failed (backend likely down),
+        // reset to 30s on any success.
+        delay = error ? 60000 : 30000;
+        scheduleRefresh();
+      }, delay);
     };
 
     refresh().then(() => {
@@ -92,7 +97,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [refresh]);
+  }, [refresh, error]);
 
   return (
     <DataContext.Provider value={{ agents, projects, instances, loading, error, refresh, pendingActions, setPendingAction }}>
