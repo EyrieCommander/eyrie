@@ -22,12 +22,6 @@ function StatusBadge({ alive }: { alive: boolean }) {
   );
 }
 
-function ProviderBadge({ status }: { status?: string }) {
-  if (!status) return <span className="text-text-muted">-</span>;
-  if (status === "ok") return <span className="text-green">ok</span>;
-  return <span className="text-red">{status}</span>;
-}
-
 function Bar({ value, max, color }: { value: number; max: number; color: string }) {
   const pct = max > 0 ? Math.min((value / max) * 100, 100) : 0;
   return (
@@ -224,7 +218,7 @@ export default function AgentCompare() {
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono">
                         {avg !== null ? (
-                          <span className={avg > 5000 ? "text-yellow" : avg > 10000 ? "text-red" : "text-accent"}>
+                          <span className={avg > 10000 ? "text-red" : avg > 5000 ? "text-yellow" : "text-accent"}>
                             {formatMs(avg)}
                           </span>
                         ) : (
@@ -237,11 +231,11 @@ export default function AgentCompare() {
                       <td className="px-4 py-2.5 text-right text-text-muted">
                         {m?.latencies.length ?? 0}
                       </td>
-                      <td className="px-4 py-2.5 text-text-secondary">
+                      <td className="px-4 py-2.5 text-text-secondary truncate max-w-28">
                         {agent.status?.provider || "-"}
                         {agent.status?.provider_status && (
-                          <span className="ml-1.5">
-                            <ProviderBadge status={agent.status.provider_status} />
+                          <span className={`ml-1.5 text-[10px] ${agent.status.provider_status === "ok" ? "text-green" : "text-red"}`}>
+                            {agent.status.provider_status === "ok" ? "✓" : "✗"}
                           </span>
                         )}
                       </td>
