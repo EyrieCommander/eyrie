@@ -4,6 +4,7 @@ import type { ProjectChatMessage } from "../lib/types";
 import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
 import { fetchProjectChat, streamProjectChat } from "../lib/api";
 import { useData } from "../lib/DataContext";
+import { recordLatency } from "../lib/useAgentMetrics";
 
 const ROLE_COLORS: Record<string, string> = {
   user: "text-green",
@@ -64,6 +65,8 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const sendTimeRef = useRef<number | null>(null);
+  const latencyRecordedRef = useRef(false);
 
   const RESPONSE_TIMEOUT = 60_000; // 60 seconds with no SSE activity
 
@@ -134,6 +137,8 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     setSending(true);
     setChatError("");
     clearStreaming();
+    sendTimeRef.current = performance.now();
+    latencyRecordedRef.current = false;
 
     // Optimistic: show user message immediately
     setMessages((prev) => [...prev, {
@@ -164,6 +169,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         case "agent_event":
           if (event.event) {
             const ev = event.event;
+            // Record time-to-first-token latency, attributed to the responding agent
+            if (!latencyRecordedRef.current && sendTimeRef.current && event.sender && (ev.type === "delta" || ev.type === "tool_start")) {
+              recordLatency(event.sender, performance.now() - sendTimeRef.current);
+              latencyRecordedRef.current = true;
+              sendTimeRef.current = null;
+            }
             if (ev.type === "delta") {
               markStreaming(event.sender || "", event.role || "");
               setStreamingParts((prev) => {

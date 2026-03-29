@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useData } from "../lib/DataContext";
-import { formatUptime, formatBytes } from "../lib/format";
+import { formatBytes } from "../lib/format";
 import { useAgentMetrics, latencyPercentiles } from "../lib/useAgentMetrics";
 import type { AgentInfo } from "../lib/types";
 
