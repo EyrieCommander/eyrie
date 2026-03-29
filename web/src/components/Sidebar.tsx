@@ -86,6 +86,12 @@ export default function Sidebar() {
       }, 2000);
     }
     prevPendingRef.current = count;
+    return () => {
+      if (windTimerRef.current) {
+        clearTimeout(windTimerRef.current);
+        windTimerRef.current = null;
+      }
+    };
   }, [pendingActions]);
 
   const activeFramework = pathname.startsWith("/frameworks/") ? pathname.split("/")[2] : null;
@@ -207,7 +213,7 @@ export default function Sidebar() {
                   role="button"
                   tabIndex={0}
                   onClick={() => navigate(`/projects/${project.id}`)}
-                  onKeyDown={(e) => { if (e.key === "Enter") navigate(`/projects/${project.id}`); }}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(`/projects/${project.id}`); } }}
                   draggable
                   onDragStart={(e) => {
                     dragIdRef.current = project.id;

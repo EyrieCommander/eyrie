@@ -18,7 +18,8 @@ export function cleanDisplayName(name: string | undefined): string | undefined {
 
 export function formatBytes(bytes: number | null | undefined): string {
   if (bytes == null) return "-";
-  if (bytes <= 0) return "0KB";
+  if (bytes <= 0) return "0B";
+  if (bytes < 1024) return `${bytes}B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
   if (bytes < 1024 * 1024 * 1024)
     return `${(bytes / (1024 * 1024)).toFixed(0)}MB`;

@@ -162,7 +162,7 @@ export function PartToolCallCard({
               <div className="mt-1 rounded border border-border overflow-hidden bg-white">
                 <iframe
                   srcDoc={part.args.content}
-                  sandbox="allow-same-origin"
+                  sandbox=""
                   className="w-full border-0"
                   style={{ height: "200px" }}
                   title="html preview"
@@ -241,7 +241,7 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
               <div className="mt-1 rounded border border-border overflow-hidden bg-white">
                 <iframe
                   srcDoc={tc.args.content}
-                  sandbox="allow-same-origin"
+                  sandbox=""
                   className="w-full border-0"
                   style={{ height: "200px" }}
                   title="html preview"

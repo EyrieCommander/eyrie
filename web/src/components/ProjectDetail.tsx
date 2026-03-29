@@ -146,10 +146,10 @@ export default function ProjectDetail() {
 
     const connect = () => {
       if (cancelled) return;
-      es = new EventSource(`/api/projects/${id}/events`);
+      es = new EventSource(`/api/projects/${encodeURIComponent(id)}/events`);
       es.onmessage = () => {
         reconnectDelay = 2000; // reset backoff on success
-        ctxRefresh();
+        refresh();
       };
       es.onerror = () => {
         es.close(); // stop browser's aggressive ~3s auto-reconnect

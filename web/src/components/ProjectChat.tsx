@@ -90,7 +90,6 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
   const [chatError, setChatError] = useState("");
-  const [chatLoaded, setChatLoaded] = useState(false);
   const [streamingAgent, setStreamingAgent] = useState("");
   const [streamingRole, setStreamingRole] = useState("");
   const [streamingTime, setStreamingTime] = useState("");
@@ -121,11 +120,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
   // Load messages on mount
   useEffect(() => {
-    setChatLoaded(false);
-    fetchProjectChat(projectId)
+        fetchProjectChat(projectId)
       .then(setMessages)
       .catch(console.error)
-      .finally(() => setChatLoaded(true));
   }, [projectId]);
 
   // Poll for new messages when idle
@@ -149,7 +146,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
   }, [messages, streamingParts]);
 
-  useEffect(() => () => { abortRef.current?.abort(); }, []);
+  useEffect(() => () => {
+    abortRef.current?.abort();
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+  }, []);
 
   // Helper: mark agent as streaming (sets agent + time on first call)
   const markStreaming = (sender: string, role: string) => {
@@ -291,15 +291,6 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     if (inputRef.current) inputRef.current.style.height = "auto";
     send(msg);
   }, [input, send]);
-
-  // Auto-start project chat when first loaded with no messages
-  const autoStartedRef = useRef(false);
-  useEffect(() => {
-    if (chatLoaded && !autoStartedRef.current && !sending && messages.length === 0) {
-      autoStartedRef.current = true;
-      send("Let's get started on this project.");
-    }
-  }, [chatLoaded, sending, messages.length, send]);
 
   // Sort messages: system before user when timestamps are within 1 second
   const sortedMessages = [...messages].sort((a, b) => {

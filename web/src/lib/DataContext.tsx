@@ -47,7 +47,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       ]);
 
       if (agentResult.status === "fulfilled") {
-        setAgents(agentResult.value.map((a) => ({ ...a, display_name: cleanDisplayName(a.display_name) })));
+        setAgents(agentResult.value.map((a) => ({ ...a, display_name: cleanDisplayName(a.display_name) || a.display_name })));
       } else {
         errors.push(`agents: ${agentResult.reason?.message || "fetch failed"}`);
       }

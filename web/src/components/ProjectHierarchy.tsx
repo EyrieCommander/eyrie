@@ -3,7 +3,7 @@ import { Bot, Crown, Shield } from "lucide-react";
 interface HierarchyNode {
   name: string;
   role: "commander" | "captain" | "talon";
-  status: "running" | "busy" | "stopped" | "starting" | "error" | "unknown";
+  status: "running" | "busy" | "stopped" | "starting" | "provisioning" | "error" | "unknown";
   framework?: string;
   port?: number;
   onClick?: () => void;
@@ -15,12 +15,22 @@ interface ProjectHierarchyProps {
   talons: HierarchyNode[];
 }
 
-function statusDotClass(status: string): string {
-  if (status === "starting" || status === "provisioning") return "bg-yellow-400 animate-pulse";
-  if (status === "running") return "bg-green";
-  if (status === "busy") return "bg-yellow-400";
-  if (status === "error") return "bg-red";
-  return "bg-text-muted";
+function statusDotClass(status: HierarchyNode["status"]): string {
+  switch (status) {
+    case "starting":
+    case "provisioning":
+      return "bg-yellow-400 animate-pulse";
+    case "running":
+      return "bg-green";
+    case "busy":
+      return "bg-yellow-400";
+    case "error":
+      return "bg-red";
+    case "stopped":
+      return "bg-text-muted";
+    default:
+      return "bg-text-muted";
+  }
 }
 
 const ROLE_ICON = {
@@ -90,8 +100,8 @@ export function ProjectHierarchy({ commander, captain, talons }: ProjectHierarch
               </div>
             )}
             <div className="flex flex-wrap items-start justify-center gap-2">
-              {talons.map((t) => (
-                <HierarchyNodeCard key={t.name} node={t} />
+              {talons.map((t, i) => (
+                <HierarchyNodeCard key={`${t.name}-${i}`} node={t} />
               ))}
             </div>
           </>

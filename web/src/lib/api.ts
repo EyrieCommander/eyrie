@@ -649,23 +649,18 @@ export function streamProjectChat(
   const controller = new AbortController();
   (async () => {
     try {
-      console.log("[eyrie] streamProjectChat: sending POST");
       const res = await fetch(`${BASE}/api/projects/${projectId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
         signal: controller.signal,
       });
-      console.log("[eyrie] streamProjectChat: response", res.status, res.headers.get("content-type"));
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }));
         onEvent({ type: "error", error: body.error || res.statusText });
         return;
       }
-      await readSSEStream(res.body!, (data) => {
-        console.log("[eyrie] SSE event:", data.type);
-        onEvent(data);
-      });
+      await readSSEStream(res.body!, onEvent);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         onEvent({ type: "error", error: e instanceof Error ? e.message : "Chat failed" });

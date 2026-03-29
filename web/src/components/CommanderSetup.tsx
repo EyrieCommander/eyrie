@@ -244,13 +244,13 @@ export function CommanderSetup({ onCreated, showHeader = true }: CommanderSetupP
 
           <div className="space-y-4 rounded border border-border bg-surface p-6">
             <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1.5">name</label>
-              <input type="text" value={name} onChange={(e) => setName(e.target.value)}
+              <label htmlFor="commander-name" className="block text-xs font-medium text-text-secondary mb-1.5">name</label>
+              <input id="commander-name" type="text" value={name} onChange={(e) => setName(e.target.value)}
                 className="w-full rounded border border-border bg-bg px-3 py-2 text-xs text-text focus:border-accent focus:outline-none" placeholder="atlas" />
             </div>
             <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1.5">framework</label>
-              <select value={framework} onChange={(e) => setFramework(e.target.value)}
+              <label htmlFor="commander-framework" className="block text-xs font-medium text-text-secondary mb-1.5">framework</label>
+              <select id="commander-framework" value={framework} onChange={(e) => setFramework(e.target.value)}
                 className="w-full rounded border border-border bg-bg px-3 py-2 text-xs text-text focus:border-accent focus:outline-none">
                 {installedFrameworks.length > 0
                   ? installedFrameworks.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)
@@ -258,8 +258,8 @@ export function CommanderSetup({ onCreated, showHeader = true }: CommanderSetupP
               </select>
             </div>
             <div>
-              <label className="block text-xs font-medium text-text-secondary mb-1.5">persona (optional)</label>
-              <select value={personaId} onChange={(e) => setPersonaId(e.target.value)}
+              <label htmlFor="commander-persona" className="block text-xs font-medium text-text-secondary mb-1.5">persona (optional)</label>
+              <select id="commander-persona" value={personaId} onChange={(e) => setPersonaId(e.target.value)}
                 className="w-full rounded border border-border bg-bg px-3 py-2 text-xs text-text focus:border-accent focus:outline-none">
                 <option value="">default commander</option>
                 {personas.map((p) => <option key={p.id} value={p.id}>{p.icon} {p.name}</option>)}

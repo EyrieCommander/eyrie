@@ -22,11 +22,12 @@ export function AddAgentDialog({
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (creating) return;
       if (e.key === "Escape") onClose();
     };
     document.addEventListener("keydown", handleKeyDown);
     return () => document.removeEventListener("keydown", handleKeyDown);
-  }, [onClose]);
+  }, [onClose, creating]);
 
   useEffect(() => {
     fetchPersonas().then(setPersonas).catch((err) => {
@@ -64,7 +65,7 @@ export function AddAgentDialog({
   return (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-      onClick={onClose}
+      onClick={() => { if (!creating) onClose(); }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="add-agent-dialog-title"

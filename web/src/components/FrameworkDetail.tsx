@@ -20,7 +20,10 @@ export default function FrameworkDetail() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!id) return;
+    if (!id) {
+      setError("No framework ID specified");
+      return;
+    }
     getFrameworkDetail(id)
       .then(setFramework)
       .catch((err) => setError(err.message));

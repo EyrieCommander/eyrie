@@ -64,14 +64,20 @@ function collectProjectEvents(tree: ProjectTree): TimelineEvent[] {
   return events;
 }
 
-const EVENT_COLORS: Record<TimelineEvent["type"], string> = {
+// Full Tailwind classes — dynamic suffixing (e.g., `${color}/20`) gets purged.
+const EVENT_DOT: Record<TimelineEvent["type"], string> = {
   "project-created": "bg-accent",
   "captain-assigned": "bg-purple-400",
   "talon-added": "bg-amber-400",
 };
+const EVENT_BG: Record<TimelineEvent["type"], string> = {
+  "project-created": "bg-accent/20",
+  "captain-assigned": "bg-purple-400/20",
+  "talon-added": "bg-amber-400/20",
+};
 
 function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  return a.getUTCFullYear() === b.getUTCFullYear() && a.getUTCMonth() === b.getUTCMonth() && a.getUTCDate() === b.getUTCDate();
 }
 
 function SwimLaneTimeline({ projects, onProjectClick }: {
@@ -140,7 +146,9 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
               {/* Project card */}
               <div
                 onClick={() => onProjectClick?.(proj.id)}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onProjectClick?.(proj.id); } }}
                 role="button"
+                tabIndex={0}
                 className="flex-shrink-0 w-[200px] border-r border-border p-3 space-y-1.5 cursor-pointer hover:bg-surface-hover/30 transition-colors"
               >
                 <div className="flex items-center gap-2">
@@ -174,10 +182,10 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
                       {dayEvents.map((evt, ei) => (
                         <div
                           key={ei}
-                          className={`flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[9px] truncate max-w-full ${EVENT_COLORS[evt.type]}/20`}
+                          className={`flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[9px] truncate max-w-full ${EVENT_BG[evt.type]}`}
                           title={evt.label}
                         >
-                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_COLORS[evt.type]}`} />
+                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_DOT[evt.type]}`} />
                           <span className="truncate text-text-secondary">{evt.label}</span>
                         </div>
                       ))}
@@ -249,7 +257,7 @@ export default function HierarchyPage() {
   // Fetch metrics — runs whenever hierarchy updates
   useEffect(() => {
     if (!hierarchy) return;
-    fetch("/api/metrics").then((r) => r.json()).then(setMetrics).catch(() => {});
+    fetch("/api/metrics").then((r) => { if (r.ok) return r.json(); throw new Error(`metrics: ${r.status}`); }).then(setMetrics).catch(() => {});
   }, [hierarchy]);
 
   // ─── Conditional returns (after all hooks) ───

@@ -14,7 +14,7 @@ export default function ZoomSlider({ zoom, min, max, step, onChange, onReset }: 
     <div className="shrink-0 px-3 py-2 border-t border-border">
       <div className="flex items-center gap-1">
         <button
-          onClick={() => onChange(zoom - step)}
+          onClick={() => onChange(Math.max(min, zoom - step))}
           disabled={zoom <= min}
           className="shrink-0 p-0.5 text-text-muted/60 hover:text-text disabled:opacity-30 transition-colors"
           aria-label="zoom out"
@@ -34,7 +34,7 @@ export default function ZoomSlider({ zoom, min, max, step, onChange, onReset }: 
         />
 
         <button
-          onClick={() => onChange(zoom + step)}
+          onClick={() => onChange(Math.min(max, zoom + step))}
           disabled={zoom >= max}
           className="shrink-0 p-0.5 text-text-muted/60 hover:text-text disabled:opacity-30 transition-colors"
           aria-label="zoom in"

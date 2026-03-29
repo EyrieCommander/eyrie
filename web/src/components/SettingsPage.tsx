@@ -16,6 +16,11 @@ export default function SettingsPage() {
   const [warnInput, setWarnInput] = useState(String(Math.round(thresholds.warn / 1000)));
   const [errorInput, setErrorInput] = useState(String(Math.round(thresholds.error / 1000)));
 
+  // Clean up pending timer on unmount
+  useEffect(() => {
+    return () => { if (savedTimerRef.current) clearTimeout(savedTimerRef.current); };
+  }, []);
+
   // Sync inputs when thresholds change externally (e.g., reset)
   useEffect(() => {
     setWarnInput(String(Math.round(thresholds.warn / 1000)));

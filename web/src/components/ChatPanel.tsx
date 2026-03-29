@@ -441,7 +441,7 @@ export function ChatPanel({
           break;
       }
     },
-    [],
+    [agentName],
   );
 
   // ── Commander briefing ──────────────────────────────────────────────

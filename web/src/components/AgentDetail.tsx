@@ -796,8 +796,10 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
   const parts = fieldKey.split(".");
   const lines = content.split("\n");
 
-  // Format the replacement value
-  const formatted = fieldType === "number" ? newValue : `"${escapeTomlString(newValue)}"`;
+  // Format the replacement value — numbers and booleans are unquoted in TOML
+  const formatted = fieldType === "number" ? newValue
+    : fieldType === "boolean" ? (newValue === "true" ? "true" : "false")
+    : `"${escapeTomlString(newValue)}"`;
 
 
   if (parts.length === 1) {
@@ -819,11 +821,13 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
     const sectionHeader = `[${section}]`;
     const re = new RegExp(`^(\\s*${escapeRegex(key)}\\s*=\\s*).*$`);
     let inSection = false;
+    let sectionStartIndex = -1;
 
     for (let i = 0; i < lines.length; i++) {
       const trimmed = lines[i].trim();
       if (trimmed === sectionHeader) {
         inSection = true;
+        sectionStartIndex = i;
         continue;
       }
       // Exit section when a new section starts
@@ -835,9 +839,9 @@ function replaceTomlValue(content: string, fieldKey: string, newValue: string, f
     }
 
     // Key not found in existing section — append it
-    if (inSection) {
+    if (inSection && sectionStartIndex >= 0) {
       let insertAt = lines.length;
-      for (let j = lines.indexOf(sectionHeader) + 1; j < lines.length; j++) {
+      for (let j = sectionStartIndex + 1; j < lines.length; j++) {
         if (lines[j].trim().startsWith("[")) {
           insertAt = j;
           break;

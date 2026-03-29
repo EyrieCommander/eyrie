@@ -125,13 +125,14 @@ export default function PersonaCard({
             installed
           </button>
         ) : (
-          <div
-            aria-disabled="true"
+          <button
+            disabled
+            type="button"
             className="w-full px-3 py-2 rounded text-xs font-medium bg-green/10 text-green flex items-center justify-center gap-2 cursor-default opacity-75"
           >
             <CheckCircle className="w-3.5 h-3.5" />
             installed
-          </div>
+          </button>
         )
       ) : (
         <button
