@@ -27,18 +27,6 @@
 
 ### Next steps (by phase):
 
-**Phase 1 — Fix Agent Reliability** ✅
-1. [x] **Sandbox + URL fix** — ZeroClaw seatbelt rejects 127.0.0.1 (#4764, fixed upstream by #4767). All URLs changed to localhost.
-2. [x] **Cross-agent message delivery** — retry with backoff (2x), warn-level logging, failures as system messages
-3. [x] **@mention routing** — mentions take priority over first-message-commander-only rule
-4. [x] **Disconnect resilience** — agent context detached from HTTP request; responses persist if client disconnects
-5. [x] **Captain background briefing** — briefing runs at captain assignment, not at chat start
-
-**Phase 2 — Activity Tracking (backend)** ✅
-6. [x] **Project activity endpoint** — `GET /api/projects/{id}/activity` aggregating events from all project agents
-7. [x] **Agent status enrichment** — `BusyState` + `CurrentTask` inferred from `LastTask` timestamp
-8. [x] **SSE event bus** — `GET /api/projects/{id}/events` with publishing from instance/project handlers
-
 **Phase 3 — Control Room UI (frontend)** — in progress
 9. [x] **Project workspace** — split view: agent roster sidebar + hierarchy diagram + chat workspace
 10. [x] **Real-time SSE streaming** — project chat streams messages, tool calls, and deltas in real-time
@@ -111,7 +99,7 @@
 - [x] **DestroySession TOCTOU**: Fixed — replaced file surgery on `sessions.json` with OpenClaw's native `sessions.delete` RPC (which was already available). Eyrie no longer touches `sessions.json` directly for active session deletion.
 - [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
 - [x] **SSE streaming not rendering**: Root cause was `mountedRef` pattern — React re-renders briefly unmounted ProjectChat, causing the SSE callback to hold a stale ref and silently drop all events. Fixed by removing mountedRef, always-mounting ProjectChat (overlays for setup prompts), and using AbortController for cleanup. Vite proxy streams SSE fine.
-- [ ] **Config editor expands all defaults**: When saving config through the dashboard, ZeroClaw's GET /api/config returns all fields (including defaults). The editor writes the full config back to disk, bloating a 24-line provisioner config to 724 lines. Fix: read from disk for editing instead of from the API, so only user overrides are displayed and saved.
+- [x] **Config editor expands all defaults**: Fixed — all adapters now read config from disk first (user overrides only), falling back to API only if the file is inaccessible.
 - [ ] **Vite proxy buffers SSE responses**: The Vite dev server proxy (`http-proxy`) buffers SSE POST responses instead of streaming them. Events only appear when the response completes. Workaround: bypass proxy for SSE by calling Go backend directly (`SSE_BASE = "http://localhost:7200"` in dev) + CORS handler. Doesn't affect production (same-origin, no proxy).
 
 ## Code Cleanup
@@ -145,7 +133,10 @@
 - [x] **PicoClaw support**: Fourth framework — adapter (978 lines), discovery, provisioning, registry, install page all wired up. Pending:
   - [ ] **Post-install onboarding UI**: After installing PicoClaw from the install page, launch the framework's onboard wizard (e.g., `picoclaw onboard`) from the dashboard so the config file gets created and discovery can pick it up. Currently requires manual CLI onboarding.
   - [ ] **PicoClaw instance provisioning test**: Test end-to-end provisioning of PicoClaw instances from the hierarchy page (captain creating talons)
-- [x] **Nanobot / ShibaClaw evaluation**: Cloned both to `claws/nanobot/` and `claws/shibaclaw/`. Security audit found critical issues inherited from Nanobot (blocklist-only shell exec, `0.0.0.0` default bind, `restrict_to_workspace: False`, unrestricted `os.execv` restart) plus ShibaClaw-specific WebUI issues (CORS wildcard, API key exposure, auth token in query params). ShibaClaw also still depends on `litellm`, which had a supply chain attack (HKUDS/nanobot#2439). Posted findings to zeroclaw-labs/zeroclaw/discussions/4876. Not integrating either — revisit if security posture improves.
+- [x] **Nanobot / ShibaClaw evaluation**: Cloned both to `claws/nanobot/` and `claws/shibaclaw/`. Posted security audit to zeroclaw-labs/zeroclaw/discussions/4876. Not integrating yet.
+  - **v0.0.6b reassessment (2026-03-29)**: ShibaClaw fixed 6/9 findings — removed litellm, fixed CORS (safe defaults), masked auth token in logs, redacted secrets in /api/settings, set `restrict_to_workspace: true`, and implemented randomized tool output delimiters. Still not integrating because the 3 remaining issues are the ones that matter for Eyrie: blocklist-only shell exec (9 regex patterns, no sandbox), gateway binds `0.0.0.0` by default, and `os.execv` restart with no permission check. All inherited from Nanobot upstream. Revisit when ShibaClaw adds real shell sandboxing or Nanobot merges the Bubblewrap PR (HKUDS/nanobot#1873). Note: maintainer said he's open to adding a plain REST/WS API alongside Socket.IO for Eyrie integration once security blockers are resolved.
+- [ ] **Auto-fix button**: Error events on the dashboard get a "fix it" button that dispatches to either an agent (via existing orchestration) or Claude Code (via `claude -p` subprocess with structured JSON output). Server endpoint `POST /api/errors/{id}/autofix` with `backend: "claude-code" | "agent"` parameter. Claude Code path is a thin integration, not a full adapter.
+- [ ] **EyrieClaw (embedded agent)**: Go-native agent loop that runs inside the Eyrie process as goroutines instead of separate framework processes. Zero-overhead talons — no gateway, no port, no HTTP roundtrip. Uses OpenAI-compatible API client for LLM calls, Go channels for orchestrator communication. Value prop: spin up 20 lightweight talons without 20 processes. Research phase — evaluating Go LLM libraries and what Eyrie internals can be reused.
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
 - [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)
 - [ ] **Server middleware layer**: Request logging, panic recovery, and rate limiting middleware — per PLAN.md `internal/server/middleware.go`. Currently all 52 routes are registered bare with no central error handling or observability.

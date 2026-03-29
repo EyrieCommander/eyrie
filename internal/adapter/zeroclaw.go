@@ -188,17 +188,21 @@ func (z *ZeroClawAdapter) statusFromConfig() (*AgentStatus, error) {
 }
 
 func (z *ZeroClawAdapter) Config(ctx context.Context) (*AgentConfig, error) {
+	// WHY read from disk instead of GET /api/config: The API returns all
+	// fields including defaults, expanding a 24-line user config to 700+
+	// lines. Reading from disk shows only user overrides, which is what
+	// the editor should display and save.
+	if z.configPath != "" {
+		data, err := os.ReadFile(z.configPath)
+		if err == nil {
+			return &AgentConfig{Raw: string(data), Format: "toml"}, nil
+		}
+	}
+
+	// Fall back to API if config file is not accessible
 	body, err := z.getRaw(ctx, "/api/config")
 	if err == nil {
 		return &AgentConfig{Raw: body, Format: "toml"}, nil
-	}
-
-	// Fall back to reading config file directly when agent is offline
-	if z.configPath != "" {
-		data, readErr := os.ReadFile(z.configPath)
-		if readErr == nil {
-			return &AgentConfig{Raw: string(data), Format: "toml"}, nil
-		}
 	}
 
 	return nil, err
@@ -821,8 +825,6 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 		wsURL += "?" + encoded
 	}
 
-	// Use a short dial timeout so we fail fast if the agent is unreachable,
-	// rather than blocking until the parent request context is canceled.
 	dialCtx, dialCancel := context.WithTimeout(ctx, 5*time.Second)
 	conn, _, err := websocket.Dial(dialCtx, wsURL, nil)
 	dialCancel()

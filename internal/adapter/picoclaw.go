@@ -157,18 +157,18 @@ func (p *PicoClawAdapter) enrichStatusFromConfig(as *AgentStatus) {
 
 // Config reads the config.json from disk. Returns the raw JSON content.
 func (p *PicoClawAdapter) Config(ctx context.Context) (*AgentConfig, error) {
-	// Try the API first when online
+	// Read from disk first to show only user overrides (not expanded defaults)
+	if p.configPath != "" {
+		data, err := os.ReadFile(p.configPath)
+		if err == nil {
+			return &AgentConfig{Raw: string(data), Format: "json"}, nil
+		}
+	}
+
+	// Fall back to API if config file is not accessible
 	body, err := p.getRaw(ctx, "/api/config")
 	if err == nil {
 		return &AgentConfig{Raw: body, Format: "json"}, nil
-	}
-
-	// Fall back to reading config file directly when agent is offline
-	if p.configPath != "" {
-		data, readErr := os.ReadFile(p.configPath)
-		if readErr == nil {
-			return &AgentConfig{Raw: string(data), Format: "json"}, nil
-		}
 	}
 
 	return nil, err

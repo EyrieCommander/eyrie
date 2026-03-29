@@ -25,8 +25,27 @@ const BASE = "";
 // falls back to the same origin.
 const SSE_BASE = import.meta.env.DEV ? "http://localhost:7200" : "";
 
+// Default timeout for API requests (10 seconds). Prevents fetch calls from
+// hanging indefinitely when the backend is down or unresponsive.
+const API_TIMEOUT = 10_000;
+
+/** Fetch with a default timeout. Throws on timeout instead of hanging. */
+async function fetchWithTimeout(input: string | URL | Request, init?: RequestInit): Promise<Response> {
+  const signal = init?.signal;
+  // If the caller already provided a signal, don't override it
+  if (signal) return fetch(input, init);
+  try {
+    return await fetch(input, { ...init, signal: AbortSignal.timeout(API_TIMEOUT) });
+  } catch (err) {
+    if (err instanceof DOMException && err.name === "TimeoutError") {
+      throw new Error("request timed out — backend may be down");
+    }
+    throw err;
+  }
+}
+
 export async function fetchAgents(): Promise<AgentInfo[]> {
-  const res = await fetch(`${BASE}/api/agents`);
+  const res = await fetchWithTimeout(`${BASE}/api/agents`);
   if (!res.ok) throw new Error(`Failed to fetch agents: ${res.statusText}`);
   return res.json();
 }
@@ -37,7 +56,7 @@ export interface AgentConfig {
 }
 
 export async function fetchAgentConfig(name: string): Promise<AgentConfig> {
-  const res = await fetch(`${BASE}/api/agents/${name}/config`);
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/config`);
   if (!res.ok)
     throw new Error(`Failed to fetch config: ${res.statusText}`);
   const data = await res.json();
@@ -51,7 +70,7 @@ export async function fetchAgentConfig(name: string): Promise<AgentConfig> {
 }
 
 export async function updateDisplayName(agentName: string, displayName: string): Promise<string> {
-  const res = await fetch(`${BASE}/api/agents/${agentName}/display-name`, {
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${agentName}/display-name`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ display_name: displayName }),
@@ -68,14 +87,14 @@ export async function agentAction(
   name: string,
   action: "start" | "stop" | "restart",
 ): Promise<void> {
-  const res = await fetch(`${BASE}/api/agents/${name}/${action}`, {
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/${action}`, {
     method: "POST",
   });
   if (!res.ok) throw new Error(`Failed to ${action} agent: ${res.statusText}`);
 }
 
 export async function fetchAgentModels(name: string): Promise<string[]> {
-  const res = await fetch(`${BASE}/api/agents/${name}/models`);
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/models`);
   if (!res.ok) {
     console.warn(`fetchAgentModels failed for ${name}: ${res.status} ${res.statusText}`);
     throw new Error(`Failed to fetch models: ${res.statusText}`);
@@ -136,7 +155,7 @@ export function streamMessage(
   const controller = new AbortController();
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/agents/${name}/chat`, {
+      const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, session_key: sessionKey }),
@@ -166,7 +185,7 @@ export function streamMessage(
 export async function fetchSessions(
   name: string,
 ): Promise<SessionsResponse> {
-  const res = await fetch(`${BASE}/api/agents/${name}/sessions`);
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/sessions`);
   if (!res.ok)
     throw new Error(`Failed to fetch sessions: ${res.statusText}`);
   return res.json();
@@ -177,7 +196,7 @@ export async function fetchChatMessages(
   sessionKey: string,
   limit = 50,
 ): Promise<ChatMessage[]> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/messages?limit=${limit}`,
   );
   if (!res.ok)
@@ -189,7 +208,7 @@ export async function createSession(
   agentName: string,
   sessionName: string,
 ): Promise<{ key: string; title: string }> {
-  const res = await fetch(`${BASE}/api/agents/${agentName}/sessions`, {
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${agentName}/sessions`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: sessionName }),
@@ -205,7 +224,7 @@ export async function resetSession(
   name: string,
   sessionKey: string,
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}`,
     { method: "DELETE" },
   );
@@ -219,7 +238,7 @@ export async function deleteSession(
   name: string,
   sessionKey: string,
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/purge`,
     { method: "DELETE" },
   );
@@ -233,7 +252,7 @@ export async function destroySession(
   name: string,
   sessionKey: string,
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/destroy`,
     { method: "DELETE" },
   );
@@ -247,7 +266,7 @@ export async function hideSession(
   name: string,
   sessionKey: string,
 ): Promise<void> {
-  const res = await fetch(
+  const res = await fetchWithTimeout(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/hide`,
     { method: "POST" },
   );
@@ -263,7 +282,7 @@ export async function updateAgentConfig(
   name: string,
   config: unknown,
 ): Promise<void> {
-  const res = await fetch(`${BASE}/api/agents/${name}/config`, {
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/config`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ config }),
@@ -284,7 +303,7 @@ export async function validateAgentConfig(
   name: string,
   config: unknown,
 ): Promise<ConfigValidationResult> {
-  const res = await fetch(`${BASE}/api/agents/${name}/config/validate`, {
+  const res = await fetchWithTimeout(`${BASE}/api/agents/${name}/config/validate`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ config }),
@@ -301,7 +320,7 @@ export async function validateAgentConfig(
 // Registry and install API
 
 export async function getFrameworkDetail(id: string): Promise<Framework> {
-  const res = await fetch(`${BASE}/api/registry/frameworks/${id}`);
+  const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks/${id}`);
   if (!res.ok)
     throw new Error(`Failed to fetch framework detail: ${res.statusText}`);
   return res.json();
@@ -309,7 +328,7 @@ export async function getFrameworkDetail(id: string): Promise<Framework> {
 
 export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
   const qs = refresh ? "?refresh=true" : "";
-  const res = await fetch(`${BASE}/api/registry/frameworks${qs}`);
+  const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks${qs}`);
   if (!res.ok)
     throw new Error(`Failed to fetch frameworks: ${res.statusText}`);
   return res.json();
@@ -318,7 +337,7 @@ export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
 export async function fetchInstallStatus(): Promise<
   Record<string, InstallProgress>
 > {
-  const res = await fetch(`${BASE}/api/registry/install/status`);
+  const res = await fetchWithTimeout(`${BASE}/api/registry/install/status`);
   if (!res.ok)
     throw new Error(`Failed to fetch install status: ${res.statusText}`);
   return res.json();
@@ -335,7 +354,7 @@ export function streamInstall(
 
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/registry/install`, {
+      const res = await fetchWithTimeout(`${BASE}/api/registry/install`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -389,26 +408,26 @@ export function streamInstall(
 // Persona API
 
 export async function fetchPersonas(): Promise<Persona[]> {
-  const res = await fetch(`${BASE}/api/personas`);
+  const res = await fetchWithTimeout(`${BASE}/api/personas`);
   if (!res.ok) throw new Error(`Failed to fetch personas: ${res.statusText}`);
   return res.json();
 }
 
 export async function fetchPersonaCategories(): Promise<PersonaCategory[]> {
-  const res = await fetch(`${BASE}/api/personas/categories`);
+  const res = await fetchWithTimeout(`${BASE}/api/personas/categories`);
   if (!res.ok)
     throw new Error(`Failed to fetch categories: ${res.statusText}`);
   return res.json();
 }
 
 export async function fetchPersona(id: string): Promise<Persona> {
-  const res = await fetch(`${BASE}/api/personas/${id}`);
+  const res = await fetchWithTimeout(`${BASE}/api/personas/${id}`);
   if (!res.ok) throw new Error(`Failed to fetch persona: ${res.statusText}`);
   return res.json();
 }
 
 export async function installPersona(personaId: string): Promise<Persona> {
-  const res = await fetch(`${BASE}/api/personas/install`, {
+  const res = await fetchWithTimeout(`${BASE}/api/personas/install`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ persona_id: personaId }),
@@ -424,7 +443,7 @@ export async function updatePersona(
   id: string,
   persona: Persona,
 ): Promise<Persona> {
-  const res = await fetch(`${BASE}/api/personas/${id}`, {
+  const res = await fetchWithTimeout(`${BASE}/api/personas/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(persona),
@@ -437,7 +456,7 @@ export async function updatePersona(
 }
 
 export async function deletePersona(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/personas/${id}`, { method: "DELETE" });
+  const res = await fetchWithTimeout(`${BASE}/api/personas/${id}`, { method: "DELETE" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to delete persona: ${res.statusText}`);
@@ -447,19 +466,19 @@ export async function deletePersona(id: string): Promise<void> {
 // Instance API
 
 export async function fetchInstances(): Promise<AgentInstance[]> {
-  const res = await fetch(`${BASE}/api/instances`);
+  const res = await fetchWithTimeout(`${BASE}/api/instances`);
   if (!res.ok) throw new Error(`Failed to fetch instances: ${res.statusText}`);
   return res.json();
 }
 
 export async function fetchInstance(id: string): Promise<AgentInstance> {
-  const res = await fetch(`${BASE}/api/instances/${id}`);
+  const res = await fetchWithTimeout(`${BASE}/api/instances/${id}`);
   if (!res.ok) throw new Error(`Failed to fetch instance: ${res.statusText}`);
   return res.json();
 }
 
 export async function createInstance(req: CreateInstanceRequest): Promise<AgentInstance> {
-  const res = await fetch(`${BASE}/api/instances`, {
+  const res = await fetchWithTimeout(`${BASE}/api/instances`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -472,7 +491,7 @@ export async function createInstance(req: CreateInstanceRequest): Promise<AgentI
 }
 
 export async function deleteInstance(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/instances/${id}`, { method: "DELETE" });
+  const res = await fetchWithTimeout(`${BASE}/api/instances/${id}`, { method: "DELETE" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to delete instance: ${res.statusText}`);
@@ -480,7 +499,7 @@ export async function deleteInstance(id: string): Promise<void> {
 }
 
 export async function instanceAction(id: string, action: "start" | "stop" | "restart"): Promise<void> {
-  const res = await fetch(`${BASE}/api/instances/${id}/${action}`, { method: "POST" });
+  const res = await fetchWithTimeout(`${BASE}/api/instances/${id}/${action}`, { method: "POST" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to ${action} instance: ${res.statusText}`);
@@ -490,13 +509,13 @@ export async function instanceAction(id: string, action: "start" | "stop" | "res
 // Project API
 
 export async function fetchProjects(): Promise<Project[]> {
-  const res = await fetch(`${BASE}/api/projects`);
+  const res = await fetchWithTimeout(`${BASE}/api/projects`);
   if (!res.ok) throw new Error(`Failed to fetch projects: ${res.statusText}`);
   return res.json();
 }
 
 export async function createProject(req: CreateProjectRequest): Promise<Project> {
-  const res = await fetch(`${BASE}/api/projects`, {
+  const res = await fetchWithTimeout(`${BASE}/api/projects`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
@@ -509,7 +528,7 @@ export async function createProject(req: CreateProjectRequest): Promise<Project>
 }
 
 export async function updateProject(id: string, updates: Partial<Pick<Project, "name" | "description" | "goal" | "status" | "orchestrator_id">>): Promise<Project> {
-  const res = await fetch(`${BASE}/api/projects/${id}`, {
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${id}`, {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(updates),
@@ -522,7 +541,7 @@ export async function updateProject(id: string, updates: Partial<Pick<Project, "
 }
 
 export async function deleteProject(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/projects/${id}`, { method: "DELETE" });
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${id}`, { method: "DELETE" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to delete project: ${res.statusText}`);
@@ -532,7 +551,7 @@ export async function deleteProject(id: string): Promise<void> {
 // Hierarchy API
 
 export async function fetchHierarchy(): Promise<HierarchyTree> {
-  const res = await fetch(`${BASE}/api/hierarchy`);
+  const res = await fetchWithTimeout(`${BASE}/api/hierarchy`);
   if (!res.ok) throw new Error(`Failed to fetch hierarchy: ${res.statusText}`);
   return res.json();
 }
@@ -540,7 +559,7 @@ export async function fetchHierarchy(): Promise<HierarchyTree> {
 // Lightweight commander lookup — reads a JSON file instead of running full
 // discovery. Use this when you only need the commander's name/status.
 export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
-  const res = await fetch(`${BASE}/api/hierarchy/commander`);
+  const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander`);
   if (!res.ok) throw new Error(`Failed to fetch commander: ${res.statusText}`);
   const data = await res.json();
   return data.commander ?? null;
@@ -555,7 +574,7 @@ export function streamCommanderBriefing(
   const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/hierarchy/commander/brief`, {
+      const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander/brief`, {
         method: "POST",
         signal: controller.signal,
       });
@@ -593,7 +612,7 @@ export function streamCaptainBriefing(
   const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/projects/${projectId}/captain/brief`, {
+      const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/captain/brief`, {
         method: "POST",
         signal: controller.signal,
       });
@@ -623,7 +642,7 @@ export function streamCaptainBriefing(
 // --- Project Chat ---
 
 export async function fetchProjectChat(projectId: string): Promise<ProjectChatMessage[]> {
-  const res = await fetch(`${BASE}/api/projects/${projectId}/chat`);
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat`);
   if (!res.ok) {
     throw new Error(`Failed to fetch project chat: ${res.status} ${res.statusText}`);
   }
@@ -649,7 +668,7 @@ export function streamProjectChat(
   const controller = new AbortController();
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/projects/${projectId}/chat`, {
+      const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message }),
@@ -671,7 +690,7 @@ export function streamProjectChat(
 }
 
 export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {
-  const res = await fetch(`${BASE}/api/hierarchy/commander`, {
+  const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ instance_id: opts.instanceId, agent_name: opts.agentName }),

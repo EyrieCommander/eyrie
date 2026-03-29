@@ -153,18 +153,20 @@ func (o *OpenClawAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 }
 
 func (o *OpenClawAdapter) Config(ctx context.Context) (*AgentConfig, error) {
+	// Read from disk first to show only user overrides (not expanded defaults)
+	if o.configPath != "" {
+		data, err := os.ReadFile(o.configPath)
+		if err == nil {
+			return &AgentConfig{Raw: string(data), Format: "json"}, nil
+		}
+	}
+
+	// Fall back to API if config file is not accessible
 	result, err := o.rpcCall(ctx, "config.get", nil)
 	if err == nil {
 		raw, err := json.MarshalIndent(result, "", "  ")
 		if err == nil {
 			return &AgentConfig{Raw: string(raw), Format: "json"}, nil
-		}
-	}
-
-	if o.configPath != "" {
-		data, err := os.ReadFile(o.configPath)
-		if err == nil {
-			return &AgentConfig{Raw: string(data), Format: "json"}, nil
 		}
 	}
 
