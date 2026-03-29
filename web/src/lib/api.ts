@@ -20,10 +20,33 @@ import type {
 } from "./types";
 
 const BASE = "";
-// SSE streaming endpoints bypass the Vite proxy (which buffers responses)
-// and connect directly to the Go backend. In production (no Vite), this
-// falls back to the same origin.
-const SSE_BASE = import.meta.env.DEV ? "http://localhost:7200" : "";
+
+// ApiError carries structured error info from the backend, including a
+// machine-readable `code` (e.g. "auth_expired", "agent_unreachable") and
+// the HTTP status. Components can match on these to show targeted UI
+// instead of generic "something went wrong" messages.
+export class ApiError extends Error {
+  code: string;
+  status: number;
+  constructor(message: string, status: number, code: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+// throwIfNotOk parses a structured error response and throws an ApiError.
+// The backend returns { "error": "...", "code": "..." } for adapter errors.
+async function throwIfNotOk(res: Response, fallbackMsg: string): Promise<void> {
+  if (res.ok) return;
+  const body = await res.json().catch(() => ({ error: res.statusText }));
+  throw new ApiError(
+    body.error || `${fallbackMsg}: ${res.statusText}`,
+    res.status,
+    body.code || "unknown",
+  );
+}
 
 export async function fetchAgents(): Promise<AgentInfo[]> {
   const res = await fetch(`${BASE}/api/agents`);
@@ -38,8 +61,7 @@ export interface AgentConfig {
 
 export async function fetchAgentConfig(name: string): Promise<AgentConfig> {
   const res = await fetch(`${BASE}/api/agents/${name}/config`);
-  if (!res.ok)
-    throw new Error(`Failed to fetch config: ${res.statusText}`);
+  await throwIfNotOk(res, "Failed to fetch config");
   const data = await res.json();
   const format = data.format || "text";
   try {
@@ -147,6 +169,7 @@ export function streamMessage(
         onEvent({
           type: "error",
           error: body.error || `Failed to send message: ${res.statusText}`,
+          code: body.code,
         });
         return;
       }
@@ -167,8 +190,7 @@ export async function fetchSessions(
   name: string,
 ): Promise<SessionsResponse> {
   const res = await fetch(`${BASE}/api/agents/${name}/sessions`);
-  if (!res.ok)
-    throw new Error(`Failed to fetch sessions: ${res.statusText}`);
+  await throwIfNotOk(res, "Failed to fetch sessions");
   return res.json();
 }
 
@@ -180,8 +202,7 @@ export async function fetchChatMessages(
   const res = await fetch(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/messages?limit=${limit}`,
   );
-  if (!res.ok)
-    throw new Error(`Failed to fetch messages: ${res.statusText}`);
+  await throwIfNotOk(res, "Failed to fetch messages");
   return res.json();
 }
 
@@ -194,10 +215,7 @@ export async function createSession(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: sessionName }),
   });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to create session: ${res.statusText}`);
-  }
+  await throwIfNotOk(res, "Failed to create session");
   return res.json();
 }
 
@@ -209,10 +227,7 @@ export async function resetSession(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}`,
     { method: "DELETE" },
   );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to reset session: ${res.statusText}`);
-  }
+  await throwIfNotOk(res, "Failed to reset session");
 }
 
 export async function deleteSession(
@@ -223,10 +238,7 @@ export async function deleteSession(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/purge`,
     { method: "DELETE" },
   );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to delete session: ${res.statusText}`);
-  }
+  await throwIfNotOk(res, "Failed to delete session");
 }
 
 export async function destroySession(
@@ -237,10 +249,7 @@ export async function destroySession(
     `${BASE}/api/agents/${name}/sessions/${encodeURIComponent(sessionKey)}/destroy`,
     { method: "DELETE" },
   );
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to destroy session: ${res.statusText}`);
-  }
+  await throwIfNotOk(res, "Failed to destroy session");
 }
 
 export async function hideSession(
@@ -561,7 +570,7 @@ export function streamCommanderBriefing(
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText });
+        onEvent({ type: "error", error: body.error || res.statusText, code: body.code });
         resolveSession!("");
         return;
       }
@@ -599,7 +608,7 @@ export function streamCaptainBriefing(
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText });
+        onEvent({ type: "error", error: body.error || res.statusText, code: body.code });
         resolveSession!("");
         return;
       }
@@ -637,6 +646,7 @@ export interface ProjectChatEvent {
   role?: string;
   event?: ChatEvent;
   error?: string;
+  code?: string; // Machine-readable error code from backend
   msg?: string;
   detail?: Record<string, any>;
 }
@@ -657,7 +667,7 @@ export function streamProjectChat(
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText });
+        onEvent({ type: "error", error: body.error || res.statusText, code: body.code });
         return;
       }
       await readSSEStream(res.body!, onEvent);

@@ -335,12 +335,12 @@ func (z *ZeroClawAdapter) TailActivity(ctx context.Context) (<-chan ActivityEven
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to SSE: %w", err)
+		return nil, wrapConnError(err, "connecting to SSE")
 	}
 
 	if resp.StatusCode != http.StatusOK {
 		resp.Body.Close()
-		return nil, fmt.Errorf("SSE returned status %d", resp.StatusCode)
+		return nil, httpStatusError(resp.StatusCode, "SSE returned status %d", resp.StatusCode)
 	}
 
 	ch := make(chan ActivityEvent, 64)
@@ -827,7 +827,7 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 	conn, _, err := websocket.Dial(dialCtx, wsURL, nil)
 	dialCancel()
 	if err != nil {
-		return nil, fmt.Errorf("connecting to ZeroClaw WS: %w", err)
+		return nil, wrapConnError(err, "connecting to ZeroClaw WS")
 	}
 	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB
 
@@ -1087,13 +1087,13 @@ func (z *ZeroClawAdapter) ResetSession(ctx context.Context, sessionKey string) e
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("deleting session: %w", err)
+		return wrapConnError(err, "deleting session")
 	}
 	defer resp.Body.Close()
 	// 404 is fine — session is already gone (e.g. project reset clears
 	// multiple agents and some may not have the session).
 	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
-		return fmt.Errorf("delete session returned %d", resp.StatusCode)
+		return httpStatusError(resp.StatusCode, "delete session returned %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -1147,7 +1147,7 @@ func (z *ZeroClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 
 	resp, err := z.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request to %s: %w", path, err)
+		return "", wrapConnError(err, "request to %s", path)
 	}
 	defer resp.Body.Close()
 
@@ -1157,7 +1157,7 @@ func (z *ZeroClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s returned %d: %s", path, resp.StatusCode, string(data))
+		return "", httpStatusError(resp.StatusCode, "%s returned %d: %s", path, resp.StatusCode, string(data))
 	}
 
 	return string(data), nil

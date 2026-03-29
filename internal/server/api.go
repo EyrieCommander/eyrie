@@ -160,7 +160,7 @@ func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 
 	cfg, err := agent.Config(ctx)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -232,7 +232,7 @@ func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 
 	eventCh, err := agent.StreamMessage(ctx, body.Message, body.SessionKey)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -268,7 +268,7 @@ func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := agent.CreateSession(ctx, body.Name)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -288,7 +288,7 @@ func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := agent.ResetSession(ctx, sessionKey); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -308,7 +308,7 @@ func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := agent.DeleteSession(ctx, sessionKey); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -340,7 +340,7 @@ func (s *Server) handleDestroySession(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := destroyer.DestroySession(ctx, sessionKey); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 

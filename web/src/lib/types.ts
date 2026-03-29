@@ -90,6 +90,7 @@ export interface ChatEvent {
   output?: string;
   success?: boolean;
   error?: string;
+  code?: string; // Machine-readable error code (e.g. "auth_expired", "agent_unreachable")
 }
 
 export interface ConfigField {

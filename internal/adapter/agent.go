@@ -2,6 +2,8 @@ package adapter
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os/exec"
@@ -9,6 +11,53 @@ import (
 	"strings"
 	"time"
 )
+
+// Sentinel errors for adapter-to-gateway communication failures.
+// Server handlers use these to return appropriate HTTP status codes
+// instead of collapsing all failures into 500 Internal Server Error.
+var (
+	ErrUnauthorized     = errors.New("authentication expired or invalid")
+	ErrForbidden        = errors.New("access denied")
+	ErrAgentUnreachable = errors.New("agent is not reachable")
+	ErrAgentTimeout     = errors.New("agent did not respond in time")
+)
+
+// httpStatusError wraps a gateway HTTP error response with the appropriate
+// sentinel error based on status code. Falls through to a plain fmt.Errorf
+// for unrecognized codes.
+func httpStatusError(statusCode int, format string, args ...any) error {
+	msg := fmt.Sprintf(format, args...)
+	switch statusCode {
+	case http.StatusUnauthorized:
+		return fmt.Errorf("%w: %s", ErrUnauthorized, msg)
+	case http.StatusForbidden:
+		return fmt.Errorf("%w: %s", ErrForbidden, msg)
+	default:
+		return errors.New(msg)
+	}
+}
+
+// wrapConnError wraps a net/http client error with the appropriate sentinel
+// based on the underlying cause (connection refused → unreachable, deadline
+// exceeded → timeout).
+func wrapConnError(err error, format string, args ...any) error {
+	msg := fmt.Sprintf(format, args...)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Errorf("%w: %s: %w", ErrAgentTimeout, msg, err)
+	case isConnectionRefused(err):
+		return fmt.Errorf("%w: %s: %w", ErrAgentUnreachable, msg, err)
+	default:
+		return fmt.Errorf("%s: %w", msg, err)
+	}
+}
+
+// isConnectionRefused checks whether the error chain contains a
+// "connection refused" failure. We use string matching because the
+// syscall error may be wrapped in multiple layers of net/url errors.
+func isConnectionRefused(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "connection refused")
+}
 
 // Agent is the common interface that every Claw framework adapter implements.
 // Eyrie's CLI, web server, and discovery system all work through this interface.
