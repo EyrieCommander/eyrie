@@ -61,7 +61,7 @@ export default function InstallPage() {
     setSelectedFramework(frameworkId);
     setInstallProgress((prev) => ({
       ...prev,
-      [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success", progress: 100 },
+      [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success" as const, progress: 100, message: "installed", started_at: new Date().toISOString() },
     }));
     // Keep existing logs if we have them from this session, otherwise show a ready message
     if (!installLogs[frameworkId]?.length) {

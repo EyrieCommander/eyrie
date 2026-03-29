@@ -1,4 +1,4 @@
-import { createContext, useContext, useCallback, useEffect, useState, type ReactNode } from "react";
+import { createContext, useContext, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import type { AgentInfo, Project, AgentInstance } from "./types";
 import { fetchAgents, fetchProjects, fetchInstances } from "./api";
 import { cleanDisplayName } from "./format";
@@ -72,20 +72,26 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // WHY errorRef instead of error in deps: Including `error` in the
+  // dependency array causes the entire polling loop to tear down and restart
+  // on every error state transition (null→"error"→null), triggering an extra
+  // fetch each time. The ref lets the backoff logic read the current error
+  // state without restarting the loop.
+  const errorRef = useRef(error);
+  useEffect(() => { errorRef.current = error; }, [error]);
+
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
     let cancelled = false;
-    let delay = 30000; // 30s normal polling
 
     const scheduleRefresh = () => {
+      // Back off to 60s when all fetches failed (backend likely down),
+      // reset to 30s on any success.
+      const delay = errorRef.current ? 60000 : 30000;
       timeoutId = setTimeout(async () => {
         if (cancelled) return;
         await refresh(false);
-        if (cancelled) return;
-        // Back off to 60s when all fetches failed (backend likely down),
-        // reset to 30s on any success.
-        delay = error ? 60000 : 30000;
-        scheduleRefresh();
+        if (!cancelled) scheduleRefresh();
       }, delay);
     };
 
@@ -97,7 +103,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
       cancelled = true;
       clearTimeout(timeoutId);
     };
-  }, [refresh, error]);
+  }, [refresh]);
 
   return (
     <DataContext.Provider value={{ agents, projects, instances, loading, error, refresh, pendingActions, setPendingAction }}>

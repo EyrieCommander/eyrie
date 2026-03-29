@@ -156,12 +156,12 @@ export function PartToolCallCard({
             </div>
           )}
           {/* Inline HTML preview when tool has content_type: "html" */}
-          {part.args?.content_type === "html" && part.args?.content && (
+          {part.args?.content_type === "html" && typeof part.args?.content === "string" && (
             <div>
               <span className="text-text-muted text-[10px]">preview:</span>
               <div className="mt-1 rounded border border-border overflow-hidden bg-white">
                 <iframe
-                  srcDoc={part.args.content as string}
+                  srcDoc={part.args.content}
                   sandbox="allow-same-origin"
                   className="w-full border-0"
                   style={{ height: "200px" }}
@@ -235,12 +235,12 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
             </div>
           )}
           {/* Inline HTML preview for canvas renders */}
-          {tc.args?.content_type === "html" && tc.args?.content && (
+          {tc.args?.content_type === "html" && typeof tc.args?.content === "string" && (
             <div>
               <span className="text-text-muted text-[10px]">preview:</span>
               <div className="mt-1 rounded border border-border overflow-hidden bg-white">
                 <iframe
-                  srcDoc={tc.args.content as string}
+                  srcDoc={tc.args.content}
                   sandbox="allow-same-origin"
                   className="w-full border-0"
                   style={{ height: "200px" }}

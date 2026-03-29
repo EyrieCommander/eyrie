@@ -262,17 +262,10 @@ func parsePicoClawLogLine(raw string) *LogEntry {
 		return nil
 	}
 
-	var logJSON struct {
-		Level     string         `json:"level"`
-		Message   string         `json:"message"`
-		Time      string         `json:"time"`
-		Component string         `json:"component"`
-		Extra     map[string]any `json:"-"`
-	}
-
-	// First unmarshal the known fields
-	if json.Unmarshal([]byte(raw), &logJSON) != nil {
-		// Not valid JSON — treat as plain text
+	// Single unmarshal into map, then extract known fields — avoids parsing
+	// the same JSON twice (once for typed struct, once for extra fields).
+	var allFields map[string]any
+	if json.Unmarshal([]byte(raw), &allFields) != nil {
 		if len(raw) < 3 {
 			return nil
 		}
@@ -283,30 +276,38 @@ func parsePicoClawLogLine(raw string) *LogEntry {
 		}
 	}
 
-	ts, err := time.Parse(time.RFC3339Nano, logJSON.Time)
+	getString := func(key string) string {
+		if v, ok := allFields[key]; ok {
+			if s, ok := v.(string); ok {
+				return s
+			}
+		}
+		return ""
+	}
+
+	timeStr := getString("time")
+	ts, err := time.Parse(time.RFC3339Nano, timeStr)
 	if err != nil {
-		ts, err = time.Parse(time.RFC3339, logJSON.Time)
+		ts, err = time.Parse(time.RFC3339, timeStr)
 		if err != nil {
 			ts = time.Now()
 		}
 	}
 
-	// Extract all remaining fields into the Fields map
-	var allFields map[string]any
-	_ = json.Unmarshal([]byte(raw), &allFields)
-	fields := make(map[string]any)
+	// Build fields map from everything except the known keys
+	fields := make(map[string]any, len(allFields)-3)
 	for k, v := range allFields {
 		if k != "level" && k != "message" && k != "time" {
 			fields[k] = v
 		}
 	}
 
-	msg := logJSON.Message
-	if logJSON.Component != "" {
-		msg = "[" + logJSON.Component + "] " + msg
+	msg := getString("message")
+	if comp := getString("component"); comp != "" {
+		msg = "[" + comp + "] " + msg
 	}
 
-	level := strings.ToLower(logJSON.Level)
+	level := strings.ToLower(getString("level"))
 	if level == "" {
 		level = "info"
 	}
@@ -324,54 +325,14 @@ func parsePicoClawLogLine(raw string) *LogEntry {
 // Returns nil for noise lines.
 func parsePicoClawActivityLine(raw string) *ActivityEvent {
 	entry := parsePicoClawLogLine(raw)
-	if entry == nil {
+	if entry == nil || len(strings.TrimSpace(entry.Message)) < 3 {
 		return nil
 	}
-
-	msg := entry.Message
-	low := strings.ToLower(msg)
-
-	// Skip empty or very short messages
-	if len(strings.TrimSpace(msg)) < 3 {
-		return nil
+	// Reuse the canonical classifier from picoclaw.go
+	ev := picoLogEntryToActivity(entry)
+	if ev != nil {
+		ev.Fields = entry.Fields
 	}
-
-	ev := &ActivityEvent{
-		Timestamp: entry.Timestamp,
-		Fields:    entry.Fields,
-	}
-
-	switch {
-	case entry.Level == "error" || entry.Level == "fatal":
-		ev.Type = "error"
-		ev.Summary = msg
-	case strings.Contains(low, "tool"):
-		if strings.Contains(low, "result") || strings.Contains(low, "complete") {
-			ev.Type = "tool_call"
-		} else {
-			ev.Type = "tool_call_start"
-		}
-		ev.Summary = msg
-	case strings.Contains(low, "llm") || strings.Contains(low, "completion"):
-		ev.Type = "llm_request"
-		ev.Summary = msg
-	case strings.Contains(low, "gateway") && (strings.Contains(low, "start") || strings.Contains(low, "listen")):
-		ev.Type = "agent_start"
-		ev.Summary = msg
-	case strings.Contains(low, "session") && (strings.Contains(low, "start") || strings.Contains(low, "creat")):
-		ev.Type = "agent_start"
-		ev.Summary = msg
-	case strings.Contains(low, "session") && (strings.Contains(low, "end") || strings.Contains(low, "clos")):
-		ev.Type = "agent_end"
-		ev.Summary = msg
-	case strings.Contains(low, "message") || strings.Contains(low, "chat"):
-		ev.Type = "chat"
-		ev.Summary = msg
-	default:
-		// Skip generic info/debug that doesn't match activity patterns
-		return nil
-	}
-
 	return ev
 }
 

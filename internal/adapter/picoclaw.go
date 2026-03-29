@@ -110,40 +110,12 @@ func (p *PicoClawAdapter) statusFromConfig() (*AgentStatus, error) {
 	if p.configPath == "" {
 		return nil, fmt.Errorf("no config path available")
 	}
-
-	data, err := os.ReadFile(p.configPath)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read config: %w", err)
-	}
-
-	as := &AgentStatus{
-		GatewayPort: p.gatewayPort,
-	}
-
-	var cfg struct {
-		Model struct {
-			Default  string `json:"default"`
-			Provider string `json:"provider"`
-		} `json:"model"`
-		Channels map[string]json.RawMessage `json:"channels"`
-	}
-	if json.Unmarshal(data, &cfg) == nil {
-		as.Model = cfg.Model.Default
-		as.Provider = cfg.Model.Provider
-		if as.Provider == "" && as.Model != "" {
-			if idx := strings.Index(as.Model, "/"); idx > 0 {
-				as.Provider = as.Model[:idx]
-			}
-		}
-		for ch := range cfg.Channels {
-			as.Channels = append(as.Channels, ch)
-		}
-	}
-
+	as := &AgentStatus{GatewayPort: p.gatewayPort}
+	p.enrichStatusFromConfig(as)
 	return as, nil
 }
 
-// enrichStatusFromConfig fills in model/provider/channels from the config file.
+// enrichStatusFromConfig fills empty model/provider/channels fields from config.
 func (p *PicoClawAdapter) enrichStatusFromConfig(as *AgentStatus) {
 	if p.configPath == "" {
 		return

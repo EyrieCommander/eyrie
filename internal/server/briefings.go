@@ -10,6 +10,12 @@ import (
 //go:embed briefings/*.md
 var briefingFS embed.FS
 
+// briefingTemplates is parsed once at init from the embedded briefings/*.md
+// files. Avoids re-parsing templates on every project chat message.
+var briefingTemplates = template.Must(
+	template.New("briefings").ParseFS(briefingFS, "briefings/*.md"),
+)
+
 // BriefingContext holds the template variables available to all briefing templates.
 type BriefingContext struct {
 	ProjectName string
@@ -19,24 +25,11 @@ type BriefingContext struct {
 	CaptainName string
 }
 
-// renderBriefing loads a markdown template from the embedded briefings directory
-// and executes it with the given context. Template files use Go text/template
-// syntax (e.g., {{.ProjectName}}).
+// renderBriefing executes a pre-parsed markdown template with the given context.
 func renderBriefing(filename string, ctx BriefingContext) (string, error) {
-	data, err := briefingFS.ReadFile("briefings/" + filename)
-	if err != nil {
-		return "", fmt.Errorf("reading briefing template %s: %w", filename, err)
-	}
-
-	tmpl, err := template.New(filename).Parse(string(data))
-	if err != nil {
-		return "", fmt.Errorf("parsing briefing template %s: %w", filename, err)
-	}
-
 	var buf bytes.Buffer
-	if err := tmpl.Execute(&buf, ctx); err != nil {
+	if err := briefingTemplates.ExecuteTemplate(&buf, filename, ctx); err != nil {
 		return "", fmt.Errorf("executing briefing template %s: %w", filename, err)
 	}
-
 	return buf.String(), nil
 }

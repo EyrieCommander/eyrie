@@ -128,11 +128,17 @@ func isPicoClawConfig(data []byte) bool {
 }
 
 // scanPicoClawConfig reads a PicoClaw config.json and extracts gateway address and token.
-func scanPicoClawConfig(path string) (*adapter.DiscoveredAgent, error) {
+func scanPicoClawConfig(path string, preReadData ...[]byte) (*adapter.DiscoveredAgent, error) {
 	path = config.ExpandHome(path)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
+	var data []byte
+	if len(preReadData) > 0 && preReadData[0] != nil {
+		data = preReadData[0]
+	} else {
+		var err error
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	var cfg struct {

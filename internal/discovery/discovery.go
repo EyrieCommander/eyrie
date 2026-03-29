@@ -121,7 +121,7 @@ func scanInstances() []adapter.DiscoveredAgent {
 		case ".json":
 			// Try PicoClaw first (discriminated by channels.pico field), fall through to OpenClaw
 			if data, readErr := os.ReadFile(expanded); readErr == nil && isPicoClawConfig(data) {
-				agent, err = scanPicoClawConfig(expanded)
+				agent, err = scanPicoClawConfig(expanded, data)
 			} else {
 				agent, err = scanOpenClawConfig(expanded)
 			}
@@ -163,7 +163,7 @@ func scanConfigFiles(paths []string) []adapter.DiscoveredAgent {
 		} else if strings.HasSuffix(expanded, ".json") {
 			// Try PicoClaw first (discriminated by channels.pico field), fall through to OpenClaw
 			if data, readErr := os.ReadFile(expanded); readErr == nil && isPicoClawConfig(data) {
-				agent, err = scanPicoClawConfig(expanded)
+				agent, err = scanPicoClawConfig(expanded, data)
 			} else {
 				agent, err = scanOpenClawConfig(expanded)
 			}

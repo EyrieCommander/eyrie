@@ -825,31 +825,8 @@ func (h *HermesAdapter) Personality(ctx context.Context) (*Personality, error) {
 	// Try to extract personality from SOUL.md
 	soulPath := filepath.Join(h.configDir, "SOUL.md")
 	if data, err := os.ReadFile(soulPath); err == nil {
-		// Parse SOUL.md (skip comments and empty lines)
-		lines := strings.Split(string(data), "\n")
-		var soulContent []string
-		inComment := false
-		for _, line := range lines {
-			trimmed := strings.TrimSpace(line)
-
-			// Track comment blocks
-			if strings.HasPrefix(trimmed, "<!--") {
-				inComment = true
-			}
-			if strings.HasSuffix(trimmed, "-->") {
-				inComment = false
-				continue
-			}
-
-			// Skip comments, empty lines, and markdown headers
-			if inComment || trimmed == "" || strings.HasPrefix(trimmed, "#") {
-				continue
-			}
-
-			soulContent = append(soulContent, trimmed)
-		}
-		if len(soulContent) > 0 {
-			personality.SystemPrompt = strings.Join(soulContent, " ")
+		if prompt := extractSoulPrompt(string(data)); prompt != "" {
+			personality.SystemPrompt = prompt
 		}
 	}
 
