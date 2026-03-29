@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"embed"
 	"fmt"
+	"strings"
 	"text/template"
 )
 
@@ -27,6 +28,11 @@ type BriefingContext struct {
 
 // renderBriefing executes a pre-parsed markdown template with the given context.
 func renderBriefing(filename string, ctx BriefingContext) (string, error) {
+	// ParseFS registers templates with the full relative path (e.g., "briefings/foo.md").
+	// Callers pass just the filename, so normalize here.
+	if !strings.HasPrefix(filename, "briefings/") {
+		filename = "briefings/" + filename
+	}
 	var buf bytes.Buffer
 	if err := briefingTemplates.ExecuteTemplate(&buf, filename, ctx); err != nil {
 		return "", fmt.Errorf("executing briefing template %s: %w", filename, err)

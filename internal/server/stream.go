@@ -52,13 +52,13 @@ func (s *SSEWriter) Sent() bool {
 }
 
 // WriteDone sends a {"type":"done"} event.
-func (s *SSEWriter) WriteDone() {
-	s.WriteEvent(map[string]string{"type": "done"})
+func (s *SSEWriter) WriteDone() error {
+	return s.WriteEvent(map[string]string{"type": "done"})
 }
 
 // WriteError sends a {"type":"error","error":"..."} event.
-func (s *SSEWriter) WriteError(msg string) {
-	s.WriteEvent(map[string]string{"type": "error", "error": msg})
+func (s *SSEWriter) WriteError(msg string) error {
+	return s.WriteEvent(map[string]string{"type": "error", "error": msg})
 }
 
 // handleAgentLogs streams log entries as Server-Sent Events.

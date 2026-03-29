@@ -248,8 +248,11 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try to stop first — log but don't block deletion
-	if stopErr := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
+	// Try to stop first — use detached context so stop completes even if
+	// the HTTP client disconnects during a slow shutdown.
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer stopCancel()
+	if stopErr := manager.ExecuteWithConfig(stopCtx, inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
 		slog.Warn("failed to stop instance before deletion", "instance", inst.Name, "framework", inst.Framework, "error", stopErr)
 	}
 
@@ -271,7 +274,12 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Inject system message and refresh project context for remaining agents
+	if err := store.Delete(id); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Publish events only after successful deletion
 	if inst.ProjectID != "" {
 		injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s removed from project", inst.Name))
 		s.refreshProjectContext(inst.ProjectID)
@@ -285,10 +293,6 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	if err := store.Delete(id); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

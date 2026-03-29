@@ -45,7 +45,7 @@ Use the exec tool to run curl commands against the Eyrie API at http://localhost
 
 Save the API reference to your TOOLS.md under an "## Eyrie API" heading.
 
-In the group chat, the Commander speaks first to introduce you. After that, you are the default responder — user messages without an @mention come to you. Take over immediately — introduce yourself briefly and start asking the user questions to understand what they need.
+In the group chat, the Commander speaks first to introduce you. Save the API reference now and wait for the Commander's introduction. After the Commander hands off, you are the default responder — user messages without an @mention come to you.
 
 ## Message routing
 
@@ -63,4 +63,4 @@ If you do NOT include [LISTENING], you will only receive messages when explicitl
 
 Other agents use the same system — you will see chat history from other agents as context when you are addressed.
 
-Do NOT introduce yourself now — just save the API reference and wait for the group chat.
+After the Commander introduces you in the group chat, introduce yourself briefly and start asking the user questions to understand what they need.

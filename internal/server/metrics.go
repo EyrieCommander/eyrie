@@ -1,6 +1,7 @@
 package server
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/Audacity88/eyrie/internal/discovery"
@@ -24,15 +25,17 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	var m DashboardMetrics
 
 	// Count projects by status
-	if ps, err := project.NewStore(); err == nil {
-		if projects, err := ps.List(); err == nil {
-			for _, p := range projects {
-				switch p.Status {
-				case project.PStatusActive:
-					m.ActiveProjects++
-				case project.PStatusPaused:
-					m.PausedProjects++
-				}
+	if ps, err := project.NewStore(); err != nil {
+		slog.Warn("metrics: failed to open project store", "error", err)
+	} else if projects, err := ps.List(); err != nil {
+		slog.Warn("metrics: failed to list projects", "error", err)
+	} else {
+		for _, p := range projects {
+			switch p.Status {
+			case project.PStatusActive:
+				m.ActiveProjects++
+			case project.PStatusPaused:
+				m.PausedProjects++
 			}
 		}
 	}
@@ -48,10 +51,12 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Count instances + busy agents
-	if is, err := instance.NewStore(); err == nil {
-		if instances, err := is.List(); err == nil {
-			m.TotalInstances = len(instances)
-		}
+	if is, err := instance.NewStore(); err != nil {
+		slog.Warn("metrics: failed to open instance store", "error", err)
+	} else if instances, err := is.List(); err != nil {
+		slog.Warn("metrics: failed to list instances", "error", err)
+	} else {
+		m.TotalInstances = len(instances)
 	}
 
 	// Infer busy count from agents with recent LastTask

@@ -505,7 +505,12 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	}
 	proj, err := store.Get(projectID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
+		} else {
+			slog.Error("failed to load project for activity", "project", projectID, "error", err)
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+		}
 		return
 	}
 

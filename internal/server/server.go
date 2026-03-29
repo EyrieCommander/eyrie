@@ -157,17 +157,37 @@ func (s *Server) runDiscovery(ctx context.Context) discovery.Result {
 	return discovery.Run(ctx, s.cfg)
 }
 
-// corsHandler wraps a handler with permissive CORS headers for development.
-// In production the frontend is served from the same origin so CORS is a no-op.
+// corsHandler wraps a handler with CORS headers. Only localhost origins are
+// reflected (for Vite dev server). In production the frontend is same-origin
+// so no CORS header is needed. Non-matching origins get no CORS header,
+// causing the browser to block the cross-origin request.
 func corsHandler(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", r.Header.Get("Origin"))
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		origin := r.Header.Get("Origin")
+		if origin != "" && isLocalhostOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(204)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isLocalhostOrigin checks whether an Origin header refers to a localhost address.
+func isLocalhostOrigin(origin string) bool {
+	// Match http://localhost:*, http://127.0.0.1:*, http://[::1]:*
+	for _, prefix := range []string{
+		"http://localhost", "https://localhost",
+		"http://127.0.0.1", "https://127.0.0.1",
+		"http://[::1]", "https://[::1]",
+	} {
+		if origin == prefix || len(origin) > len(prefix) && origin[:len(prefix)] == prefix && origin[len(prefix)] == ':' {
+			return true
+		}
+	}
+	return false
 }

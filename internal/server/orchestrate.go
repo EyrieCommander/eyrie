@@ -199,7 +199,10 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// agent after each turn (N-1 hidden LLM calls, fire-and-forget goroutines
 	// that silently failed), we prepend the last 20 messages as labeled context.
 	// Simpler, cheaper, and the agent sees the same conversation the user sees.
-	recentMsgs, _ := o.chatStore.Messages(projectID, 20)
+	recentMsgs, msgErr := o.chatStore.Messages(projectID, 20)
+	if msgErr != nil {
+		slog.Warn("failed to load recent messages for context injection", "project", projectID, "error", msgErr)
+	}
 	var contextLines []string
 	for _, m := range recentMsgs {
 		if m.ID == userMsg.ID {
@@ -268,7 +271,11 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			roleInstructions = fmt.Sprintf("[system]: You are a %s in this project chat.", p.role)
 		}
 
-		routingRules, _ := renderBriefing("routing-rules.md", ctx)
+		routingRules, rrErr := renderBriefing("routing-rules.md", ctx)
+		if rrErr != nil {
+			slog.Warn("failed to render routing rules template", "error", rrErr)
+			routingRules = ""
+		}
 
 		labeledMsg = roleInstructions + routingRules + "\n\n" + labeledMsg
 	}
