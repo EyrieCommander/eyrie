@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -1267,7 +1268,7 @@ func (o *OpenClawAdapter) dial(ctx context.Context) (*websocket.Conn, error) {
 
 	conn, _, err := websocket.Dial(ctx, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("connecting to OpenClaw at %s:%d: %w", o.host, o.port, err)
+		return nil, wrapConnError(err, "connecting to OpenClaw at %s:%d", o.host, o.port)
 	}
 	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB — hello-ok includes a full gateway snapshot
 
@@ -1343,7 +1344,14 @@ func (o *OpenClawAdapter) dial(ctx context.Context) (*websocket.Conn, error) {
 			}
 			if frame.Error != nil {
 				conn.Close(websocket.StatusInternalError, "connect rejected")
-				return nil, fmt.Errorf("connect handshake rejected: %s: %s", frame.Error.Code, frame.Error.Message)
+				msg := fmt.Sprintf("connect handshake rejected: %s: %s", frame.Error.Code, frame.Error.Message)
+				// WHY string match: OpenClaw reports auth failures as RPC errors with
+				// codes like "auth_failed" or "unauthorized" rather than HTTP 401.
+				code := strings.ToLower(frame.Error.Code)
+				if code == "auth_failed" || code == "unauthorized" || strings.Contains(code, "auth") {
+					return nil, fmt.Errorf("%w: %s", ErrUnauthorized, msg)
+				}
+				return nil, errors.New(msg)
 			}
 			conn.Close(websocket.StatusInternalError, "connect failed")
 			return nil, fmt.Errorf("connect handshake: res ok=false with no error")

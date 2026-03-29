@@ -76,7 +76,7 @@ func (s *Server) handleAgentLogs(w http.ResponseWriter, r *http.Request) {
 
 	logCh, err := agent.TailLogs(ctx)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -108,7 +108,7 @@ func (s *Server) handleAgentActivity(w http.ResponseWriter, r *http.Request) {
 
 	ch, err := agent.TailActivity(ctx)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -139,7 +139,7 @@ func (s *Server) handleAgentSessions(w http.ResponseWriter, r *http.Request) {
 
 	sessions, err := agent.Sessions(ctx)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 
@@ -189,7 +189,7 @@ func (s *Server) handleAgentMessages(w http.ResponseWriter, r *http.Request) {
 
 	messages, err := agent.ChatHistory(ctx, sessionKey, limit)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		writeAdapterError(w, err)
 		return
 	}
 

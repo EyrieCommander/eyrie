@@ -202,13 +202,13 @@ func (p *PicoClawAdapter) postLifecycle(ctx context.Context, action string) erro
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("gateway %s: %w", action, err)
+		return wrapConnError(err, "gateway %s", action)
 	}
 	defer resp.Body.Close()
 	body, _ := io.ReadAll(resp.Body)
 
 	if resp.StatusCode >= 400 {
-		return fmt.Errorf("gateway %s returned %d: %s", action, resp.StatusCode, string(body))
+		return httpStatusError(resp.StatusCode, "gateway %s returned %d: %s", action, resp.StatusCode, string(body))
 	}
 
 	// Check response for error status
@@ -636,13 +636,13 @@ func (p *PicoClawAdapter) deleteSession(ctx context.Context, sessionKey string) 
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("deleting session: %w", err)
+		return wrapConnError(err, "deleting session")
 	}
 	defer resp.Body.Close()
 	// 404 is fine — session is already gone
 	if resp.StatusCode >= 400 && resp.StatusCode != http.StatusNotFound {
 		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("delete session returned %d: %s", resp.StatusCode, string(body))
+		return httpStatusError(resp.StatusCode, "delete session returned %d: %s", resp.StatusCode, string(body))
 	}
 	return nil
 }
@@ -704,7 +704,7 @@ func (p *PicoClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 	conn, _, err := websocket.Dial(dialCtx, wsURL, opts)
 	dialCancel()
 	if err != nil {
-		return nil, fmt.Errorf("connecting to PicoClaw WS: %w", err)
+		return nil, wrapConnError(err, "connecting to PicoClaw WS")
 	}
 	conn.SetReadLimit(4 * 1024 * 1024) // 4 MB
 
@@ -901,7 +901,7 @@ func (p *PicoClawAdapter) getJSONURL(ctx context.Context, url string, target any
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return fmt.Errorf("request to %s: %w", url, err)
+		return wrapConnError(err, "request to %s", url)
 	}
 	defer resp.Body.Close()
 
@@ -911,7 +911,7 @@ func (p *PicoClawAdapter) getJSONURL(ctx context.Context, url string, target any
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("%s returned %d: %s", url, resp.StatusCode, string(data))
+		return httpStatusError(resp.StatusCode, "%s returned %d: %s", url, resp.StatusCode, string(data))
 	}
 
 	return json.Unmarshal(data, target)
@@ -930,7 +930,7 @@ func (p *PicoClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("request to %s: %w", path, err)
+		return "", wrapConnError(err, "request to %s", path)
 	}
 	defer resp.Body.Close()
 
@@ -940,7 +940,7 @@ func (p *PicoClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s returned %d: %s", path, resp.StatusCode, string(data))
+		return "", httpStatusError(resp.StatusCode, "%s returned %d: %s", path, resp.StatusCode, string(data))
 	}
 
 	return string(data), nil
