@@ -22,6 +22,7 @@ import {
 } from "../lib/api";
 
 import { type ToolCall, matchToolResult } from "../lib/chat-events";
+import { recordLatency } from "../lib/useAgentMetrics";
 export type { ToolCall };
 
 import {
@@ -140,6 +141,9 @@ export function ChatPanel({
 
   const abortRef = useRef<AbortController | null>(null);
   const retryTimeoutRef = useRef<ReturnType<typeof setTimeout>[]>([]);
+  // Track time-to-first-token for latency metrics
+  const sendTimeRef = useRef<number | null>(null);
+  const latencyRecordedRef = useRef(false);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [searchParams, setSearchParams] = useSearchParams();
@@ -377,6 +381,14 @@ export function ChatPanel({
 
   const handleChatEvent = useCallback(
     (ev: ChatEvent, onDone: () => void) => {
+      // Record time-to-first-token latency
+      if (!latencyRecordedRef.current && sendTimeRef.current && (ev.type === "delta" || ev.type === "tool_start")) {
+        const latencyMs = performance.now() - sendTimeRef.current;
+        recordLatency(agentName, latencyMs);
+        latencyRecordedRef.current = true;
+        sendTimeRef.current = null;
+      }
+
       switch (ev.type) {
         case "delta":
           setStreamingContent((prev) => prev + (ev.content ?? ""));
@@ -538,6 +550,8 @@ export function ChatPanel({
     setSending(true);
     setStreamingContent("");
     setToolCalls([]);
+    sendTimeRef.current = performance.now();
+    latencyRecordedRef.current = false;
 
     const userMsg: ChatMessage = {
       role: "user",
