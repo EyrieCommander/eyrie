@@ -2,6 +2,7 @@ import { Link } from "react-router-dom";
 import { useData } from "../lib/DataContext";
 import { formatBytes } from "../lib/format";
 import { useAgentMetrics, latencyPercentiles } from "../lib/useAgentMetrics";
+import { useLatencyThresholds, latencyColor } from "../lib/useLatencyThresholds";
 import type { AgentInfo } from "../lib/types";
 
 const FRAMEWORK_EMOJI: Record<string, string> = {
@@ -120,6 +121,7 @@ function formatMs(ms: number): string {
 export default function AgentCompare() {
   const { agents, loading } = useData();
   const { metrics, reset: resetMetrics } = useAgentMetrics();
+  const { thresholds } = useLatencyThresholds();
 
   // Build latency data for charts
   const latencyItems = agents
@@ -226,7 +228,7 @@ export default function AgentCompare() {
                       </td>
                       <td className="px-4 py-2.5 text-right font-mono">
                         {avg !== null ? (
-                          <span className={avg > 10000 ? "text-red" : avg > 5000 ? "text-yellow" : "text-accent"}>
+                          <span className={latencyColor(avg, thresholds)}>
                             {formatMs(avg)}
                           </span>
                         ) : (

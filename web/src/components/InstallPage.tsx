@@ -38,18 +38,17 @@ export default function InstallPage() {
     }
   };
 
-  // Auto-scroll logs
   useEffect(() => {
     if (showLogs && logEndRef.current) {
       logEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [installLogs, showLogs]);
 
-  const loadFrameworks = async () => {
+  const loadFrameworks = async (refresh = false) => {
     try {
       setLoading(true);
       setError(null);
-      const data = await fetchFrameworks();
+      const data = await fetchFrameworks(refresh);
       setFrameworks(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load frameworks");
@@ -59,7 +58,6 @@ export default function InstallPage() {
   };
 
   const handleInstall = (frameworkId: string) => {
-    // Cancel any existing install for this framework
     if (abortControllers.current[frameworkId]) {
       abortControllers.current[frameworkId].abort();
     }
@@ -68,8 +66,6 @@ export default function InstallPage() {
     setInstallLogs((prev) => ({ ...prev, [frameworkId]: [] }));
     setShowLogs(true);
 
-    // Only force-restart if the previous install failed (error status)
-    // For "running" status, just connect to the existing stream
     const existingProgress = installProgress[frameworkId];
     const shouldForce = existingProgress && existingProgress.status === "error";
 
@@ -82,7 +78,6 @@ export default function InstallPage() {
           [frameworkId]: progress,
         }));
 
-        // Close logs panel on success
         if (progress.status === "success") {
           setTimeout(() => {
             if (selectedFramework === frameworkId) {
@@ -97,7 +92,7 @@ export default function InstallPage() {
           [frameworkId]: [...(prev[frameworkId] || []), log],
         }));
       },
-      shouldForce, // Force restart if retrying failed/stale installation
+      shouldForce,
     );
 
     abortControllers.current[frameworkId] = controller;
@@ -111,55 +106,46 @@ export default function InstallPage() {
     : undefined;
 
   return (
-    <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="mb-6">
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-bold text-fg mb-1">
-              install
-            </h1>
-            <p className="text-sm text-fg-muted">
-              browse and install claw agent frameworks from the registry
-            </p>
-          </div>
-          <button
-            onClick={loadFrameworks}
-            disabled={loading}
-            className="p-2 hover:bg-fg-muted/5 rounded transition-colors disabled:opacity-50"
-            title="Refresh frameworks"
-          >
-            <RefreshCw
-              className={`w-5 h-5 text-fg-muted ${loading ? "animate-spin" : ""}`}
-            />
-          </button>
+    <div className="flex flex-col h-full space-y-6">
+      <div className="text-xs text-text-muted">~/install</div>
+
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-xl font-bold">
+            <span className="text-accent">&gt;</span> install
+          </h1>
+          <p className="mt-1 text-xs text-text-muted">
+            // browse and install agent frameworks from the registry
+          </p>
         </div>
+        <button
+          onClick={() => loadFrameworks(true)}
+          disabled={loading}
+          className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+          $ refresh
+        </button>
       </div>
 
-      {/* Error Message */}
       {error && (
-        <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 text-red mt-0.5 flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm text-red font-medium">Error loading frameworks</p>
-            <p className="text-xs text-red/80 mt-1">{error}</p>
+        <div className="rounded border border-red/30 bg-red/5 px-4 py-3 flex items-start gap-2">
+          <AlertCircle className="h-3.5 w-3.5 text-red mt-0.5 flex-shrink-0" />
+          <div>
+            <p className="text-xs text-red font-medium">failed to load frameworks</p>
+            <p className="text-[10px] text-red/80 mt-0.5">{error}</p>
           </div>
         </div>
       )}
 
-      {/* Loading State */}
       {loading && !frameworks.length && (
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <RefreshCw className="w-8 h-8 text-fg-muted animate-spin mx-auto mb-3" />
-            <p className="text-sm text-fg-muted">Loading frameworks...</p>
-          </div>
+        <div className="py-12 text-center text-xs text-text-muted">
+          loading frameworks...
         </div>
       )}
 
-      {/* Frameworks Grid */}
       {!loading && frameworks.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {frameworks.map((fw) => (
             <FrameworkCard
               key={fw.id}
@@ -172,32 +158,26 @@ export default function InstallPage() {
         </div>
       )}
 
-      {/* Empty State */}
       {!loading && !error && frameworks.length === 0 && (
-        <div className="flex items-center justify-center py-12">
-          <div className="text-center">
-            <Package className="w-12 h-12 text-fg-muted/50 mx-auto mb-3" />
-            <p className="text-sm text-fg-muted">No frameworks available</p>
-            <p className="text-xs text-fg-muted mt-1">
-              Check the registry configuration
-            </p>
-          </div>
+        <div className="rounded border border-border bg-surface p-8 text-center text-xs text-text-muted">
+          <Package className="h-8 w-8 text-text-muted/30 mx-auto mb-2" />
+          no frameworks available — check registry configuration
         </div>
       )}
 
-      {/* Install Logs Panel */}
+      {/* Install logs panel */}
       {showLogs && selectedFramework && (
         <div className="fixed bottom-0 left-0 right-0 bg-bg border-t border-border shadow-lg z-50">
-          <div className="max-w-7xl mx-auto px-8 py-4">
+          <div className="max-w-5xl mx-auto px-8 py-4">
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <h3 className="text-sm font-semibold text-fg">
+                <h3 className="text-xs font-semibold text-text">
                   {currentProgress?.status === "success"
-                    ? `${selectedFramework} installed successfully`
-                    : `Installing ${selectedFramework}`}
+                    ? `${selectedFramework} installed`
+                    : `installing ${selectedFramework}`}
                 </h3>
                 {currentProgress && currentProgress.status === "running" && (
-                  <span className="text-xs text-fg-muted">
+                  <span className="text-[10px] text-text-muted">
                     {currentProgress.phase} ({currentProgress.progress}%)
                   </span>
                 )}
@@ -210,35 +190,35 @@ export default function InstallPage() {
                         setShowTerminal(true);
                         setShowLogs(false);
                       }}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-green hover:bg-green/90 text-white rounded text-xs font-medium transition-colors"
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
                     >
-                      <TerminalIcon className="w-3.5 h-3.5" />
+                      <TerminalIcon className="h-3 w-3" />
                       launch terminal
                     </button>
                     <button
                       onClick={() => navigate(`/agents/${selectedFramework}/config`)}
-                      className="flex items-center gap-2 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
+                      className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
                     >
-                      <Settings className="w-3.5 h-3.5" />
-                      configure agent
+                      <Settings className="h-3 w-3" />
+                      configure
                     </button>
                   </>
                 )}
                 <button
                   onClick={() => setShowLogs(false)}
-                  className="text-xs text-fg-muted hover:text-fg transition-colors"
+                  className="text-xs text-text-muted hover:text-text transition-colors"
                 >
                   close
                 </button>
               </div>
             </div>
 
-            <div className="bg-black/90 rounded border border-border p-3 max-h-48 overflow-y-auto font-mono text-xs">
+            <div className="rounded border border-border bg-surface p-3 max-h-48 overflow-y-auto font-mono text-[10px]">
               {currentLogs.length === 0 ? (
-                <p className="text-fg-muted">Starting installation...</p>
+                <p className="text-text-muted">starting installation...</p>
               ) : (
                 currentLogs.map((log, i) => (
-                  <div key={i} className="text-fg-muted/90 whitespace-pre-wrap">
+                  <div key={i} className="text-text-secondary whitespace-pre-wrap">
                     {log}
                   </div>
                 ))
@@ -249,7 +229,6 @@ export default function InstallPage() {
         </div>
       )}
 
-      {/* Terminal Modal */}
       {showTerminal && selectedFramework && (
         <Terminal
           agentName={selectedFramework}

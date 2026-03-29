@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
-import { Package, Download, CheckCircle, Loader2 } from "lucide-react";
+import { Download, CheckCircle, Loader2 } from "lucide-react";
 import type { Framework, InstallProgress } from "../lib/types";
+
+const FRAMEWORK_EMOJI: Record<string, string> = {
+  zeroclaw: "🌀",
+  openclaw: "🦞",
+  hermes: "🔱",
+};
 
 interface FrameworkCardProps {
   framework: Framework;
@@ -20,18 +26,14 @@ export default function FrameworkCard({
   const isError = installProgress?.status === "error";
   const isAlreadyInstalled = framework.installed && !installProgress;
 
-  // Force re-render every second for elapsed time
   const [, setTick] = useState(0);
 
   useEffect(() => {
     if (!isInstalling) return;
-    const interval = setInterval(() => {
-      setTick((t) => t + 1);
-    }, 1000);
+    const interval = setInterval(() => setTick((t) => t + 1), 1000);
     return () => clearInterval(interval);
   }, [isInstalling]);
 
-  // Calculate elapsed time for running installations
   const getElapsedTime = () => {
     if (!isInstalling || !installProgress?.started_at) return "";
     const elapsed = Date.now() - new Date(installProgress.started_at).getTime();
@@ -41,176 +43,122 @@ export default function FrameworkCard({
     return `${minutes}m ${seconds}s`;
   };
 
-  const getLanguageColor = (lang: string) => {
-    switch (lang.toLowerCase()) {
-      case "rust":
-        return "bg-orange-500/10 text-orange-500 border-orange-500/20";
-      case "python":
-        return "bg-yellow-500/10 text-yellow-500 border-yellow-500/20";
-      case "typescript":
-        return "bg-blue-500/10 text-blue-500 border-blue-500/20";
-      default:
-        return "bg-gray-500/10 text-gray-500 border-gray-500/20";
-    }
-  };
-
-  const getAdapterColor = (adapter: string) => {
-    switch (adapter) {
-      case "http":
-        return "bg-rose-500/10 text-rose-500";
-      case "websocket":
-        return "bg-indigo-500/10 text-indigo-500";
-      case "cli":
-        return "bg-cyan-500/10 text-cyan-500";
-      default:
-        return "bg-gray-500/10 text-gray-500";
-    }
-  };
-
-  const getInstallMethodColor = (method: string) => {
-    switch (method.toLowerCase()) {
-      case "cargo":
-        return "bg-teal-500/10 text-teal-500";
-      case "npm":
-        return "bg-pink-500/10 text-pink-500";
-      case "script":
-        return "bg-lime-500/10 text-lime-500";
-      default:
-        return "bg-slate-500/10 text-slate-500";
-    }
-  };
+  const emoji = FRAMEWORK_EMOJI[framework.id] || "";
 
   return (
-    <div className="border border-border rounded-lg p-6 hover:border-green transition-colors">
+    <div className="rounded border border-border bg-surface p-4 hover:border-accent/30 transition-colors space-y-3">
       {/* Header */}
-      <div className="flex items-start justify-between mb-4">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 rounded bg-purple/10 flex items-center justify-center">
-            <Package className="w-6 h-6 text-purple" />
-          </div>
-          <div>
-            <h3 className="text-lg font-semibold text-fg">{framework.name}</h3>
-            <p className="text-xs text-fg-muted">{framework.id}</p>
-          </div>
+      <div className="flex items-center gap-2.5">
+        <span className="text-xl leading-none">{emoji}</span>
+        <div className="flex-1 min-w-0">
+          <h3 className="text-sm font-semibold text-text">{framework.name}</h3>
+          <p className="text-[10px] text-text-muted">{framework.id}</p>
         </div>
+        {isAlreadyInstalled && (
+          <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
+            installed
+          </span>
+        )}
       </div>
 
       {/* Description */}
-      <p className="text-sm text-fg-muted mb-4 line-clamp-2">
+      <p className="text-xs text-text-secondary line-clamp-2">
         {framework.description}
       </p>
 
       {/* Badges */}
-      <div className="flex flex-wrap gap-2 mb-4">
-        <span
-          className={`text-xs px-2 py-1 rounded border ${getLanguageColor(framework.language)}`}
-        >
+      <div className="flex flex-wrap gap-1.5">
+        <span className="rounded border border-border bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-secondary">
           {framework.language}
         </span>
-        <span
-          className={`text-xs px-2 py-1 rounded ${getAdapterColor(framework.adapter_type)}`}
-        >
+        <span className="rounded border border-border bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-secondary">
           {framework.adapter_type}
         </span>
-        <span className={`text-xs px-2 py-1 rounded ${getInstallMethodColor(framework.install_method)}`}>
+        <span className="rounded border border-border bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-secondary">
           {framework.install_method}
         </span>
       </div>
 
       {/* Requirements */}
       {framework.requirements.length > 0 && (
-        <div className="mb-4">
-          <p className="text-xs text-fg-muted mb-2">requirements:</p>
-          <div className="flex flex-wrap gap-1">
-            {framework.requirements.map((req) => (
-              <span
-                key={req}
-                className="text-xs px-2 py-0.5 rounded bg-fg-muted/5 text-fg-muted"
-              >
-                {req}
-              </span>
-            ))}
-          </div>
+        <div className="flex flex-wrap gap-1">
+          {framework.requirements.map((req) => (
+            <span
+              key={req}
+              className="rounded bg-surface-hover px-1.5 py-0.5 text-[10px] text-text-muted"
+            >
+              {req}
+            </span>
+          ))}
         </div>
       )}
 
-      {/* Install Button */}
+      {/* Install button */}
       <button
         onClick={onInstall}
         disabled={disabled || isSuccess || isAlreadyInstalled}
-        className={`
-          group w-full px-4 py-2 rounded text-sm font-medium
-          flex items-center justify-center gap-2
-          transition-all duration-200
-          ${
-            isAlreadyInstalled
-              ? "bg-green/10 text-green cursor-not-allowed"
-              : isSuccess
-                ? "bg-green/10 text-green cursor-not-allowed"
-                : isError
-                  ? "bg-red/10 text-red hover:bg-red/20 hover:shadow-md cursor-pointer"
-                  : isInstalling
-                    ? "border border-yellow text-yellow hover:bg-yellow hover:text-black hover:shadow-lg cursor-pointer"
-                    : "border border-white text-white hover:bg-white hover:text-black hover:shadow-lg hover:-translate-y-0.5 active:translate-y-0 cursor-pointer"
-          }
-          disabled:opacity-50 disabled:cursor-not-allowed
-        `}
+        className={`flex w-full items-center justify-center gap-2 rounded px-3 py-2 text-xs font-medium transition-colors ${
+          isAlreadyInstalled || isSuccess
+            ? "bg-green/10 text-green cursor-default"
+            : isError
+              ? "bg-red/10 text-red hover:bg-red/20"
+              : isInstalling
+                ? "border border-yellow text-yellow hover:bg-yellow/10"
+                : "border border-accent text-accent hover:bg-accent hover:text-white"
+        } disabled:opacity-50 disabled:cursor-not-allowed`}
       >
         {isAlreadyInstalled ? (
           <>
-            <CheckCircle className="w-4 h-4" />
-            already installed
+            <CheckCircle className="h-3.5 w-3.5" />
+            installed
           </>
         ) : isInstalling ? (
           <>
-            <Loader2 className="w-4 h-4 animate-spin" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin" />
             view progress
           </>
         ) : isSuccess ? (
           <>
-            <CheckCircle className="w-4 h-4" />
+            <CheckCircle className="h-3.5 w-3.5" />
             installed
           </>
         ) : isError ? (
           <>
-            <Download className="w-4 h-4 transition-transform group-hover:scale-110" />
+            <Download className="h-3.5 w-3.5" />
             retry install
           </>
         ) : (
           <>
-            <Download className="w-4 h-4 transition-transform group-hover:scale-110 group-hover:animate-bounce" />
+            <Download className="h-3.5 w-3.5" />
             install
           </>
         )}
       </button>
 
-      {/* Elapsed time for running installations */}
       {isInstalling && (
-        <div className="text-center mt-2">
-          <span className="text-xs text-fg-muted">
-            running for {getElapsedTime()}
-          </span>
-        </div>
+        <p className="text-center text-[10px] text-text-muted">
+          running for {getElapsedTime()}
+        </p>
       )}
 
       {/* Links */}
-      <div className="flex items-center justify-center gap-3 mt-2">
+      <div className="flex items-center justify-center gap-3">
         <a
           href={framework.repository}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-text-secondary hover:text-text transition-colors"
+          className="text-[10px] text-text-muted hover:text-accent transition-colors"
         >
           repository
         </a>
         {framework.website && (
           <>
-            <span className="text-xs text-fg-muted">•</span>
+            <span className="text-[10px] text-text-muted">·</span>
             <a
               href={framework.website}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-xs text-text-secondary hover:text-text transition-colors"
+              className="text-[10px] text-text-muted hover:text-accent transition-colors"
             >
               website
             </a>
