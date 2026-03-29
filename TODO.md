@@ -1,6 +1,6 @@
 # Eyrie TODO
 
-## Current State (2026-03-26)
+## Current State (2026-03-30)
 
 **Branch:** `feature/project-orchestrator`
 **Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
@@ -51,6 +51,8 @@
 - **#4350 (streaming tool events)**: Closed — superseded by upstream #4175
 - **#4584 (proxy tool event parsing)**: Closed — functionality landed upstream on master
 - **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
+- **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — open, awaiting review
+- **#5148 (http_request per-host allowlist)**: Open — replaces blanket `allow_private_hosts: bool` with per-host `Vec<String>`, backward compatible via custom serde deserializer
 
 ---
 
