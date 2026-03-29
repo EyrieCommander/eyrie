@@ -1,4 +1,5 @@
 export { ToolCallCard, PartToolCallCard, ToolRunCard, groupPartsIntoRuns, toolCallSummary } from './ToolCallCard';
+export { RichOutput } from './RichOutput';
 export { MessageRow } from './MessageRow';
 export { StreamingCursor } from './StreamingCursor';
 export { SessionBar } from './SessionBar';

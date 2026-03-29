@@ -1,7 +1,7 @@
-import type React from "react";
-import { useState, useId } from "react";
+import { useState, useId, useCallback } from "react";
 import type { ToolCall } from "../../lib/chat-events";
 import type { ChatPart } from "../../lib/types";
+import { RichOutput } from "./RichOutput";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -34,23 +34,107 @@ function classifyOutput(output: string | undefined): OutputStatus {
   return "ok";
 }
 
-/** Render text with URLs as clickable links */
-function renderWithLinks(text: string): React.ReactNode[] {
-  const urlRegex = /(https?:\/\/[^\s)]+)/g;
-  const parts: React.ReactNode[] = [];
-  let lastIndex = 0;
-  let match;
-  while ((match = urlRegex.exec(text)) !== null) {
-    if (match.index > lastIndex) parts.push(text.slice(lastIndex, match.index));
-    parts.push(
-      <a key={match.index} href={match[0]} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
-        {match[0]}
-      </a>
-    );
-    lastIndex = match.index + match[0].length;
-  }
-  if (lastIndex < text.length) parts.push(text.slice(lastIndex));
-  return parts;
+/** Check if args represent an HTML canvas tool call */
+function isHtmlCanvas(args: Record<string, any> | undefined): args is Record<string, any> & { content: string; content_type: "html" } {
+  return args?.content_type === "html" && typeof args?.content === "string";
+}
+
+/** For HTML canvas tools: compact metadata + copy/source/output toggles on one line */
+function HtmlCanvasArgs({ args, output }: { args: Record<string, any>; output?: string }) {
+  const [copied, setCopied] = useState(false);
+  const [showSource, setShowSource] = useState(false);
+  const [showOutput, setShowOutput] = useState(false);
+
+  // Show all fields except the massive content blob
+  const { content, ...meta } = args;
+  const hasMeta = Object.keys(meta).length > 0;
+
+  const copyHtml = useCallback(() => {
+    navigator.clipboard.writeText(content).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
+  }, [content]);
+
+  return (
+    <div className="space-y-1">
+      {hasMeta && (
+        <div>
+          <span className="text-text-muted">args: </span>
+          <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+            {JSON.stringify(meta, null, 2)}
+          </pre>
+        </div>
+      )}
+      <div className="flex items-center gap-2">
+        <button
+          onClick={copyHtml}
+          className="text-[9px] text-text-muted hover:text-text transition-colors"
+        >
+          {copied ? "copied!" : "copy html"}
+        </button>
+        <button
+          onClick={() => setShowSource(!showSource)}
+          className="text-[9px] text-text-muted hover:text-text transition-colors"
+        >
+          {showSource ? "\u25BE hide source" : "\u25B8 show source"}
+        </button>
+        {output != null && (
+          <button
+            onClick={() => setShowOutput(!showOutput)}
+            className="text-[9px] text-text-muted hover:text-text transition-colors"
+          >
+            {showOutput ? "\u25BE hide output" : "\u25B8 show output"}
+          </button>
+        )}
+      </div>
+      {showSource && (
+        <pre className="mt-0.5 max-h-24 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-muted">
+          {content}
+        </pre>
+      )}
+      {showOutput && output != null && (
+        <div className="mt-0.5">
+          <RichOutput text={output} htmlContent={content} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Open HTML content in a new tab for full-screen viewing / saving */
+function openHtmlInNewTab(html: string) {
+  const blob = new Blob([html], { type: "text/html" });
+  const url = URL.createObjectURL(blob);
+  window.open(url, "_blank");
+  // Revoke after a delay to allow the tab to load
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+}
+
+/** Full HTML preview with iframe + "open in new tab" button */
+function HtmlPreview({ html }: { html: string }) {
+  return (
+    <div>
+      <div className="flex items-center gap-2 mb-1">
+        <span className="text-text-muted text-[10px]">preview</span>
+        <button
+          onClick={() => openHtmlInNewTab(html)}
+          className="text-[9px] text-accent hover:underline"
+        >
+          open in new tab
+        </button>
+      </div>
+      <div className="rounded border border-border overflow-hidden bg-white">
+        <iframe
+          srcDoc={html}
+          sandbox=""
+          className="w-full border-0"
+          style={{ height: "300px" }}
+          title="html preview"
+        />
+      </div>
+    </div>
+  );
 }
 
 export function toolCallSummary(
@@ -147,36 +231,23 @@ export function PartToolCallCard({
       </button>
       {expanded && (
         <div id={panelId} className={`${isOuter ? "border-t border-border/50" : "border-t border-border/30"} px-3 py-2 space-y-1.5 bg-surface/50`}>
-          {part.args && Object.keys(part.args).length > 0 && (
-            <div>
-              <span className="text-text-muted">args: </span>
-              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {JSON.stringify(part.args, null, 2)}
-              </pre>
-            </div>
-          )}
-          {/* Inline HTML preview when tool has content_type: "html" */}
-          {part.args?.content_type === "html" && typeof part.args?.content === "string" && (
-            <div>
-              <span className="text-text-muted text-[10px]">preview:</span>
-              <div className="mt-1 rounded border border-border overflow-hidden bg-white">
-                <iframe
-                  srcDoc={part.args.content}
-                  sandbox=""
-                  className="w-full border-0"
-                  style={{ height: "200px" }}
-                  title="html preview"
-                />
-              </div>
-            </div>
-          )}
-          {part.output != null && (
-            <div>
-              <span className="text-text-muted">output: </span>
-              <pre className="mt-0.5 max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {renderWithLinks(part.output)}
-              </pre>
-            </div>
+          {isHtmlCanvas(part.args) ? (
+            <>
+              <HtmlCanvasArgs args={part.args} output={part.output ?? undefined} />
+              <HtmlPreview html={part.args.content} />
+            </>
+          ) : (
+            <>
+              {part.args && Object.keys(part.args).length > 0 && (
+                <div>
+                  <span className="text-text-muted">args: </span>
+                  <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+                    {JSON.stringify(part.args, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {part.output != null && <RichOutput text={part.output} />}
+            </>
           )}
         </div>
       )}
@@ -226,36 +297,23 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
       </button>
       {expanded && (
         <div id={panelId} className="border-t border-border/50 px-3 py-2 space-y-1.5">
-          {tc.args && Object.keys(tc.args).length > 0 && (
-            <div>
-              <span className="text-text-muted">args: </span>
-              <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {JSON.stringify(tc.args, null, 2)}
-              </pre>
-            </div>
-          )}
-          {/* Inline HTML preview for canvas renders */}
-          {tc.args?.content_type === "html" && typeof tc.args?.content === "string" && (
-            <div>
-              <span className="text-text-muted text-[10px]">preview:</span>
-              <div className="mt-1 rounded border border-border overflow-hidden bg-white">
-                <iframe
-                  srcDoc={tc.args.content}
-                  sandbox=""
-                  className="w-full border-0"
-                  style={{ height: "200px" }}
-                  title="html preview"
-                />
-              </div>
-            </div>
-          )}
-          {tc.output != null && (
-            <div>
-              <span className="text-text-muted">output: </span>
-              <pre className="mt-0.5 max-h-32 overflow-y-auto overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                {renderWithLinks(tc.output)}
-              </pre>
-            </div>
+          {isHtmlCanvas(tc.args) ? (
+            <>
+              <HtmlCanvasArgs args={tc.args} output={tc.output ?? undefined} />
+              <HtmlPreview html={tc.args.content} />
+            </>
+          ) : (
+            <>
+              {tc.args && Object.keys(tc.args).length > 0 && (
+                <div>
+                  <span className="text-text-muted">args: </span>
+                  <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
+                    {JSON.stringify(tc.args, null, 2)}
+                  </pre>
+                </div>
+              )}
+              {tc.output != null && <RichOutput text={tc.output} />}
+            </>
           )}
         </div>
       )}
