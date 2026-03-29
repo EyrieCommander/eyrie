@@ -4,7 +4,7 @@
 
 An agentic factory and control room for the Claw family of AI agent frameworks.
 
-Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, and others.
+Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, PicoClaw, and others.
 
 ## Features
 
@@ -112,7 +112,7 @@ url = "http://192.168.1.50:42617"
 
 ## Architecture
 
-Eyrie uses an adapter pattern: each Claw framework gets a dedicated adapter that translates the common `Agent` interface into framework-specific gateway calls. ZeroClaw speaks HTTP REST; OpenClaw speaks WebSocket RPC. Eyrie handles both transparently.
+Eyrie uses an adapter pattern: each Claw framework gets a dedicated adapter that translates the common `Agent` interface into framework-specific gateway calls. ZeroClaw speaks HTTP REST; OpenClaw speaks WebSocket RPC; PicoClaw uses a hybrid of REST and the Pico Protocol WebSocket. Eyrie handles all transparently.
 
 Two presentation layers share the same adapter and discovery core:
 
@@ -121,14 +121,14 @@ Two presentation layers share the same adapter and discovery core:
 
 ### Framework capabilities
 
-| Feature | ZeroClaw | OpenClaw |
-|---------|----------|----------|
-| Log streaming | SSE `/api/events` | WebSocket `logs.tail` |
-| Chat | WebSocket gateway | WebSocket RPC |
-| Session management | SQLite + gateway API | WebSocket `sessions.list` |
-| Tool call streaming | via claude-max-api-proxy SSE | WebSocket events |
-| Lifecycle (start/stop) | `zeroclaw daemon` | `openclaw` CLI |
-| Config format | TOML | JSON |
+| Feature | ZeroClaw | OpenClaw | PicoClaw |
+|---------|----------|----------|----------|
+| Log streaming | SSE `/api/events` | WebSocket `logs.tail` | API polling `/api/gateway/logs` |
+| Chat | WebSocket gateway | WebSocket RPC | Pico Protocol WebSocket |
+| Session management | SQLite + gateway API | WebSocket `sessions.list` | REST `/api/sessions` + JSONL |
+| Tool call streaming | via claude-max-api-proxy SSE | WebSocket events | Not exposed (server-side) |
+| Lifecycle (start/stop) | `zeroclaw daemon` | `openclaw` CLI | REST `/api/gateway/{start,stop}` |
+| Config format | TOML | JSON | JSON |
 
 ## Framework Installation
 

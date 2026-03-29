@@ -16,7 +16,7 @@ type Agent interface {
 	// Identity
 	ID() string
 	Name() string
-	Framework() string // "zeroclaw", "openclaw", etc.
+	Framework() string // "zeroclaw", "openclaw", "picoclaw", "hermes"
 
 	// Gateway connection info
 	BaseURL() string

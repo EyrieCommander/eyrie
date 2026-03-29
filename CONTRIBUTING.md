@@ -9,7 +9,7 @@ Thanks for your interest in contributing! Eyrie is a project orchestrator for AI
 - Go 1.26+
 - Node.js >= 22 (for the web dashboard)
 - npm >= 9
-- At least one Claw framework installed ([ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw), [OpenClaw](https://github.com/nicholasbester/openclaw), or Hermes)
+- At least one Claw framework installed ([ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw), [OpenClaw](https://github.com/nicholasbester/openclaw), [PicoClaw](https://github.com/sipeed/picoclaw), or Hermes)
 
 ### Local Development
 
@@ -81,7 +81,7 @@ This starts both the Go backend (with hot-reload via air) and the React frontend
 ```
 cmd/eyrie/          # CLI entry point
 internal/
-  adapter/          # Framework adapters (ZeroClaw HTTP, OpenClaw WebSocket, Hermes CLI)
+  adapter/          # Framework adapters (ZeroClaw HTTP, OpenClaw WebSocket, PicoClaw hybrid, Hermes CLI)
   cli/              # Cobra commands
   config/           # Config loading, token store, atomic writes
   discovery/        # Auto-discovery of running agents

@@ -47,7 +47,7 @@ type Instance struct {
 	ID            string         `json:"id"`
 	Name          string         `json:"name"`            // slug: "strategist-sarah"
 	DisplayName   string         `json:"display_name"`    // "Strategist Sarah"
-	Framework     string         `json:"framework"`       // "zeroclaw", "openclaw", "hermes"
+	Framework     string         `json:"framework"`       // "zeroclaw", "openclaw", "hermes", "picoclaw"
 	PersonaID     string         `json:"persona_id,omitempty"`
 	HierarchyRole HierarchyRole  `json:"hierarchy_role,omitempty"`
 	ProjectID     string         `json:"project_id,omitempty"`
