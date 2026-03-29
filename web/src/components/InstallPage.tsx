@@ -63,7 +63,10 @@ export default function InstallPage() {
       ...prev,
       [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success", progress: 100 },
     }));
-    setInstallLogs((prev) => ({ ...prev, [frameworkId]: [`${frameworkId} is installed and ready.`] }));
+    // Keep existing logs if we have them from this session, otherwise show a ready message
+    if (!installLogs[frameworkId]?.length) {
+      setInstallLogs((prev) => ({ ...prev, [frameworkId]: [`${frameworkId} is installed and ready.`] }));
+    }
     setShowLogs(true);
   };
 
