@@ -1,10 +1,9 @@
 # Eyrie
-
-<img width="1328" height="750" alt="image" src="https://github.com/user-attachments/assets/76319b5b-4b76-47ed-9a5e-2bde5f7876a2" />
+<img width="1318" height="766" alt="Screen Shot 2026-03-29 at 2 19 23 PM" src="https://github.com/user-attachments/assets/abb67d06-20c7-4c55-b41b-3aee3a23c456" />
 
 An agentic factory and control room for the Claw family of AI agent frameworks.
 
-Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, PicoClaw, and others.
+Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, PicoClaw, and others to come.
 
 > **v0.1.0-alpha** — This is an early alpha release intended for local development and experimentation. It binds to localhost only and has no authentication. Known security limitations:
 > - No request body size limits (large payloads can consume memory)
@@ -15,16 +14,15 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 
 ## Features
 
+- **Framework installation**: install new agent frameworks from the dashboard or CLI
+- **Agent provisioning**: create new agent instances with custom personas and configuration
+- **Lifecycle management**: start, stop, restart any agent from one place
+- **Session management**: browse, rename, reset, and delete conversation sessions
+- **Chat**: talk to any agent with streaming responses and live tool call visibility
+- **Project workspace**: split view with agent roster, hierarchy diagram, and @mention chat
 - **Agent hierarchy**: three-tier structure (commander → captain → talons) for organizing agents into project teams
 - **Dual control**: agents and users can both create projects, assign agents, and manage lifecycle — same API, same result
-- **Project workspace**: split view with agent roster, hierarchy diagram, and @mention chat
 - **Real-time visibility**: SSE event streaming so the dashboard updates live whether changes come from the user or an agent
-- **Auto-discovery** of running Claw instances on localhost
-- **Chat**: talk to any agent with streaming responses and live tool call visibility
-- **Agent provisioning**: create new agent instances with custom personas and configuration
-- **Session management**: browse, rename, reset, and delete conversation sessions
-- **Framework installation**: install new agent frameworks from the dashboard or CLI
-- **Lifecycle management**: start, stop, restart any agent from one place
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
 
 ### Project Orchestration
@@ -41,7 +39,7 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 - **Activity timeline**: per-project event feeds with tool calls, decisions, and progress tracking
 - **Agent profiles**: inspect identity, soul, and memory for any persistent agent
 
-<img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />
+<img width="1324" height="759" alt="Screen Shot 2026-03-29 at 2 19 34 PM" src="https://github.com/user-attachments/assets/ad151ea2-0195-472f-be07-bf694f0413a5" />
 
 ## Install
 
@@ -113,7 +111,7 @@ framework = "zeroclaw"
 url = "http://192.168.1.50:42617"
 ```
 
-<img width="1355" height="781" alt="image" src="https://github.com/user-attachments/assets/a28909f1-6c35-46eb-aa58-4217f7de3b60" />
+<img width="1323" height="749" alt="Screen Shot 2026-03-29 at 2 18 31 PM" src="https://github.com/user-attachments/assets/cdeab567-150e-48d4-b6dd-add402953a59" />
 
 ## Architecture
 
@@ -175,6 +173,8 @@ make build
 # Install to ~/.local/bin
 make install
 ```
+
+<img width="1334" height="772" alt="Screen Shot 2026-03-29 at 2 19 12 PM" src="https://github.com/user-attachments/assets/0cde0fdf-a030-434f-828a-0fa9dd03fa9a" />
 
 ## Troubleshooting
 
