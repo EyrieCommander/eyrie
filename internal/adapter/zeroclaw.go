@@ -939,6 +939,16 @@ func (z *ZeroClawAdapter) StreamMessage(ctx context.Context, message, sessionKey
 			case "done":
 				content, _ := frame["full_response"].(string)
 				ev = ChatEvent{Type: "done", Content: content}
+				// Forward usage stats if present in the frame
+				if v, ok := frame["input_tokens"].(float64); ok {
+					ev.InputTokens = int(v)
+				}
+				if v, ok := frame["output_tokens"].(float64); ok {
+					ev.OutputTokens = int(v)
+				}
+				if v, ok := frame["cost_usd"].(float64); ok {
+					ev.CostUSD = v
+				}
 				// Save enriched assistant message with tool call parts
 				assistantMsg := ChatMessage{
 					Timestamp: time.Now(),

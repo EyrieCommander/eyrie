@@ -1,15 +1,21 @@
 import { useCallback, useState, useEffect } from "react";
 
 const STORAGE_KEY = "eyrie-agent-metrics";
-// Keep last 50 latency measurements per agent
 const MAX_SAMPLES = 50;
 
 export interface AgentMetrics {
-  latencies: number[]; // milliseconds, most recent last
-  lastUpdated: string; // ISO timestamp
+  latencies: number[];     // milliseconds, most recent last
+  inputTokens: number[];   // per-message input token counts
+  outputTokens: number[];  // per-message output token counts
+  totalCost: number;       // cumulative cost in USD
+  lastUpdated: string;     // ISO timestamp
 }
 
 type MetricsStore = Record<string, AgentMetrics>;
+
+function emptyMetrics(): AgentMetrics {
+  return { latencies: [], inputTokens: [], outputTokens: [], totalCost: 0, lastUpdated: "" };
+}
 
 function readStore(): MetricsStore {
   try {
@@ -23,44 +29,52 @@ function readStore(): MetricsStore {
 function writeStore(store: MetricsStore) {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
-  } catch {
-    // localStorage full or unavailable
-  }
+  } catch {}
+}
+
+function ensureMetrics(store: MetricsStore, name: string): AgentMetrics {
+  if (!store[name]) store[name] = emptyMetrics();
+  const m = store[name];
+  // Migrate old format that only had latencies
+  if (!m.inputTokens) m.inputTokens = [];
+  if (!m.outputTokens) m.outputTokens = [];
+  if (!m.totalCost) m.totalCost = 0;
+  return m;
 }
 
 /** Record a latency measurement (ms) for an agent. */
 export function recordLatency(agentName: string, latencyMs: number) {
   const store = readStore();
-  const metrics = store[agentName] || { latencies: [], lastUpdated: "" };
-  metrics.latencies.push(Math.round(latencyMs));
-  if (metrics.latencies.length > MAX_SAMPLES) {
-    metrics.latencies = metrics.latencies.slice(-MAX_SAMPLES);
-  }
-  metrics.lastUpdated = new Date().toISOString();
-  store[agentName] = metrics;
+  const m = ensureMetrics(store, agentName);
+  m.latencies.push(Math.round(latencyMs));
+  if (m.latencies.length > MAX_SAMPLES) m.latencies = m.latencies.slice(-MAX_SAMPLES);
+  m.lastUpdated = new Date().toISOString();
   writeStore(store);
 }
 
-/** Get metrics for all agents. */
-export function getAllMetrics(): MetricsStore {
-  return readStore();
-}
-
-/** Get average latency for an agent, or null if no data. */
-export function avgLatency(agentName: string): number | null {
+/** Record token usage and cost for an agent. */
+export function recordUsage(agentName: string, inputTokens: number, outputTokens: number, costUsd: number) {
   const store = readStore();
-  const metrics = store[agentName];
-  if (!metrics || metrics.latencies.length === 0) return null;
-  const sum = metrics.latencies.reduce((a, b) => a + b, 0);
-  return Math.round(sum / metrics.latencies.length);
+  const m = ensureMetrics(store, agentName);
+  if (inputTokens > 0) {
+    m.inputTokens.push(inputTokens);
+    if (m.inputTokens.length > MAX_SAMPLES) m.inputTokens = m.inputTokens.slice(-MAX_SAMPLES);
+  }
+  if (outputTokens > 0) {
+    m.outputTokens.push(outputTokens);
+    if (m.outputTokens.length > MAX_SAMPLES) m.outputTokens = m.outputTokens.slice(-MAX_SAMPLES);
+  }
+  if (costUsd > 0) m.totalCost += costUsd;
+  m.lastUpdated = new Date().toISOString();
+  writeStore(store);
 }
 
 /** Get p50/p90/p99 latencies for an agent. */
 export function latencyPercentiles(agentName: string): { p50: number; p90: number; p99: number } | null {
   const store = readStore();
-  const metrics = store[agentName];
-  if (!metrics || metrics.latencies.length === 0) return null;
-  const sorted = [...metrics.latencies].sort((a, b) => a - b);
+  const m = store[agentName];
+  if (!m || !m.latencies?.length) return null;
+  const sorted = [...m.latencies].sort((a, b) => a - b);
   const p = (pct: number) => sorted[Math.min(Math.floor(sorted.length * pct), sorted.length - 1)];
   return { p50: p(0.5), p90: p(0.9), p99: p(0.99) };
 }

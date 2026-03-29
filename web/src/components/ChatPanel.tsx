@@ -22,7 +22,7 @@ import {
 } from "../lib/api";
 
 import { type ToolCall, matchToolResult } from "../lib/chat-events";
-import { recordLatency } from "../lib/useAgentMetrics";
+import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 export type { ToolCall };
 
 import {
@@ -426,6 +426,10 @@ export function ChatPanel({
                 timestamp: new Date().toISOString(),
               },
             ]);
+          }
+          // Record token usage and cost if available
+          if (ev.input_tokens || ev.output_tokens || ev.cost_usd) {
+            recordUsage(agentName, ev.input_tokens ?? 0, ev.output_tokens ?? 0, ev.cost_usd ?? 0);
           }
           setStreamingContent("");
           setToolCalls([]);

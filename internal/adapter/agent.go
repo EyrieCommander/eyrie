@@ -16,7 +16,7 @@ type Agent interface {
 	// Identity
 	ID() string
 	Name() string
-	Framework() string // "zeroclaw", "openclaw", "picoclaw", "hermes"
+	Framework() string // "zeroclaw", "openclaw", "picoclaw", "hermes", "embedded"
 
 	// Gateway connection info
 	BaseURL() string
@@ -114,15 +114,15 @@ func (s *AgentStatus) InferBusyState() {
 // /v1/models endpoint. It understands "custom:<url>" format and well-known
 // provider names. Returns "ok", "error", or "" if the URL can't be determined.
 func ProbeProvider(ctx context.Context, provider string) string {
-	baseURL := providerBaseURL(provider)
-	if baseURL == "" {
+	probeURL := providerProbeURL(provider)
+	if probeURL == "" {
 		return ""
 	}
 
-	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "GET", baseURL+"/models", nil)
+	req, err := http.NewRequestWithContext(ctx, "GET", probeURL, nil)
 	if err != nil {
 		return "error"
 	}
@@ -172,6 +172,31 @@ func providerBaseURL(provider string) string {
 		return ""
 	}
 
+	return ""
+}
+
+// providerProbeURL returns a fast, lightweight URL for health-probing a provider.
+// WHY not /models: OpenRouter's /models endpoint returns a huge JSON list and
+// routinely takes 3-4s, causing timeout-based false "unreachable" results.
+// /auth/key returns 401 in ~1.5s (no auth needed, just confirms reachability).
+func providerProbeURL(provider string) string {
+	// Custom provider: use /models (we don't know what endpoints it has)
+	if strings.HasPrefix(provider, "custom:") {
+		base := providerBaseURL(provider)
+		if base != "" {
+			return base + "/models"
+		}
+		return ""
+	}
+
+	switch {
+	case strings.Contains(provider, "openrouter"):
+		return "https://openrouter.ai/api/v1/auth/key"
+	case strings.Contains(provider, "openai"):
+		return "https://api.openai.com/v1/models"
+	case strings.Contains(provider, "anthropic"):
+		return ""
+	}
 	return ""
 }
 
@@ -240,6 +265,10 @@ type ChatEvent struct {
 	Output  string         `json:"output,omitempty"`
 	Success *bool          `json:"success,omitempty"`
 	Error   string         `json:"error,omitempty"`
+	// Usage stats (populated on "done" events when available)
+	InputTokens  int     `json:"input_tokens,omitempty"`
+	OutputTokens int     `json:"output_tokens,omitempty"`
+	CostUSD      float64 `json:"cost_usd,omitempty"`
 }
 
 // DiscoveredAgent holds the result of auto-discovery before a full adapter is created.

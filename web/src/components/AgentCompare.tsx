@@ -153,7 +153,7 @@ export default function AgentCompare() {
           <span>// latency is measured from send to first token — send messages to collect data</span>
           {Object.keys(metrics).length > 0 && (
             <button
-              onClick={resetMetrics}
+              onClick={() => { if (confirm("reset all latency data?")) resetMetrics(); }}
               className="text-text-muted/60 hover:text-red transition-colors"
             >
               (reset)
@@ -184,6 +184,8 @@ export default function AgentCompare() {
                   <th className="px-4 py-2.5 font-medium text-right">latency (avg)</th>
                   <th className="px-4 py-2.5 font-medium text-right">latency (p90)</th>
                   <th className="px-4 py-2.5 font-medium text-right">samples</th>
+                  <th className="px-4 py-2.5 font-medium text-right">tokens (avg)</th>
+                  <th className="px-4 py-2.5 font-medium text-right">cost</th>
                   <th className="px-4 py-2.5 font-medium">provider</th>
                   <th className="px-4 py-2.5 font-medium text-right">memory</th>
                   <th className="px-4 py-2.5 font-medium text-right">cpu</th>
@@ -235,6 +237,16 @@ export default function AgentCompare() {
                       </td>
                       <td className="px-4 py-2.5 text-right text-text-muted">
                         {m?.latencies.length ?? 0}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-text-secondary">
+                        {m?.inputTokens?.length ? (
+                          <span title={`in: ${Math.round(m.inputTokens.reduce((a, b) => a + b, 0) / m.inputTokens.length)} / out: ${Math.round(m.outputTokens.reduce((a, b) => a + b, 0) / m.outputTokens.length)}`}>
+                            {Math.round((m.inputTokens.reduce((a, b) => a + b, 0) + m.outputTokens.reduce((a, b) => a + b, 0)) / m.inputTokens.length).toLocaleString()}
+                          </span>
+                        ) : "-"}
+                      </td>
+                      <td className="px-4 py-2.5 text-right text-text-secondary">
+                        {m?.totalCost ? `$${m.totalCost.toFixed(4)}` : "-"}
                       </td>
                       <td className="px-4 py-2.5 text-text-secondary truncate max-w-28">
                         {agent.status?.provider || "-"}

@@ -90,6 +90,9 @@ export interface ChatEvent {
   output?: string;
   success?: boolean;
   error?: string;
+  input_tokens?: number;
+  output_tokens?: number;
+  cost_usd?: number;
 }
 
 export interface ConfigField {
@@ -274,4 +277,5 @@ export const FRAMEWORK_EMOJI: Record<string, string> = {
   openclaw: "🦞",
   hermes: "🔱",
   picoclaw: "🎯",
+  embedded: "⚡",
 };

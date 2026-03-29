@@ -40,7 +40,7 @@ import type { ProjectChatMessage } from "../lib/types";
 import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
 import { fetchProjectChat, streamProjectChat } from "../lib/api";
 import { useData } from "../lib/DataContext";
-import { recordLatency } from "../lib/useAgentMetrics";
+import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
 const ROLE_COLORS: Record<string, string> = {
   user: "text-green",
@@ -118,12 +118,22 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   }, []);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Load messages on mount
+  // Load messages on mount, auto-start chat if no messages exist yet
+  const autoStartedRef = useRef(false);
   useEffect(() => {
-        fetchProjectChat(projectId)
-      .then(setMessages)
-      .catch(console.error)
-  }, [projectId]);
+    fetchProjectChat(projectId)
+      .then((msgs) => {
+        setMessages(msgs);
+        // Auto-start the project chat when first opened with no messages.
+        // The project chat IS the project — opening it should kick off the
+        // commander introduction flow automatically.
+        if (msgs.length === 0 && !autoStartedRef.current && !sending) {
+          autoStartedRef.current = true;
+          send("Let's get started on this project.");
+        }
+      })
+      .catch(console.error);
+  }, [projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Poll for new messages when idle
   useEffect(() => {
@@ -240,6 +250,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                 return updated;
               });
             } else if (ev.type === "done") {
+              // Record token usage attributed to this agent
+              if (event.sender && (ev.input_tokens || ev.output_tokens || ev.cost_usd)) {
+                recordUsage(event.sender, ev.input_tokens ?? 0, ev.output_tokens ?? 0, ev.cost_usd ?? 0);
+              }
               clearStreaming();
             } else if (ev.type === "error") {
               setMessages((prev) => [...prev, {
