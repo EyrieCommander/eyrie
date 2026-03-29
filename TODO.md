@@ -112,6 +112,17 @@
 - [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
 - [x] **SSE streaming not rendering**: Root cause was `mountedRef` pattern — React re-renders briefly unmounted ProjectChat, causing the SSE callback to hold a stale ref and silently drop all events. Fixed by removing mountedRef, always-mounting ProjectChat (overlays for setup prompts), and using AbortController for cleanup. Vite proxy streams SSE fine.
 - [ ] **Config editor expands all defaults**: When saving config through the dashboard, ZeroClaw's GET /api/config returns all fields (including defaults). The editor writes the full config back to disk, bloating a 24-line provisioner config to 724 lines. Fix: read from disk for editing instead of from the API, so only user overrides are displayed and saved.
+- [ ] **Vite proxy buffers SSE responses**: The Vite dev server proxy (`http-proxy`) buffers SSE POST responses instead of streaming them. Events only appear when the response completes. Workaround: bypass proxy for SSE by calling Go backend directly (`SSE_BASE = "http://localhost:7200"` in dev) + CORS handler. Doesn't affect production (same-origin, no proxy).
+
+## Code Cleanup
+
+- [ ] **SSE_BASE unused in api.ts**: `SSE_BASE` is declared for Vite dev SSE bypass but never used by streaming functions. Either wire it into `streamMessage`/`streamProjectChat`/`streamInstall` or remove it.
+- [ ] **CORS allowlist from config**: Current `corsHandler` allows localhost only. For production, add `AllowedOrigins []string` to dashboard config and pass it to corsHandler.
+- [ ] **SetCaptainDialog error surfacing**: `streamCaptainBriefing` callback only console.errors on failure and still calls `onDone()`. Surface briefing failures to the user via error state.
+- [ ] **ProjectDetail reset validation**: The reset button's fetch calls don't check `response.ok`. Failures can be silently ignored.
+- [ ] **ProjectListPage unmount safety**: The polling loop in `handleStartCaptain` can update state after unmount. Add AbortController or mounted ref.
+- [ ] **InstallPage handleManage error overwrite**: `handleManage` unconditionally writes synthetic success into `installProgress`, potentially overwriting a prior error state.
+- [ ] **AgentDetail name editing error feedback**: The display name form swallows failures silently. Add local error state to surface update failures.
 
 ## UI
 
