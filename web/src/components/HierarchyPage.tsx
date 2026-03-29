@@ -531,6 +531,7 @@ export default function HierarchyPage() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [changingCommander, setChangingCommander] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -566,7 +567,7 @@ export default function HierarchyPage() {
   if (loading && !hierarchy) {
     return (
       <div className="py-20 text-center text-xs text-text-muted">
-        loading hierarchy...
+        loading mission control...
       </div>
     );
   }
@@ -612,9 +613,17 @@ export default function HierarchyPage() {
             <h1 className="text-sm font-bold text-text">
               <span className="text-accent">&gt;</span> mission control
             </h1>
-            <p className="text-[10px] text-text-muted">
-              commander: {hierarchy.commander.display_name || hierarchy.commander.name}
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] text-text-muted">
+                commander: {hierarchy.commander.display_name || hierarchy.commander.name}
+              </p>
+              <button
+                onClick={() => setChangingCommander(true)}
+                className="text-[9px] text-purple-400 hover:text-purple-300 transition-colors"
+              >
+                change
+              </button>
+            </div>
           </div>
         </div>
         <div className="flex items-center gap-2">
@@ -672,7 +681,47 @@ export default function HierarchyPage() {
           label="stopped"
           value={metrics?.stopped_agents ?? 0}
           valueColor={metrics?.stopped_agents && metrics.stopped_agents > 0 ? "text-red" : undefined}
+          sub={metrics?.stopped_agents && metrics.stopped_agents > 0 ? "needs attention" : undefined}
         />
+      </div>
+
+      {/* Commander change overlay */}
+      {changingCommander && (
+        <div className="border-b border-border px-5 py-3">
+          <div className="rounded border border-purple-400/30 bg-purple-400/5 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <span className="text-xs font-medium text-text">change commander</span>
+              <button
+                onClick={() => setChangingCommander(false)}
+                className="text-[10px] text-text-muted hover:text-text"
+              >
+                cancel
+              </button>
+            </div>
+            <CommanderSetup onCreated={() => { setChangingCommander(false); refresh(); }} />
+          </div>
+        </div>
+      )}
+
+      {/* Agent summary bar with links */}
+      <div className="flex items-center justify-between border-b border-border px-5 py-2">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+          // agents: {1 + allCaptains + allTalons}
+        </span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate("/mission-control/agents")}
+            className="text-[10px] text-accent hover:text-accent/80 transition-colors"
+          >
+            manage agents &rarr;
+          </button>
+          <button
+            onClick={() => navigate("/agents/compare")}
+            className="text-[10px] text-accent hover:text-accent/80 transition-colors"
+          >
+            compare agents &rarr;
+          </button>
+        </div>
       </div>
 
       {/* Timeline header */}

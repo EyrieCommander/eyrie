@@ -8,6 +8,7 @@ import AgentDetail from "./components/AgentDetail";
 import InstallPage from "./components/InstallPage";
 import PersonasPage from "./components/PersonasPage";
 import HierarchyPage from "./components/HierarchyPage";
+import AgentsPage from "./components/AgentsPage";
 import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
 import SettingsPage from "./components/SettingsPage";
@@ -47,8 +48,10 @@ function AppContent() {
                 </div>
               )}
               <Routes>
-                <Route path="/" element={<Navigate to="/hierarchy" replace />} />
-                <Route path="/hierarchy" element={<HierarchyPage />} />
+                <Route path="/" element={<Navigate to="/mission-control" replace />} />
+                <Route path="/hierarchy" element={<Navigate to="/mission-control" replace />} />
+                <Route path="/mission-control" element={<HierarchyPage />} />
+                <Route path="/mission-control/agents" element={<AgentsPage />} />
                 <Route path="/projects" element={<ProjectListPage />} />
             <Route
               path="/agents/overview"

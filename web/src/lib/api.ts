@@ -307,8 +307,9 @@ export async function getFrameworkDetail(id: string): Promise<Framework> {
   return res.json();
 }
 
-export async function fetchFrameworks(): Promise<Framework[]> {
-  const res = await fetch(`${BASE}/api/registry/frameworks`);
+export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
+  const qs = refresh ? "?refresh=true" : "";
+  const res = await fetch(`${BASE}/api/registry/frameworks${qs}`);
   if (!res.ok)
     throw new Error(`Failed to fetch frameworks: ${res.statusText}`);
   return res.json();
@@ -534,6 +535,15 @@ export async function fetchHierarchy(): Promise<HierarchyTree> {
   const res = await fetch(`${BASE}/api/hierarchy`);
   if (!res.ok) throw new Error(`Failed to fetch hierarchy: ${res.statusText}`);
   return res.json();
+}
+
+// Lightweight commander lookup — reads a JSON file instead of running full
+// discovery. Use this when you only need the commander's name/status.
+export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
+  const res = await fetch(`${BASE}/api/hierarchy/commander`);
+  if (!res.ok) throw new Error(`Failed to fetch commander: ${res.statusText}`);
+  const data = await res.json();
+  return data.commander ?? null;
 }
 
 export function streamCommanderBriefing(
