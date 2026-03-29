@@ -26,7 +26,7 @@ export default function App() {
 }
 
 function AppContent() {
-  const { agents, loading, error, refresh } = useData();
+  const { agents, loading, error, backendDown, refresh } = useData();
   useFont(); // Apply saved font on mount
   useTheme(); // Apply saved theme on mount
 
@@ -35,6 +35,14 @@ function AppContent() {
       <Sidebar />
 
       <main className="flex-1 overflow-hidden">
+        {/* Persistent banner when backend is unreachable — shown across all
+            routes so the user always knows why data isn't updating. */}
+        {backendDown && (
+          <div className="flex items-center gap-2 border-b border-yellow-500/30 bg-yellow-500/5 px-4 py-2 text-xs text-yellow-400">
+            <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+            backend unreachable — retrying...
+          </div>
+        )}
         <Routes>
           {/* Full-width routes (no padding/max-width) */}
           <Route path="/projects/:id" element={<ProjectDetail />} />
@@ -42,7 +50,7 @@ function AppContent() {
           {/* Constrained routes */}
           <Route path="*" element={
             <div className="mx-auto max-w-5xl px-8 py-8 h-full overflow-y-auto">
-              {error && (
+              {error && !backendDown && (
                 <div className="mb-6 rounded border border-red/30 bg-red/5 px-4 py-3 text-xs text-red">
                   {error}
                 </div>

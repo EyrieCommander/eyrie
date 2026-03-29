@@ -20,10 +20,6 @@ import type {
 } from "./types";
 
 const BASE = "";
-// SSE streaming endpoints bypass the Vite proxy (which buffers responses)
-// and connect directly to the Go backend. In production (no Vite), this
-// falls back to the same origin.
-const SSE_BASE = import.meta.env.DEV ? "http://localhost:7200" : "";
 
 // Default timeout for API requests (10 seconds). Prevents fetch calls from
 // hanging indefinitely when the backend is down or unresponsive.
@@ -142,6 +138,13 @@ export function streamActivity(
         summary: event.data,
       });
     }
+  };
+  // Stop reconnecting when the stream closes or the backend goes down.
+  // Without this, EventSource auto-reconnects every ~3s, flooding the
+  // console with ERR_CONNECTION_REFUSED.
+  es.onerror = () => {
+    if (es.readyState === EventSource.CLOSED) return;
+    es.close();
   };
   return () => es.close();
 }

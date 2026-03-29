@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Crown, User, Bot, RefreshCw } from "lucide-react";
 import type { HierarchyTree } from "../lib/types";
 import { fetchHierarchy } from "../lib/api";
+import { useData } from "../lib/DataContext";
 import { CommanderSetup } from "./CommanderSetup";
 
 // ─── Agent Card ───
@@ -50,6 +51,7 @@ function AgentCard({ displayName, role, roleBadgeColor, roleIcon: RoleIcon, stat
 
 export default function AgentsPage() {
   const navigate = useNavigate();
+  const { backendDown } = useData();
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
   const hierarchyRef = useRef<HierarchyTree | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,10 +71,11 @@ export default function AgentsPage() {
   }, []);
 
   useEffect(() => {
+    if (backendDown) return;
     refresh();
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
-  }, [refresh]);
+  }, [refresh, backendDown]);
 
   if (loading && !hierarchy) {
     return <div className="py-20 text-center text-xs text-text-muted">loading agents...</div>;

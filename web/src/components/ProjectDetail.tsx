@@ -73,7 +73,7 @@ function AgentCard({
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { agents, projects: ctxProjects, instances: ctxInstances, loading: ctxLoading, refresh: ctxRefresh } = useData();
+  const { agents, projects: ctxProjects, instances: ctxInstances, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -137,8 +137,12 @@ export default function ProjectDetail() {
   // Subscribe to project events for real-time updates.
   // Only refresh the agent roster, NOT the full context (which would
   // cause ProjectChat to unmount/remount and lose its state).
+  // WHY backendDown pause: When the backend is down, every EventSource
+  // attempt generates a browser-level ERR_CONNECTION_REFUSED that can't
+  // be caught. Pausing reconnection eliminates the noise; DataContext
+  // will re-enable when it successfully polls again.
   useEffect(() => {
-    if (!id) return;
+    if (!id || backendDown) return;
     let cancelled = false;
     let reconnectDelay = 2000; // 2s initial, doubles up to 30s
     let timeoutId: ReturnType<typeof setTimeout>;
@@ -166,7 +170,7 @@ export default function ProjectDetail() {
       clearTimeout(timeoutId);
       es?.close();
     };
-  }, [id, refresh]);
+  }, [id, refresh, backendDown]);
 
   if (loading && !project) {
     return <div className="py-20 text-center text-xs text-text-muted">loading project...</div>;
@@ -402,9 +406,10 @@ export default function ProjectDetail() {
                 if (!confirm("reset project chat and all agent sessions for this project?")) return;
                 try {
                   // Reset project chat
-                  await fetch(`/api/projects/${project.id}/chat`, { method: "DELETE" });
+                  const chatRes = await fetch(`/api/projects/${project.id}/chat`, { method: "DELETE" });
+                  if (!chatRes.ok) throw new Error(`chat reset failed: ${chatRes.status}`);
                   // Reset each agent's project session
-                  const sessionKey = project.session_key || `project-${project.id}`;
+                  const sessionKey = project.id;
                   const allAgents = [
                     commanderName,
                     ...(captainInstance ? [captainInstance.name] : []),

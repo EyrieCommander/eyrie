@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { BarChart3, Plus, RefreshCw, Crown, ChevronRight, MessageSquare, ChevronLeft } from "lucide-react";
 import type { HierarchyTree, ProjectTree } from "../lib/types";
 import { fetchHierarchy } from "../lib/api";
+import { useData } from "../lib/DataContext";
 import { CommanderSetup } from "./CommanderSetup";
 
 interface DashboardMetrics {
@@ -222,6 +223,7 @@ function LegendItem({ color, label }: { color: string; label: string }) {
 
 export default function HierarchyPage() {
   const navigate = useNavigate();
+  const { backendDown } = useData();
 
   // All hooks must come before any conditional returns
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
@@ -249,16 +251,17 @@ export default function HierarchyPage() {
   }, []);
 
   useEffect(() => {
+    if (backendDown) return; // don't poll when backend is unreachable
     refresh();
     const interval = setInterval(refresh, 15000);
     return () => clearInterval(interval);
-  }, [refresh]);
+  }, [refresh, backendDown]);
 
   // Fetch metrics — runs whenever hierarchy updates
   useEffect(() => {
-    if (!hierarchy) return;
+    if (!hierarchy || backendDown) return;
     fetch("/api/metrics").then((r) => { if (r.ok) return r.json(); throw new Error(`metrics: ${r.status}`); }).then(setMetrics).catch(() => {});
-  }, [hierarchy]);
+  }, [hierarchy, backendDown]);
 
   // ─── Conditional returns (after all hooks) ───
 

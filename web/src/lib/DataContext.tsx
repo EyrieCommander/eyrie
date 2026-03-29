@@ -9,6 +9,8 @@ interface DataContextValue {
   instances: AgentInstance[];
   loading: boolean;
   error: string | null;
+  /** True when all API fetches failed — backend is likely down or restarting. */
+  backendDown: boolean;
   refresh: (isUserInitiated?: boolean) => Promise<void>;
   pendingActions: Record<string, string>;
   setPendingAction: (agentName: string, action: string | null) => void;
@@ -22,6 +24,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [instances, setInstances] = useState<AgentInstance[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [backendDown, setBackendDown] = useState(false);
   const [pendingActions, setPendingActions] = useState<Record<string, string>>({});
 
   const setPendingAction = useCallback((agentName: string, action: string | null) => {
@@ -64,6 +67,9 @@ export function DataProvider({ children }: { children: ReactNode }) {
         errors.push(`instances: ${instanceResult.reason?.message || "fetch failed"}`);
       }
 
+      // All three failed → backend is down. Fewer than three → at least
+      // partially reachable, so clear the down flag.
+      setBackendDown(errors.length === 3);
       if (errors.length > 0) {
         setError(errors.join("; "));
       }
@@ -72,25 +78,44 @@ export function DataProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // WHY errorRef instead of error in deps: Including `error` in the
+  // WHY refs instead of state in deps: Including `error`/`backendDown` in the
   // dependency array causes the entire polling loop to tear down and restart
-  // on every error state transition (null→"error"→null), triggering an extra
-  // fetch each time. The ref lets the backoff logic read the current error
-  // state without restarting the loop.
+  // on every state transition (null→"error"→null), triggering an extra fetch
+  // each time. Refs let the backoff logic read current state without
+  // restarting the loop.
   const errorRef = useRef(error);
   useEffect(() => { errorRef.current = error; }, [error]);
+  const backendDownRef = useRef(backendDown);
+  useEffect(() => { backendDownRef.current = backendDown; }, [backendDown]);
+
+  // WHY consecutive failure count: A single failure could be a transient
+  // hiccup (backend recompiling). We only ramp up backoff after sustained
+  // failures, keeping reconnection snappy for brief restarts while reducing
+  // console noise during extended downtime.
+  const failCountRef = useRef(0);
 
   useEffect(() => {
     let timeoutId: ReturnType<typeof setTimeout>;
     let cancelled = false;
 
     const scheduleRefresh = () => {
-      // Back off to 60s when all fetches failed (backend likely down),
-      // reset to 30s on any success.
-      const delay = errorRef.current ? 60000 : 30000;
+      let delay: number;
+      if (backendDownRef.current) {
+        // Exponential backoff: 5s → 10s → 15s, capped at 15s.
+        // Keeps console quiet during extended downtime while still
+        // reconnecting within a reasonable window.
+        delay = Math.min(5000 + failCountRef.current * 5000, 15000);
+      } else {
+        delay = 30000;
+      }
       timeoutId = setTimeout(async () => {
         if (cancelled) return;
         await refresh(false);
+        if (backendDownRef.current) {
+          failCountRef.current++;
+        } else {
+          failCountRef.current = 0;
+        }
         if (!cancelled) scheduleRefresh();
       }, delay);
     };
@@ -106,7 +131,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   return (
-    <DataContext.Provider value={{ agents, projects, instances, loading, error, refresh, pendingActions, setPendingAction }}>
+    <DataContext.Provider value={{ agents, projects, instances, loading, error, backendDown, refresh, pendingActions, setPendingAction }}>
       {children}
     </DataContext.Provider>
   );
