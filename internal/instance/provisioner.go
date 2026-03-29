@@ -50,7 +50,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	if req.Framework == "" {
 		return nil, fmt.Errorf("framework: %w", ErrRequiredField)
 	}
-	if req.Framework != "zeroclaw" && req.Framework != "openclaw" && req.Framework != "hermes" {
+	if req.Framework != "zeroclaw" && req.Framework != "openclaw" && req.Framework != "hermes" && req.Framework != "picoclaw" {
 		return nil, fmt.Errorf("%q: %w", req.Framework, ErrUnsupportedFramework)
 	}
 
@@ -81,7 +81,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	switch req.Framework {
 	case "zeroclaw":
 		configExt = "toml"
-	case "openclaw":
+	case "openclaw", "picoclaw":
 		configExt = "json"
 	case "hermes":
 		configExt = "yaml"
@@ -214,16 +214,23 @@ func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, mode
 		return p.generateOpenClawConfig(inst, provider, model)
 	case "hermes":
 		return p.generateHermesConfig(inst, provider, model)
+	case "picoclaw":
+		return p.generatePicoClawConfig(inst, provider, model)
 	default:
 		return fmt.Errorf("unsupported framework %q", inst.Framework)
 	}
 }
 
 func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model string) error {
+	// WHY workspace is set explicitly: Without it, ZeroClaw defaults to
+	// ~/.zeroclaw/workspace/ — the parent installation's workspace. This
+	// causes all provisioned instances to share the parent's sessions DB,
+	// memory, and files. Each instance needs its own isolated workspace.
 	cfg := map[string]any{
 		"default_provider":    provider,
 		"default_model":       model,
 		"default_temperature": 0.7,
+		"workspace":           inst.WorkspacePath,
 		"gateway": map[string]any{
 			"port":                inst.Port,
 			"host":                "127.0.0.1",
@@ -288,6 +295,43 @@ func (p *Provisioner) generateOpenClawConfig(inst *Instance, provider, model str
 			"bind": "loopback",
 			"auth": map[string]any{
 				"token": token,
+			},
+		},
+	}
+	return config.WriteJSONAtomic(inst.ConfigPath, cfg)
+}
+
+func (p *Provisioner) generatePicoClawConfig(inst *Instance, provider, model string) error {
+	// WHY we generate a Pico channel token: PicoClaw's WebSocket chat requires
+	// a bearer token for authentication. Each provisioned instance needs its own
+	// token so Eyrie can connect to it independently.
+	token := uuid.New().String()
+	inst.AuthToken = token
+	cfg := map[string]any{
+		"version": 1,
+		"agents": map[string]any{
+			"defaults": map[string]any{
+				"workspace":            inst.WorkspacePath,
+				"restrict_to_workspace": true,
+				"provider":             provider,
+				"model_name":           model,
+				"max_tokens":           32768,
+				"max_tool_iterations":  50,
+			},
+		},
+		"gateway": map[string]any{
+			"port": inst.Port,
+			"host": "127.0.0.1",
+		},
+		"channels": map[string]any{
+			"pico": map[string]any{
+				"enabled": true,
+				"token":   token,
+			},
+		},
+		"tools": map[string]any{
+			"exec": map[string]any{
+				"enable_deny_patterns": true,
 			},
 		},
 	}

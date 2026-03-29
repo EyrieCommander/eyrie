@@ -160,7 +160,14 @@ export function ChatPanel({
   // ── Load sessions ───────────────────────────────────────────────────
 
   useEffect(() => {
-    if (briefMode === "commander") return;
+    if (briefMode === "commander") {
+      // WHY: Clear stale sessions so old tabs don't show during briefing.
+      // Sessions will be re-fetched after the briefing completes and the
+      // briefing session tab is selected.
+      setSessions([]);
+      setActiveGroupName("eyrie-commander-briefing");
+      return;
+    }
     fetchSessions(agentName)
       .then((resp) => {
         const all = resp.sessions ?? [];
@@ -364,12 +371,13 @@ export function ChatPanel({
 
   // ── Auto-scroll ─────────────────────────────────────────────────────
 
-  const briefTriggered = useRef(false);
-  const briefKey = `brief-${agentName}`;
-
-  useEffect(() => {
-    briefTriggered.current = !!(window as any)[briefKey];
-  }, [agentName, briefKey]);
+  // WHY: Track briefing by a composite key (agent + timestamp) rather than
+  // a simple boolean. A boolean ref gets reset by React Strict Mode's
+  // unmount/remount cycle, causing the briefing to fire twice. The key
+  // approach: we store a unique string when the briefing fires, and only
+  // fire if the current key doesn't match. A new ?brief=commander navigation
+  // generates a fresh key via the URL change itself.
+  const briefedKey = useRef<string | null>(null);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -439,10 +447,12 @@ export function ChatPanel({
   // ── Commander briefing ──────────────────────────────────────────────
 
   useEffect(() => {
-    if (briefMode !== "commander" || briefTriggered.current || !alive) return;
-    briefTriggered.current = true;
-    (window as any)[briefKey] = true;
-    setSearchParams({}, { replace: true });
+    const currentKey = `${agentName}:commander`;
+    if (briefMode !== "commander" || briefedKey.current === currentKey || !alive) return;
+    briefedKey.current = currentKey;
+    // WHY: Don't clear searchParams here — clearing briefMode mid-stream
+    // re-triggers the session load effect and can cause a double-fire.
+    // Clear it after the briefing completes (in the done handler below).
 
     let mounted = true;
     setSending(true);
@@ -508,13 +518,14 @@ export function ChatPanel({
         setStreamingContent("");
         setToolCalls([]);
         setSending(false);
-        briefTriggered.current = false;
-        delete (window as any)[briefKey];
+        briefedKey.current = null;
+        setSearchParams({}, { replace: true });
         return;
       }
 
       handleChatEvent(ev as ChatEvent, () => {
-        // On done: refresh sessions to find the briefing session
+        // On done: clear the brief param and refresh sessions
+        setSearchParams({}, { replace: true });
         fetchSessions(agentName)
           .then((resp) => {
             if (!mounted) return;
@@ -533,11 +544,10 @@ export function ChatPanel({
     return () => {
       mounted = false;
       controller.abort();
-      delete (window as any)[briefKey];
       retryTimeoutRef.current.forEach(clearTimeout);
       retryTimeoutRef.current = [];
     };
-  }, [briefMode, alive, agentName, briefKey, setSearchParams, handleChatEvent]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [briefMode, alive, agentName, setSearchParams, handleChatEvent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Send message ────────────────────────────────────────────────────
 

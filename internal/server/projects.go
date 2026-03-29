@@ -682,6 +682,8 @@ func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
+	// Also clear listening state so the next chat starts with default routing
+	cs.ClearListening(projectID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
