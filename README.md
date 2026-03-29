@@ -24,16 +24,14 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 
 - **Three-tier hierarchy**: Commander (strategy) → Captain (execution) → Talons (specialists)
 - **Project chat**: multi-agent group conversations with @mention routing and automatic agent-to-agent handoff
-- **Real-time control room**: mission control dashboard with metrics, swim-lane timeline, and commander bar
+- **Mission control**: dashboard with metrics, swim-lane timeline, and commander bar
 - **Project workspace**: split view with agent roster, hierarchy diagram, and live chat
 - **Dual control**: anything an agent can do, the user can also do via UI, and vice versa
-- **Persona catalog**: browse and apply agent personalities from a curated registry
+- **Persona catalog**: browse and install agent personalities from a curated registry
 
 ### In development
 
-- **Mission control**: cross-project dashboard with metrics, agent health, and commander access
 - **Activity timeline**: per-project event feeds with tool calls, decisions, and progress tracking
-- **Persona picker**: browse and install agent personas from a registry to provision specialist talons
 - **Agent profiles**: inspect identity, soul, and memory for any persistent agent
 
 <img width="1321" height="754" alt="Screen Shot 2026-03-17 at 2 08 39 PM" src="https://github.com/user-attachments/assets/0399bff7-9efa-44c1-a1aa-b395419b3c34" />

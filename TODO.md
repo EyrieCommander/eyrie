@@ -48,13 +48,13 @@
 14. [ ] **Activity timeline** — chronological event feed with filters
 
 **Phase 4 — Agent Context (backend)**
-13. [ ] **Project context in provisioning** — PROJECT.md in talon workspace with project info + team roster
-14. [ ] **Dynamic context updates** — regenerate PROJECT.md when team or project changes
-15. [ ] **System messages for structural changes** — visible in chat regardless of who (user or agent) made the change
+15. [ ] **Project context in provisioning** — PROJECT.md in talon workspace with project info + team roster
+16. [ ] **Dynamic context updates** — regenerate PROJECT.md when team or project changes
+17. [ ] **System messages for structural changes** — visible in chat regardless of who (user or agent) made the change
 
 **Phase 5 — User Override (frontend)**
-16. [ ] **Persona picker** — grid of persona cards for talon provisioning
-17. [ ] **Project creation with commander** — option to create via UI or ask commander
+18. [ ] **Persona picker** — grid of persona cards for talon provisioning
+19. [ ] **Project creation with commander** — option to create via UI or ask commander
 
 ---
 
