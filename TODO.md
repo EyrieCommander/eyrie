@@ -7,17 +7,19 @@
 **Design:** `eyrie/project-design.pen` (Pencil mockups), implementation plan at `~/.claude/plans/majestic-crunching-tiger.md`
 
 ### What's working:
-- Commander system: select existing agent, briefing flow, hierarchy page with role descriptions
-- Agent instances: provisioning ZeroClaw instances with own config/workspace/port
-- Named sessions on ZeroClaw 0.5.7 (upstream merged our PR #4267 as #4275)
-- Project CRUD with captain assignment
-- Project group chat: backend (SSE streaming, per-agent sessions, @mention routing)
-- Project group chat: frontend (messages, @mention autocomplete with keyboard nav)
-- Commander intake flow: 1:1 pre-chat with commander to establish project goals before group chat
-- Agent lifecycle: start/stop/restart (including provisioned instances)
+- Commander system: select/change commander, briefing on assignment, inline role instructions per project
+- Agent instances: provisioning ZeroClaw/PicoClaw instances with isolated workspace/port/sessions
+- Auto-pairing: provisioned instances get WebSocket auth tokens automatically on start
+- Project CRUD with captain assignment + system messages on structural changes
+- Project group chat: single-respondent routing with [LISTENING] + @mention agent-to-agent forwarding
+- Briefing templates: extracted to markdown files in `internal/server/briefings/`
+- Mission control: metric cards, swim-lane timeline, agent hierarchy subpage, commander bar
+- Project workspace: split view with roster, hierarchy diagram, and always-mounted chat
+- Agent lifecycle: start/stop/restart (including provisioned instances, autonomous mode)
 - Session management: time-gap spacers, most-recent-first tabs, reset/delete
 - Chat history from ZeroClaw's SQLite session DB + JSONL enrichment
 - Activity event streaming from ZeroClaw (tool calls, LLM requests, session events)
+- EyrieClaw embedded agents: in-process lightweight talons (in progress)
 
 ### Role hierarchy:
 - **Commander**: creates projects + assigns captains. User can also create projects via UI (dual control).
@@ -27,11 +29,11 @@
 
 ### Next steps (by phase):
 
-**Phase 3 — Control Room UI (frontend)** — in progress
+**Phase 3 — Control Room UI (frontend)**
 9. [x] **Project workspace** — split view: agent roster sidebar + hierarchy diagram + chat workspace
 10. [x] **Real-time SSE streaming** — project chat streams messages, tool calls, and deltas in real-time
-11. [x] **Commander/captain routing** — commander speaks first, captain takes over, @mention for specific agents
-12. [ ] **Mission control** — dashboard with metrics, project cards, commander access
+11. [x] **Commander/captain routing** — commander speaks first, hands off to captain via @mention, agent-to-agent forwarding
+12. [x] **Mission control** — dashboard with metrics, swim-lane timeline, hierarchy subpage, commander bar. Route: /mission-control
 13. [ ] **Agent profile** — identity/soul/memory display + 1:1 chat
 14. [ ] **Activity timeline** — chronological event feed with filters
 
