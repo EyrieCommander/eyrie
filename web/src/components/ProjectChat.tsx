@@ -119,10 +119,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const abortRef = useRef<AbortController | null>(null);
 
   // Load messages on mount
+  const [chatLoaded, setChatLoaded] = useState(false);
   useEffect(() => {
-        fetchProjectChat(projectId)
-      .then(setMessages)
-      .catch(console.error)
+    setChatLoaded(false);
+    fetchProjectChat(projectId)
+      .then((msgs) => { setMessages(msgs); setChatLoaded(true); })
+      .catch((err) => { console.error(err); setChatLoaded(true); });
   }, [projectId]);
 
   // Poll for new messages when idle
@@ -291,6 +293,19 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     if (inputRef.current) inputRef.current.style.height = "auto";
     send(msg);
   }, [input, send]);
+
+  // Auto-start project chat when loaded with no messages.
+  // WHY autoStartedRef: Prevents double-fire in StrictMode. The ref is set
+  // to true before the send call, so the re-mount cycle sees it as already
+  // started. The ref resets on remount (e.g. chatKey increment after reset),
+  // which is exactly when we want auto-start to fire again.
+  const autoStartedRef = useRef(false);
+  useEffect(() => {
+    if (chatLoaded && !autoStartedRef.current && !sending && messages.length === 0) {
+      autoStartedRef.current = true;
+      send("Let's get started on this project.");
+    }
+  }, [chatLoaded, sending, messages.length, send]);
 
   // Sort messages: system before user when timestamps are within 1 second
   const sortedMessages = [...messages].sort((a, b) => {
