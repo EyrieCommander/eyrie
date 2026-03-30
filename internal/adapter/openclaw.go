@@ -1160,6 +1160,13 @@ func (o *OpenClawAdapter) parseChatStreamEvent(frame map[string]any) *ChatEvent 
 	}
 }
 
+// Interrupt asks OpenClaw to cancel an in-flight response.
+// OpenClaw emits "aborted" events internally, but no public RPC method
+// is exposed yet. No-op until we identify the right RPC call.
+func (o *OpenClawAdapter) Interrupt(_ context.Context, _ string) error {
+	return nil
+}
+
 func (o *OpenClawAdapter) CreateSession(_ context.Context, name string) (*Session, error) {
 	key := "agent:main:" + name
 	return &Session{Key: key, Title: name}, nil

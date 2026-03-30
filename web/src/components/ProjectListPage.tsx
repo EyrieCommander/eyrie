@@ -27,6 +27,11 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
 
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState("");
+  const abortRef = useRef<AbortController | null>(null);
+
+  useEffect(() => {
+    return () => { abortRef.current?.abort(); };
+  }, []);
 
   // Derived default captain name from project name
   const defaultCaptainName = `captain-${name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}`;
@@ -89,13 +94,17 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
   };
 
   const handleStartCaptain = async (id: string) => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
     setStartingCaptain(id);
     try {
       await instanceAction(id, "start");
       // Poll until instance status updates (max 15s)
       for (let i = 0; i < 15; i++) {
-
+        if (controller.signal.aborted) return;
         await new Promise((r) => setTimeout(r, 1000));
+        if (controller.signal.aborted) return;
 
         const all = await fetchInstances();
 
@@ -107,11 +116,13 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
         }
       }
       // Timeout — refresh anyway
+      if (controller.signal.aborted) return;
       setError("Captain may still be starting — check status and retry if needed");
       const all = await fetchInstances();
       setExistingCaptains(all.filter((inst) => inst.hierarchy_role === "captain"));
       setStartingCaptain("");
     } catch (e) {
+      if (controller.signal.aborted) return;
       setError(e instanceof Error ? e.message : "Failed to start captain");
       setStartingCaptain("");
     }

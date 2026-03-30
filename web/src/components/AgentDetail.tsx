@@ -59,6 +59,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
   const [editingName, setEditingName] = useState(false);
   const [nameInput, setNameInput] = useState("");
   const [nameSaving, setNameSaving] = useState(false);
+  const [nameError, setNameError] = useState<string | null>(null);
   const { setPendingAction } = useData();
 
   const actionControllerRef = useRef<AbortController | null>(null);
@@ -189,7 +190,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
                   await updateDisplayName(agent.name, cleaned);
                   if (onRefresh) await onRefresh();
                 } catch (err) {
-                  console.error("Failed to update display name:", err);
+                  setNameError(err instanceof Error ? err.message : "failed to save name");
                 }
                 setNameSaving(false);
                 setEditingName(false);
@@ -212,7 +213,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
             </form>
           ) : (
             <button
-              onClick={() => { setNameInput(agent.display_name || agent.name); setEditingName(true); }}
+              onClick={() => { setNameInput(agent.display_name || agent.name); setEditingName(true); setNameError(null); }}
               className="group relative"
             >
               <h2 className="text-xl font-bold">{agent.display_name || agent.name}</h2>
@@ -226,6 +227,9 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
         <p className="mt-1 text-xs text-text-muted">
           // gateway: {agent.host}:{agent.port}
         </p>
+        {nameError && (
+          <p className="mt-1 text-xs text-red">{nameError}</p>
+        )}
       </div>
 
       <div className="flex border-b border-border">
@@ -248,7 +252,7 @@ export default function AgentDetail({ agent, onRefresh }: AgentDetailProps) {
           .catch((err) => setConfigError(err.message ?? "Failed to load config"));
       }} />}
       {tab === "chat" && (
-        <ChatPanel alive={agent.alive} framework={agent.framework} agentName={agent.name} />
+        <ChatPanel key={agent.name} alive={agent.alive} framework={agent.framework} agentName={agent.name} />
       )}
 
       {/* Terminal Modal */}

@@ -14,7 +14,7 @@ export function AddAgentDialog({
   onClose,
 }: AddAgentDialogProps) {
   const [name, setName] = useState("");
-  const [framework, setFramework] = useState("openclaw");
+  const [framework, setFramework] = useState("embedded");
   const [personaId, setPersonaId] = useState("");
   const [personas, setPersonas] = useState<Persona[]>([]);
   const [creating, setCreating] = useState(false);
@@ -94,6 +94,7 @@ export function AddAgentDialog({
             onChange={(e) => setFramework(e.target.value)}
             className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
           >
+            <option value="embedded">Embedded (EyrieClaw)</option>
             <option value="zeroclaw">ZeroClaw</option>
             <option value="openclaw">OpenClaw</option>
             <option value="hermes">Hermes</option>

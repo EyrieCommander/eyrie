@@ -603,6 +603,8 @@ func (p *PicoClawAdapter) chatHistoryFromDisk(sessionKey string, limit int) ([]C
 	return messages, nil
 }
 
+func (p *PicoClawAdapter) Interrupt(_ context.Context, _ string) error { return nil }
+
 // CreateSession generates a new session UUID. PicoClaw creates sessions
 // implicitly when a message is sent with a new session_id.
 func (p *PicoClawAdapter) CreateSession(_ context.Context, name string) (*Session, error) {

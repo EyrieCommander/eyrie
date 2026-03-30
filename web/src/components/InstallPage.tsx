@@ -59,10 +59,15 @@ export default function InstallPage() {
 
   const handleManage = (frameworkId: string) => {
     setSelectedFramework(frameworkId);
-    setInstallProgress((prev) => ({
-      ...prev,
-      [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success" as const, progress: 100, message: "installed", started_at: new Date().toISOString() },
-    }));
+    // Only write synthetic success if there isn't an existing error state —
+    // otherwise we'd silently overwrite the error the user needs to see.
+    setInstallProgress((prev) => {
+      if (prev[frameworkId]?.status === "error") return prev;
+      return {
+        ...prev,
+        [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success" as const, progress: 100, message: "installed", started_at: new Date().toISOString() },
+      };
+    });
     // Keep existing logs if we have them from this session, otherwise show a ready message
     if (!installLogs[frameworkId]?.length) {
       setInstallLogs((prev) => ({ ...prev, [frameworkId]: [`${frameworkId} is installed and ready.`] }));

@@ -789,6 +789,10 @@ func (h *HermesAdapter) readChatStream(ctx context.Context, cmd *exec.Cmd, stdou
 	}
 }
 
+// Interrupt is a no-op for Hermes — cancellation already works via
+// exec.CommandContext, which kills the subprocess when ctx is cancelled.
+func (h *HermesAdapter) Interrupt(_ context.Context, _ string) error { return nil }
+
 // CreateSession creates a new conversation session
 func (h *HermesAdapter) CreateSession(ctx context.Context, name string) (*Session, error) {
 	// Hermes creates sessions automatically when chatting begins.

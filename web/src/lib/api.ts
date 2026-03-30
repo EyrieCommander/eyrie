@@ -706,6 +706,11 @@ export function streamProjectChat(
   return controller;
 }
 
+/** Tell the backend to cancel an in-flight project chat orchestration. */
+export async function stopProjectChat(projectId: string): Promise<void> {
+  await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/stop`, { method: "POST" });
+}
+
 export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {
   const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander`, {
     method: "POST",

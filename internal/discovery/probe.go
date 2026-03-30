@@ -23,6 +23,11 @@ func probeHealth(ctx context.Context, framework, host string, port int) bool {
 	switch framework {
 	case "hermes":
 		return probeHermesPID()
+	case "embedded":
+		// Embedded agents have no HTTP endpoint. Liveness is determined by
+		// the adapter's running flag, checked via probeEmbeddedByName().
+		// The caller passes the agent name for embedded lookups.
+		return probeEmbeddedByName(host)
 	default:
 		return probeHTTP(probeCtx, host, port)
 	}
@@ -68,6 +73,18 @@ func probeHermesPID() bool {
 	}
 
 	return true
+}
+
+// probeEmbeddedByName checks whether an embedded agent is running by looking
+// up its cached adapter singleton.
+func probeEmbeddedByName(name string) bool {
+	embeddedAdaptersMu.Lock()
+	a, ok := embeddedAdapters[name]
+	embeddedAdaptersMu.Unlock()
+	if !ok {
+		return false
+	}
+	return a.IsRunning()
 }
 
 // probeHTTP does a quick GET /health against an HTTP gateway.

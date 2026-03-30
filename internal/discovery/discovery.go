@@ -6,10 +6,21 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/instance"
+)
+
+// WHY package-level singleton: Embedded adapters are stateful (they hold
+// a running goroutine, session store, and log buffer). Unlike HTTP-client
+// adapters that can be recreated per request, embedded adapters must persist
+// across discovery cycles. This map ensures the same adapter is returned
+// for a given agent name. See CLAUDE.md anti-pattern: "Per-request singletons".
+var (
+	embeddedAdapters   = map[string]*adapter.EmbeddedAdapter{}
+	embeddedAdaptersMu sync.Mutex
 )
 
 // Result holds the outcome of a discovery run.
@@ -32,6 +43,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	discovered := scanConfigFiles(cfg.Discovery.ConfigPaths)
 
 	// Stage 1b: Scan provisioned instances from ~/.eyrie/instances/
+	// Embedded instances are handled inline (no config file scanning needed).
 	discovered = append(discovered, scanInstances()...)
 
 	// Include manually configured agents
@@ -60,7 +72,13 @@ func Run(ctx context.Context, cfg config.Config) Result {
 	// Stage 3: Probe health endpoints
 	instStore, _ := instance.NewStore()
 	for _, agent := range discovered {
-		alive := probeHealth(ctx, agent.Framework, agent.Host, agent.Port)
+		// For embedded agents, pass the agent name so the probe can look up
+		// the cached adapter singleton. For all others, pass the host.
+		probeHost := agent.Host
+		if agent.Framework == "embedded" {
+			probeHost = agent.Name
+		}
+		alive := probeHealth(ctx, agent.Framework, probeHost, agent.Port)
 		result.Agents = append(result.Agents, AgentResult{
 			Agent: agent,
 			Alive: alive,
@@ -106,6 +124,21 @@ func scanInstances() []adapter.DiscoveredAgent {
 
 	var agents []adapter.DiscoveredAgent
 	for _, inst := range instances {
+		// Embedded agents don't have config files that need scanning —
+		// they are discovered directly from the instance metadata.
+		if inst.Framework == "embedded" {
+			agents = append(agents, adapter.DiscoveredAgent{
+				Name:        inst.Name,
+				DisplayName: inst.DisplayName,
+				Framework:   "embedded",
+				Host:        "127.0.0.1",
+				Port:        0, // No gateway port — runs in-process
+				ConfigPath:  inst.ConfigPath,
+				InstanceID:  inst.ID,
+			})
+			continue
+		}
+
 		// Determine framework from config file extension
 		expanded := config.ExpandHome(inst.ConfigPath)
 		if _, err := os.Stat(expanded); err != nil {
@@ -232,6 +265,22 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 		return adapter.NewHermesAdapter(
 			d.Name, d.Name, d.ConfigPath, binaryPath,
 		)
+	case "embedded":
+		// Return the cached adapter if it exists — embedded adapters are
+		// stateful singletons that must persist across discovery cycles.
+		embeddedAdaptersMu.Lock()
+		if existing, ok := embeddedAdapters[d.Name]; ok {
+			embeddedAdaptersMu.Unlock()
+			return existing
+		}
+		workspacePath := ""
+		if d.ConfigPath != "" {
+			workspacePath = filepath.Join(filepath.Dir(d.ConfigPath), "workspace")
+		}
+		a := adapter.NewEmbeddedAdapter(d.Name, d.Name, d.ConfigPath, workspacePath)
+		embeddedAdapters[d.Name] = a
+		embeddedAdaptersMu.Unlock()
+		return a
 	default:
 		return adapter.NewZeroClawAdapter(
 			d.Name, d.Name, d.URL(), d.Token, d.ConfigPath,

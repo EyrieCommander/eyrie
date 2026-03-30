@@ -245,6 +245,14 @@ func (s *Server) handleAgentChat(w http.ResponseWriter, r *http.Request) {
 	for ev := range eventCh {
 		sse.WriteEvent(ev)
 	}
+
+	// If the client aborted (stop button), ask the framework to discard
+	// the in-flight response so the agent doesn't have stale context.
+	if ctx.Err() != nil {
+		intCtx, intCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = agent.Interrupt(intCtx, body.SessionKey)
+		intCancel()
+	}
 }
 
 func (s *Server) handleCreateSession(w http.ResponseWriter, r *http.Request) {

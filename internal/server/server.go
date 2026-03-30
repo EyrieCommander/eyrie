@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/config"
@@ -24,6 +25,11 @@ type Server struct {
 	server *http.Server
 	hidden *config.HiddenStore
 	events *EventBus
+
+	// activeChats stores cancel functions for in-flight project chat
+	// orchestrations. Keyed by project ID. Used by the stop endpoint
+	// to cancel the detached agent context.
+	activeChats sync.Map // map[string]context.CancelFunc
 }
 
 func New(cfg config.Config) *Server {
@@ -92,6 +98,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE /api/projects/{id}/agents/{instanceId}", s.handleRemoveProjectAgent)
 	s.mux.HandleFunc("GET /api/projects/{id}/chat", s.handleProjectChatMessages)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat", s.handleProjectChatSend)
+	s.mux.HandleFunc("POST /api/projects/{id}/chat/stop", s.handleProjectChatStop)
 	s.mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleProjectChatClear)
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
 	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)

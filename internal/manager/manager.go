@@ -32,6 +32,10 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 		return executeOpenClaw(ctx, action)
 	case "hermes":
 		return executeHermes(ctx, action)
+	case "embedded":
+		// Embedded agents run in-process as goroutines — lifecycle is managed
+		// by the adapter, not by external CLI commands. This is a no-op.
+		return nil
 	default:
 		return fmt.Errorf("unknown framework %q: cannot determine lifecycle command", framework)
 	}
@@ -338,6 +342,10 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			return runDetached(ctx, hLogDir, "hermes", "gateway", string(action), "--config", configPath)
 		}
 		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	case "embedded":
+		// Embedded agents have no external process — lifecycle is managed
+		// by the adapter's Start/Stop/Restart methods directly.
+		return nil
 	default:
 		return fmt.Errorf("unknown framework %q", framework)
 	}
