@@ -68,6 +68,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("PUT /api/agents/{name}/config", s.handleAgentConfigUpdate)
 	s.mux.HandleFunc("POST /api/agents/{name}/config/validate", s.handleAgentConfigValidate)
 	s.mux.HandleFunc("GET /api/agents/{name}/terminal/ws", s.handleTerminal)
+	s.mux.HandleFunc("GET /api/terminal/ws", s.handleShellTerminal)
 	s.mux.HandleFunc("GET /api/agents/{name}/models", s.handleAgentModels)
 	s.mux.HandleFunc("PUT /api/agents/{name}/display-name", s.handleUpdateDisplayName)
 

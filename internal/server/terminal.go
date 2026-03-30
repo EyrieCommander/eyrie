@@ -15,6 +15,86 @@ import (
 	"nhooyr.io/websocket"
 )
 
+// handleShellTerminal spawns a plain shell (not agent-specific).
+// Used for onboarding and setup commands when no agent is running yet.
+// GET /api/terminal/ws
+func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
+		InsecureSkipVerify: true,
+	})
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to upgrade connection: %v", err), http.StatusBadRequest)
+		return
+	}
+	defer conn.Close(websocket.StatusNormalClosure, "terminal session ended")
+
+	ctx := context.Background()
+
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/zsh"
+	}
+
+	cmd := exec.CommandContext(ctx, shell, "-l")
+	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+
+	ptmx, err := pty.Start(cmd)
+	if err != nil {
+		slog.Error("Failed to start shell PTY", "error", err)
+		return
+	}
+	defer func() {
+		ptmx.Close()
+		if cmd.Process != nil {
+			cmd.Process.Kill()
+		}
+	}()
+
+	pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80})
+
+	ptyDone := make(chan struct{})
+	go func() {
+		defer close(ptyDone)
+		buf := make([]byte, 8192)
+		for {
+			n, err := ptmx.Read(buf)
+			if err != nil {
+				conn.Close(websocket.StatusNormalClosure, "process exited")
+				return
+			}
+			if n > 0 {
+				if err := conn.Write(ctx, websocket.MessageBinary, buf[:n]); err != nil {
+					return
+				}
+			}
+		}
+	}()
+
+	for {
+		select {
+		case <-ptyDone:
+			return
+		default:
+		}
+		msgType, data, err := conn.Read(ctx)
+		if err != nil {
+			break
+		}
+		if msgType == websocket.MessageText || msgType == websocket.MessageBinary {
+			msg := string(data)
+			if len(msg) > 7 && msg[:7] == "resize:" {
+				var rows, cols uint16
+				fmt.Sscanf(msg[7:], "%d:%d", &rows, &cols)
+				pty.Setsize(ptmx, &pty.Winsize{Rows: rows, Cols: cols})
+				continue
+			}
+			if _, err := ptmx.Write(data); err != nil {
+				return
+			}
+		}
+	}
+}
+
 // handleTerminal spawns an interactive terminal session for an agent
 func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")

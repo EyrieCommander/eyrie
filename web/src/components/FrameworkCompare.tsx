@@ -312,6 +312,18 @@ export default function FrameworkCompare() {
     } finally { setLoading(false); }
   };
 
+  const [setupCommand, setSetupCommand] = useState<string | undefined>();
+  const [showApiKeyPrompt, setShowApiKeyPrompt] = useState<string | null>(null); // framework ID
+
+  const handleSetup = (frameworkId: string) => {
+    const fw = frameworks.find((f) => f.id === frameworkId);
+    // Use full path — the binary may not be in $PATH yet
+    const binaryPath = fw?.binary_path || frameworkId;
+    setSelectedFramework(frameworkId);
+    setSetupCommand(`${binaryPath} onboard`);
+    setShowTerminal(true);
+  };
+
   const handleManage = (frameworkId: string) => {
     setSelectedFramework(frameworkId);
     setInstallProgress((prev) => {
@@ -368,14 +380,23 @@ export default function FrameworkCompare() {
             // install, compare capabilities, and evaluate trade-offs
           </p>
         </div>
-        <button
-          onClick={() => loadFrameworks(true)}
-          disabled={loading}
-          className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
-        >
-          <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          $ refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { setSelectedFramework("shell"); setSetupCommand(undefined); setShowTerminal(true); }}
+            className="flex items-center gap-1.5 text-xs text-text-muted transition-colors hover:text-text"
+          >
+            <TerminalIcon className="h-3.5 w-3.5" />
+            $ terminal
+          </button>
+          <button
+            onClick={() => loadFrameworks(true)}
+            disabled={loading}
+            className="flex items-center gap-2 text-xs text-text-muted transition-colors hover:text-text disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            $ refresh
+          </button>
+        </div>
       </div>
 
       {error && (
@@ -404,6 +425,7 @@ export default function FrameworkCompare() {
                   installProgress={installProgress[fw.id]}
                   onInstall={() => handleInstall(fw.id)}
                   onManage={() => handleManage(fw.id)}
+                  onSetup={() => handleSetup(fw.id)}
                   disabled={loading}
                 />
                 {/* Extra metadata below card */}
@@ -531,8 +553,61 @@ export default function FrameworkCompare() {
       )}
 
       {showTerminal && selectedFramework && (
-        <Terminal agentName={selectedFramework} onClose={() => setShowTerminal(false)} />
+        <Terminal
+          agentName={selectedFramework}
+          onClose={() => {
+            const wasSetup = !!setupCommand;
+            const fwId = selectedFramework;
+            setShowTerminal(false);
+            setSetupCommand(undefined);
+            loadFrameworks();
+            // After setup onboarding, prompt for API key configuration
+            if (wasSetup && fwId !== "shell") {
+              setShowApiKeyPrompt(fwId);
+            }
+          }}
+          initialCommand={setupCommand}
+          useShell={!!setupCommand || selectedFramework === "shell"}
+        />
       )}
+
+      {/* API key prompt after setup */}
+      {showApiKeyPrompt && (() => {
+        const fw = frameworks.find((f) => f.id === showApiKeyPrompt);
+        const hint = fw?.config_schema?.api_key_hint;
+        return (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4" onClick={() => setShowApiKeyPrompt(null)}>
+            <div className="bg-bg border border-border rounded-lg shadow-2xl w-full max-w-md p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
+              <div>
+                <h3 className="text-sm font-bold text-text">{fw?.name || showApiKeyPrompt} — API key setup</h3>
+                <p className="mt-1 text-xs text-text-muted">onboarding complete. configure an API key to start using the framework.</p>
+              </div>
+              {hint && (
+                <div className="rounded border border-border bg-surface p-3 text-xs text-text-secondary whitespace-pre-wrap">
+                  {hint}
+                </div>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  onClick={() => setShowApiKeyPrompt(null)}
+                  className="px-3 py-1.5 text-xs text-text-muted hover:text-text transition-colors"
+                >
+                  later
+                </button>
+                <button
+                  onClick={() => {
+                    setShowApiKeyPrompt(null);
+                    navigate(`/agents/${showApiKeyPrompt}/config`);
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium bg-accent text-white rounded hover:bg-accent/80 transition-colors"
+                >
+                  open config editor
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

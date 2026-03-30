@@ -8,6 +8,7 @@ interface FrameworkCardProps {
   installProgress?: InstallProgress;
   onInstall: () => void;
   onManage?: () => void;
+  onSetup?: () => void;
   disabled?: boolean;
 }
 
@@ -16,12 +17,18 @@ export default function FrameworkCard({
   installProgress,
   onInstall,
   onManage,
+  onSetup,
   disabled,
 }: FrameworkCardProps) {
   const isInstalling = installProgress?.status === "running";
-  const isSuccess = installProgress?.status === "success";
+  // A cached "success" status is stale if the binary no longer exists on disk.
+  const isSuccess = installProgress?.status === "success" && framework.installed;
   const isAlreadyInstalled = framework.installed && !isInstalling;
+  const isConfigured = framework.configured;
+  const needsSetup = isAlreadyInstalled && !isConfigured;
   const isError = installProgress?.status === "error" && !isAlreadyInstalled;
+  // Install claimed success but binary is missing — treat as failed
+  const isStale = installProgress?.status === "success" && !framework.installed;
 
   const [, setTick] = useState(0);
 
@@ -51,11 +58,19 @@ export default function FrameworkCard({
           <h3 className="text-sm font-semibold text-text">{framework.name}</h3>
           <p className="text-[10px] text-text-muted">{framework.id}</p>
         </div>
-        {isAlreadyInstalled && (
-          <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
-            installed
+        {isStale ? (
+          <span className="rounded bg-red/10 px-1.5 py-0.5 text-[10px] font-medium text-red">
+            not found
           </span>
-        )}
+        ) : isAlreadyInstalled && needsSetup ? (
+          <span className="rounded bg-yellow/10 px-1.5 py-0.5 text-[10px] font-medium text-yellow">
+            needs setup
+          </span>
+        ) : isAlreadyInstalled ? (
+          <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
+            ready
+          </span>
+        ) : null}
       </div>
 
       {/* Description */}
@@ -92,10 +107,14 @@ export default function FrameworkCard({
 
       {/* Install button */}
       <button
-        onClick={(isAlreadyInstalled || isSuccess) && onManage ? onManage : onInstall}
+        onClick={isStale ? onInstall : needsSetup && onSetup ? onSetup : (isAlreadyInstalled || isSuccess) && onManage ? onManage : onInstall}
         disabled={disabled}
         className={`flex w-full items-center justify-center gap-2 rounded px-3 py-2 text-xs font-medium transition-colors ${
-          (isSuccess || isAlreadyInstalled)
+          isStale
+            ? "bg-red/10 text-red hover:bg-red/20"
+            : needsSetup
+            ? "bg-yellow/10 text-yellow hover:bg-yellow/20"
+            : (isSuccess || isAlreadyInstalled)
             ? "bg-green/10 text-green hover:bg-green/20"
             : isError
               ? "bg-red/10 text-red hover:bg-red/20"
@@ -104,7 +123,17 @@ export default function FrameworkCard({
                 : "border border-accent text-accent hover:bg-accent hover:text-white"
         } disabled:opacity-50 disabled:cursor-not-allowed`}
       >
-        {isAlreadyInstalled ? (
+        {isStale ? (
+          <>
+            <Download className="h-3.5 w-3.5" />
+            reinstall
+          </>
+        ) : isAlreadyInstalled && needsSetup ? (
+          <>
+            <Settings className="h-3.5 w-3.5" />
+            set up
+          </>
+        ) : isAlreadyInstalled ? (
           <>
             <Settings className="h-3.5 w-3.5" />
             manage

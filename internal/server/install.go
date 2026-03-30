@@ -156,7 +156,8 @@ func isProcessAlive(pid int) bool {
 
 type frameworkWithStatus struct {
 	registry.Framework
-	Installed bool `json:"installed"`
+	Installed  bool `json:"installed"`  // binary exists on disk
+	Configured bool `json:"configured"` // config file exists (onboarding complete)
 }
 
 // handleListFrameworks returns all frameworks from the registry with installation status
@@ -183,30 +184,36 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 	// Check installation status for each framework
 	result := make([]frameworkWithStatus, len(frameworks))
 	for i, fw := range frameworks {
+		installed, configured := frameworkStatus(fw)
 		result[i] = frameworkWithStatus{
-			Framework: fw,
-			Installed: isFrameworkInstalled(fw),
+			Framework:  fw,
+			Installed:  installed,
+			Configured: configured,
 		}
 	}
 
 	writeJSON(w, http.StatusOK, result)
 }
 
-// isFrameworkInstalled checks if a framework is already installed
-func isFrameworkInstalled(fw registry.Framework) bool {
-	// Check if config file exists
-	configPath := config.ExpandHome(fw.ConfigPath)
-	if _, err := os.Stat(configPath); err == nil {
-		return true
-	}
-
-	// Check if binary exists
+// frameworkStatus checks whether a framework's binary and config exist.
+// installed = binary on disk, configured = config file exists (onboarding done).
+func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
 	if _, err := os.Stat(binaryPath); err == nil {
-		return true
+		installed = true
 	}
+	configPath := config.ExpandHome(fw.ConfigPath)
+	if _, err := os.Stat(configPath); err == nil {
+		configured = true
+		installed = true // config implies installed
+	}
+	return
+}
 
-	return false
+// isFrameworkInstalled checks if a framework is already installed (binary or config exists).
+func isFrameworkInstalled(fw registry.Framework) bool {
+	installed, _ := frameworkStatus(fw)
+	return installed
 }
 
 // handleInstallFramework installs a framework with SSE progress streaming
@@ -402,7 +409,16 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 		cmd = exec.CommandContext(ctx, "pip", "install", fw.ID)
 
 	case "manual":
-		progress.addLog("Manual installation - skipping")
+		progress.addLog("This framework requires manual installation:")
+		progress.addLog(fmt.Sprintf("  %s", fw.InstallCmd))
+		progress.addLog("")
+		progress.addLog("After installing, restart Eyrie to detect the framework.")
+		// Check if the binary actually exists after user might have installed it
+		binaryPath := config.ExpandHome(fw.BinaryPath)
+		if _, err := os.Stat(binaryPath); err != nil {
+			return fmt.Errorf("binary not found at %s — install manually and retry", binaryPath)
+		}
+		progress.addLog(fmt.Sprintf("Found binary at %s", binaryPath))
 		return nil
 
 	default:

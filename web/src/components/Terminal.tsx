@@ -7,9 +7,13 @@ import "xterm/css/xterm.css";
 interface TerminalProps {
   agentName: string;
   onClose: () => void;
+  /** Command to type into the terminal once connected (not auto-executed — user hits enter). */
+  initialCommand?: string;
+  /** Use a plain shell instead of the agent's CLI. For setup/onboarding when no agent is running. */
+  useShell?: boolean;
 }
 
-export default function Terminal({ agentName, onClose }: TerminalProps) {
+export default function Terminal({ agentName, onClose, initialCommand, useShell }: TerminalProps) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -75,7 +79,9 @@ export default function Terminal({ agentName, onClose }: TerminalProps) {
 
     // Connect WebSocket
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const wsUrl = `${protocol}//${window.location.host}/api/agents/${agentName}/terminal/ws`;
+    const wsUrl = useShell
+      ? `${protocol}//${window.location.host}/api/terminal/ws`
+      : `${protocol}//${window.location.host}/api/agents/${agentName}/terminal/ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
@@ -89,6 +95,7 @@ export default function Terminal({ agentName, onClose }: TerminalProps) {
       ws.send(`resize:${rows}:${cols}`);
     };
 
+    let sentInitialCommand = false;
     ws.onmessage = (event) => {
       // Write output from backend to terminal
       if (event.data instanceof ArrayBuffer) {
@@ -97,6 +104,18 @@ export default function Terminal({ agentName, onClose }: TerminalProps) {
         // Mark as connected on first data received
         if (status === "connecting") {
           setStatus("connected");
+        }
+        // Type the initial command once we see the shell prompt.
+        // WHY not auto-execute: The user should see and confirm the command
+        // before it runs (e.g., onboarding wizards ask interactive questions).
+        if (initialCommand && !sentInitialCommand) {
+          sentInitialCommand = true;
+          // Small delay to ensure the shell prompt is rendered
+          setTimeout(() => {
+            if (ws.readyState === WebSocket.OPEN) {
+              ws.send(initialCommand);
+            }
+          }, 300);
         }
       }
     };
@@ -109,16 +128,17 @@ export default function Terminal({ agentName, onClose }: TerminalProps) {
       console.log(`Terminal WebSocket closed: code=${event.code}, reason=${event.reason || "(no reason)"}`);
       setStatus("closed");
 
+      // Normal exit (shell exited, process completed) — auto-close the modal
+      if (event.code === 1000) {
+        setTimeout(() => onCloseRef.current(), 300);
+        return;
+      }
+
       // Only show message if we've connected (not during initial connection failure)
       if (status === "connecting") {
         term.writeln("\r\n\x1b[1;31mFailed to connect\x1b[0m");
-      } else if (event.reason && event.reason.includes("process exited")) {
-        term.writeln("\r\n\x1b[1;33mProcess exited\x1b[0m");
-      } else if (event.code !== 1000) {
-        // Abnormal closure
-        term.writeln("\r\n\x1b[1;31mConnection lost\x1b[0m");
       } else {
-        term.writeln("\r\n\x1b[1;33mConnection closed\x1b[0m");
+        term.writeln("\r\n\x1b[1;31mConnection lost\x1b[0m");
       }
     };
 

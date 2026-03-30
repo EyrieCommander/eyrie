@@ -139,7 +139,8 @@ export interface Framework {
   log_dir: string;
   log_format: string;
   config_schema?: ConfigSchema;
-  installed?: boolean; // Added by backend
+  installed?: boolean;   // binary exists on disk
+  configured?: boolean;  // config file exists (onboarding complete)
 }
 
 export interface InstallProgress {
