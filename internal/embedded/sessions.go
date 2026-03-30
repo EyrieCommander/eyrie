@@ -16,9 +16,10 @@ import (
 // are held in memory for fast access and persisted to JSONL files in the
 // workspace so they survive Eyrie restarts.
 type SessionStore struct {
-	mu        sync.RWMutex
-	sessions  map[string][]Message
+	mu         sync.RWMutex
+	sessions   map[string][]Message
 	sessionDir string // e.g. {workspace}/sessions
+	dirCreated sync.Once // ensures os.MkdirAll runs only once
 }
 
 // NewSessionStore creates a store backed by the given directory. Any existing
@@ -61,16 +62,15 @@ func (ss *SessionStore) Append(key string, msg Message) error {
 }
 
 // AppendMany adds multiple messages to the session and persists them.
+// Opens the file once for all messages instead of N times.
 // All messages are written to disk first; only after success is the
 // in-memory state updated.
 func (ss *SessionStore) AppendMany(key string, msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	for _, msg := range msgs {
-		if err := ss.appendToDisk(key, msg); err != nil {
-			return err
-		}
+	if err := ss.appendManyToDisk(key, msgs); err != nil {
+		return err
 	}
 	ss.mu.Lock()
 	ss.sessions[key] = append(ss.sessions[key], msgs...)
@@ -136,8 +136,17 @@ func (ss *SessionStore) filePath(key string) string {
 	return filepath.Join(ss.sessionDir, encoded+".jsonl")
 }
 
+// ensureDir creates the session directory once per SessionStore lifetime.
+func (ss *SessionStore) ensureDir() error {
+	var dirErr error
+	ss.dirCreated.Do(func() {
+		dirErr = os.MkdirAll(ss.sessionDir, 0o755)
+	})
+	return dirErr
+}
+
 func (ss *SessionStore) appendToDisk(key string, msg Message) error {
-	if err := os.MkdirAll(ss.sessionDir, 0o755); err != nil {
+	if err := ss.ensureDir(); err != nil {
 		return fmt.Errorf("creating session dir: %w", err)
 	}
 
@@ -147,6 +156,31 @@ func (ss *SessionStore) appendToDisk(key string, msg Message) error {
 	}
 	defer f.Close()
 
+	return ss.writeEntry(f, msg)
+}
+
+// appendManyToDisk writes multiple messages in a single file open/close cycle.
+func (ss *SessionStore) appendManyToDisk(key string, msgs []Message) error {
+	if err := ss.ensureDir(); err != nil {
+		return fmt.Errorf("creating session dir: %w", err)
+	}
+
+	f, err := os.OpenFile(ss.filePath(key), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return fmt.Errorf("opening session file: %w", err)
+	}
+	defer f.Close()
+
+	for _, msg := range msgs {
+		if err := ss.writeEntry(f, msg); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// writeEntry marshals and writes a single session entry to an open file.
+func (ss *SessionStore) writeEntry(f *os.File, msg Message) error {
 	entry := sessionEntry{
 		Role:       msg.Role,
 		Content:    msg.Content,

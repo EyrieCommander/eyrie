@@ -75,7 +75,7 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		// For embedded agents, pass the agent name so the probe can look up
 		// the cached adapter singleton. For all others, pass the host.
 		probeHost := agent.Host
-		if agent.Framework == "embedded" {
+		if agent.Framework == adapter.FrameworkEmbedded {
 			probeHost = agent.Name
 		}
 		alive := probeHealth(ctx, agent.Framework, probeHost, agent.Port)
@@ -126,11 +126,11 @@ func scanInstances() []adapter.DiscoveredAgent {
 	for _, inst := range instances {
 		// Embedded agents don't have config files that need scanning —
 		// they are discovered directly from the instance metadata.
-		if inst.Framework == "embedded" {
+		if inst.Framework == adapter.FrameworkEmbedded {
 			agents = append(agents, adapter.DiscoveredAgent{
 				Name:        inst.Name,
 				DisplayName: inst.DisplayName,
-				Framework:   "embedded",
+				Framework:   adapter.FrameworkEmbedded,
 				Host:        "127.0.0.1",
 				Port:        0, // No gateway port — runs in-process
 				ConfigPath:  inst.ConfigPath,
@@ -248,24 +248,24 @@ func parseURL(rawURL string) (host string, port int) {
 // NewAgent creates an adapter.Agent from a discovered agent.
 func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 	switch d.Framework {
-	case "zeroclaw":
+	case adapter.FrameworkZeroClaw:
 		return adapter.NewZeroClawAdapter(
 			d.Name, d.Name, d.URL(), d.Token, d.ConfigPath,
 		)
-	case "openclaw":
+	case adapter.FrameworkOpenClaw:
 		return adapter.NewOpenClawAdapter(
 			d.Name, d.Name, d.Host, d.Port, d.Token, d.ConfigPath,
 		)
-	case "picoclaw":
+	case adapter.FrameworkPicoClaw:
 		return adapter.NewPicoClawAdapter(
 			d.Name, d.Name, d.Host, d.Port, d.Token, d.ConfigPath,
 		)
-	case "hermes":
+	case adapter.FrameworkHermes:
 		binaryPath := config.ExpandHome("~/.local/bin/hermes")
 		return adapter.NewHermesAdapter(
 			d.Name, d.Name, d.ConfigPath, binaryPath,
 		)
-	case "embedded":
+	case adapter.FrameworkEmbedded:
 		// Return the cached adapter if it exists — embedded adapters are
 		// stateful singletons that must persist across discovery cycles.
 		embeddedAdaptersMu.Lock()

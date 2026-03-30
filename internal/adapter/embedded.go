@@ -15,6 +15,23 @@ import (
 	"github.com/google/uuid"
 )
 
+// identityFiles lists the workspace files that contribute to the system prompt
+// and personality. Declared once to avoid duplication between buildSystemPrompt
+// and Personality.
+var identityFiles = []string{"SOUL.md", "IDENTITY.md", "TOOLS.md", "MEMORY.md"}
+
+// identityCache holds the cached contents of workspace identity files.
+// Avoids re-reading 4 files on every StreamMessage call.
+type identityCache struct {
+	mu       sync.RWMutex
+	contents map[string]string // filename -> content
+	cachedAt time.Time
+}
+
+// 30 seconds TTL — short enough to pick up edits quickly, long enough
+// to avoid repeated disk reads during burst message activity.
+const identityCacheTTL = 30 * time.Second
+
 // EmbeddedAdapter implements the Agent interface for EyrieClaw — an agent
 // that runs inside the Eyrie process as a goroutine. No separate binary,
 // no gateway, no HTTP roundtrip. It calls LLM APIs directly and streams
@@ -46,6 +63,9 @@ type EmbeddedAdapter struct {
 	logBuf       *embedded.LogBuffer
 	loop         *embedded.AgentLoop
 	keyStore     *embedded.KeyStore
+
+	// Cached identity files to avoid re-reading disk on every message
+	idCache identityCache
 }
 
 // EmbeddedConfig holds the JSON config format for embedded agents.
@@ -103,7 +123,7 @@ func (a *EmbeddedAdapter) loadConfig() {
 
 func (a *EmbeddedAdapter) ID() string        { return a.id }
 func (a *EmbeddedAdapter) Name() string      { return a.name }
-func (a *EmbeddedAdapter) Framework() string  { return "embedded" }
+func (a *EmbeddedAdapter) Framework() string  { return FrameworkEmbedded }
 func (a *EmbeddedAdapter) BaseURL() string    { return "" }
 
 // --- Probing ---
@@ -125,7 +145,7 @@ func (a *EmbeddedAdapter) Health(_ context.Context) (*HealthStatus, error) {
 	return hs, nil
 }
 
-func (a *EmbeddedAdapter) Status(_ context.Context) (*AgentStatus, error) {
+func (a *EmbeddedAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 	provider := a.provider
 	model := a.model
 
@@ -143,8 +163,8 @@ func (a *EmbeddedAdapter) Status(_ context.Context) (*AgentStatus, error) {
 		GatewayPort: 0, // No gateway — runs in-process
 	}
 
-	// Check provider reachability
-	as.ProviderStatus = ProbeProvider(context.Background(), provider)
+	// Check provider reachability using the caller's context
+	as.ProviderStatus = ProbeProvider(ctx, provider)
 	as.InferBusyState()
 
 	return as, nil
@@ -177,8 +197,9 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q", a.provider))
 	}
 
-	// Resolve base URL from provider name
-	baseURL := embedded.ProviderBaseURL(a.provider)
+	// Resolve base URL from provider name (using adapter's exported function
+	// to avoid duplication — embedded package no longer has its own copy)
+	baseURL := ProviderBaseURL(a.provider)
 	if baseURL == "" {
 		return fmt.Errorf("unknown provider %q: cannot determine API base URL", a.provider)
 	}
@@ -207,6 +228,7 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 
 	a.running = true
 	a.startTime = time.Now()
+	a.clearIdentityCache()
 	a.logBuf.Add("info", fmt.Sprintf("embedded agent started: provider=%s model=%s tools=%v", a.provider, a.model, a.enabledTools))
 
 	return nil
@@ -460,19 +482,15 @@ func (a *EmbeddedAdapter) StreamMessage(ctx context.Context, message, sessionKey
 	return outCh, nil
 }
 
-// buildSystemPrompt reads SOUL.md and IDENTITY.md from the workspace and
-// concatenates them into a system prompt.
+// buildSystemPrompt reads identity files from the workspace and concatenates
+// them into a system prompt. Results are cached for 30s to avoid disk reads
+// on every message.
 func (a *EmbeddedAdapter) buildSystemPrompt() string {
-	var parts []string
+	contents := a.cachedIdentityFiles()
 
-	for _, filename := range []string{"SOUL.md", "IDENTITY.md", "TOOLS.md", "MEMORY.md"} {
-		path := filepath.Join(a.workspacePath, filename)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			continue
-		}
-		content := strings.TrimSpace(string(data))
-		if content != "" {
+	var parts []string
+	for _, filename := range identityFiles {
+		if content, ok := contents[filename]; ok && content != "" {
 			parts = append(parts, content)
 		}
 	}
@@ -483,6 +501,48 @@ func (a *EmbeddedAdapter) buildSystemPrompt() string {
 	return strings.Join(parts, "\n\n")
 }
 
+// cachedIdentityFiles returns identity file contents, reading from disk only
+// when the cache has expired (30s TTL).
+func (a *EmbeddedAdapter) cachedIdentityFiles() map[string]string {
+	a.idCache.mu.RLock()
+	if a.idCache.contents != nil && time.Since(a.idCache.cachedAt) < identityCacheTTL {
+		result := a.idCache.contents
+		a.idCache.mu.RUnlock()
+		return result
+	}
+	a.idCache.mu.RUnlock()
+
+	// Cache miss or expired — read from disk
+	contents := make(map[string]string, len(identityFiles))
+	for _, filename := range identityFiles {
+		path := filepath.Join(a.workspacePath, filename)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		content := strings.TrimSpace(string(data))
+		if content != "" {
+			contents[filename] = content
+		}
+	}
+
+	a.idCache.mu.Lock()
+	a.idCache.contents = contents
+	a.idCache.cachedAt = time.Now()
+	a.idCache.mu.Unlock()
+
+	return contents
+}
+
+// clearIdentityCache invalidates the cached identity files so they are
+// re-read from disk on the next buildSystemPrompt call.
+func (a *EmbeddedAdapter) clearIdentityCache() {
+	a.idCache.mu.Lock()
+	a.idCache.contents = nil
+	a.idCache.cachedAt = time.Time{}
+	a.idCache.mu.Unlock()
+}
+
 // --- Personality ---
 
 func (a *EmbeddedAdapter) Personality(_ context.Context) (*Personality, error) {
@@ -491,7 +551,7 @@ func (a *EmbeddedAdapter) Personality(_ context.Context) (*Personality, error) {
 		IdentityFiles: make(map[string]string),
 	}
 
-	for _, filename := range []string{"SOUL.md", "IDENTITY.md", "TOOLS.md", "MEMORY.md"} {
+	for _, filename := range identityFiles {
 		path := filepath.Join(a.workspacePath, filename)
 		data, err := os.ReadFile(path)
 		if err != nil {

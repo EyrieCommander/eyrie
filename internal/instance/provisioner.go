@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/fileutil"
 	"github.com/Audacity88/eyrie/internal/persona"
@@ -50,7 +51,10 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	if req.Framework == "" {
 		return nil, fmt.Errorf("framework: %w", ErrRequiredField)
 	}
-	if req.Framework != "zeroclaw" && req.Framework != "openclaw" && req.Framework != "hermes" && req.Framework != "picoclaw" && req.Framework != "embedded" {
+	switch req.Framework {
+	case adapter.FrameworkZeroClaw, adapter.FrameworkOpenClaw, adapter.FrameworkHermes, adapter.FrameworkPicoClaw, adapter.FrameworkEmbedded:
+		// valid
+	default:
 		return nil, fmt.Errorf("%q: %w", req.Framework, ErrUnsupportedFramework)
 	}
 
@@ -69,7 +73,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	}
 	// Embedded agents run in-process — no gateway port needed.
 	var port int
-	if req.Framework != "embedded" {
+	if req.Framework != adapter.FrameworkEmbedded {
 		port, err = AllocatePort(existing)
 		if err != nil {
 			return nil, fmt.Errorf("port allocation failed: %w", err)

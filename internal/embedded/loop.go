@@ -290,10 +290,12 @@ func (al *AgentLoop) truncateContext(messages []Message) []Message {
 }
 
 // LogBuffer is a thread-safe ring buffer for embedded agent log entries.
-// Used by TailLogs and TailActivity to surface recent activity.
+// Uses a head index and count to avoid O(n) copy-shift on every Add().
 type LogBuffer struct {
 	mu      sync.Mutex
 	entries []LogEntry
+	head    int // index of the oldest entry
+	count   int // number of valid entries
 	// 500 entries max — covers typical agent activity between UI refreshes
 	maxSize int
 }
@@ -301,7 +303,7 @@ type LogBuffer struct {
 // NewLogBuffer creates a buffer with the given capacity.
 func NewLogBuffer(maxSize int) *LogBuffer {
 	return &LogBuffer{
-		entries: make([]LogEntry, 0, maxSize),
+		entries: make([]LogEntry, maxSize),
 		maxSize: maxSize,
 	}
 }
@@ -316,20 +318,24 @@ func (lb *LogBuffer) Add(level, message string) {
 		Level:     level,
 		Message:   message,
 	}
-	if len(lb.entries) >= lb.maxSize {
-		// Drop oldest
-		copy(lb.entries, lb.entries[1:])
-		lb.entries[len(lb.entries)-1] = entry
+	idx := (lb.head + lb.count) % lb.maxSize
+	if lb.count < lb.maxSize {
+		lb.entries[idx] = entry
+		lb.count++
 	} else {
-		lb.entries = append(lb.entries, entry)
+		// Buffer full — overwrite oldest and advance head
+		lb.entries[lb.head] = entry
+		lb.head = (lb.head + 1) % lb.maxSize
 	}
 }
 
-// Entries returns a copy of all buffered log entries.
+// Entries returns a copy of all buffered log entries in chronological order.
 func (lb *LogBuffer) Entries() []LogEntry {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	cp := make([]LogEntry, len(lb.entries))
-	copy(cp, lb.entries)
+	cp := make([]LogEntry, lb.count)
+	for i := 0; i < lb.count; i++ {
+		cp[i] = lb.entries[(lb.head+i)%lb.maxSize]
+	}
 	return cp
 }
