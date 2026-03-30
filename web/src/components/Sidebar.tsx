@@ -151,6 +151,17 @@ export default function Sidebar() {
         {missionControlExpanded && (
           <div id="mission-control-list" className="ml-4 border-l border-border pl-2 space-y-px">
             <Link
+              to="/frameworks"
+              className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                pathname === "/frameworks"
+                  ? "bg-surface-hover text-accent font-medium"
+                  : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+              }`}
+            >
+              <Layers className="h-3 w-3" />
+              <span>frameworks</span>
+            </Link>
+            <Link
               to="/mission-control/agents"
               className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
                 pathname === "/mission-control/agents"
@@ -171,17 +182,6 @@ export default function Sidebar() {
             >
               <BarChart3 className="h-3 w-3" />
               <span>compare agents</span>
-            </Link>
-            <Link
-              to="/frameworks/compare"
-              className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                pathname === "/frameworks/compare"
-                  ? "bg-surface-hover text-accent font-medium"
-                  : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-              }`}
-            >
-              <BarChart3 className="h-3 w-3" />
-              <span>compare frameworks</span>
             </Link>
           </div>
         )}

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Download, CheckCircle, Loader2 } from "lucide-react";
+import { Download, CheckCircle, Loader2, Settings } from "lucide-react";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { Framework, InstallProgress } from "../lib/types";
 
@@ -20,7 +20,7 @@ export default function FrameworkCard({
 }: FrameworkCardProps) {
   const isInstalling = installProgress?.status === "running";
   const isSuccess = installProgress?.status === "success";
-  const isAlreadyInstalled = framework.installed && !isInstalling && !isSuccess;
+  const isAlreadyInstalled = framework.installed && !isInstalling;
   const isError = installProgress?.status === "error" && !isAlreadyInstalled;
 
   const [, setTick] = useState(0);
@@ -43,7 +43,7 @@ export default function FrameworkCard({
   const emoji = FRAMEWORK_EMOJI[framework.id] || "";
 
   return (
-    <div className="rounded border border-border bg-surface p-4 hover:border-accent/30 transition-colors space-y-3">
+    <div className="flex flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors">
       {/* Header */}
       <div className="flex items-center gap-2.5">
         <span className="text-xl leading-none">{emoji}</span>
@@ -106,8 +106,8 @@ export default function FrameworkCard({
       >
         {isAlreadyInstalled ? (
           <>
-            <CheckCircle className="h-3.5 w-3.5" />
-            installed
+            <Settings className="h-3.5 w-3.5" />
+            manage
           </>
         ) : isInstalling ? (
           <>
@@ -117,7 +117,7 @@ export default function FrameworkCard({
         ) : isSuccess ? (
           <>
             <CheckCircle className="h-3.5 w-3.5" />
-            installed
+            manage
           </>
         ) : isError ? (
           <>

@@ -5,7 +5,6 @@ import { formatUptime, formatBytes } from "./lib/format";
 import { DataProvider, useData } from "./lib/DataContext";
 import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
-import InstallPage from "./components/InstallPage";
 import PersonasPage from "./components/PersonasPage";
 import HierarchyPage from "./components/HierarchyPage";
 import AgentsPage from "./components/AgentsPage";
@@ -73,12 +72,13 @@ function AppContent() {
               }
             />
             <Route path="/agents/compare" element={<AgentCompare />} />
-            <Route path="/frameworks/compare" element={<FrameworkCompare />} />
+            <Route path="/frameworks" element={<FrameworkCompare />} />
+            <Route path="/frameworks/compare" element={<Navigate to="/frameworks" replace />} />
+            <Route path="/install" element={<Navigate to="/frameworks" replace />} />
             <Route
               path="/agents/:name/:tab?"
               element={<AgentDetailRoute />}
             />
-                <Route path="/install" element={<InstallPage />} />
                 <Route path="/frameworks/:id" element={<FrameworkDetail />} />
                 <Route path="/personas" element={<PersonasPage />} />
                 <Route path="/settings" element={<SettingsPage />} />
