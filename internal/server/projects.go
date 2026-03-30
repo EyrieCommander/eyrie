@@ -18,6 +18,7 @@ import (
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/persona"
 	"github.com/Audacity88/eyrie/internal/project"
 )
@@ -723,3 +724,107 @@ func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) 
 // NOTE: projectSessionKey was removed. All session keys now use proj.ID
 // directly. The old function had three naming schemes (slug, "project-"+UUID,
 // short UUID) that caused mismatches on reset and cross-agent routing.
+
+// POST /api/projects/{id}/reset
+//
+// WHY a dedicated endpoint: The frontend previously orchestrated reset as
+// multiple sequential calls (clear chat, reset N sessions, etc.). This was
+// fragile — a tab close mid-reset left the project half-cleaned. Moving it
+// server-side makes it atomic and adds talon destruction: talons are
+// disposable specialists, so a project reset should remove them entirely
+// (stop + delete instance + remove from roster). Commander and captain are
+// kept — they persist across resets.
+func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	projStore, err := project.NewStore()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	proj, err := projStore.Get(projectID)
+	if err != nil {
+		if errors.Is(err, project.ErrNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return
+	}
+
+	// 1. Clear project chat history and listening state
+	if cs, csErr := project.NewChatStore(); csErr == nil {
+		if clrErr := cs.ClearChat(projectID); clrErr != nil {
+			slog.Warn("reset: failed to clear chat", "project", projectID, "error", clrErr)
+		}
+		cs.ClearListening(projectID)
+	}
+
+	// 2. Reset sessions for commander and captain (keep instances alive)
+	sessionKey := proj.ID
+	disc := s.runDiscovery(r.Context())
+	for _, p := range resolveProjectParticipants(proj, disc) {
+		if p.role == "talon" {
+			continue // talons are destroyed below, not just reset
+		}
+		agent := discovery.NewAgent(p.agent)
+		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+		if err := agent.ResetSession(ctx, sessionKey); err != nil {
+			slog.Debug("reset: could not reset session", "agent", p.name, "role", p.role, "error", err)
+		}
+		cancel()
+	}
+
+	// 3. Destroy talon instances: stop, delete from instance store, remove
+	//    from project roster. Talons are disposable — a reset means fresh start.
+	instStore, instErr := instance.NewStore()
+	if instErr != nil {
+		slog.Warn("reset: failed to open instance store", "error", instErr)
+	}
+	var destroyed []string
+	for _, agentID := range proj.RoleAgentIDs {
+		if instStore == nil {
+			break
+		}
+		inst, getErr := instStore.Get(agentID)
+		if getErr != nil {
+			slog.Debug("reset: talon instance not found, skipping", "id", agentID, "error", getErr)
+			continue
+		}
+
+		// Stop the instance (best effort, detached context so it completes
+		// even if the HTTP client disconnects)
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		if stopErr := manager.ExecuteWithConfig(stopCtx, inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
+			slog.Debug("reset: failed to stop talon", "instance", inst.Name, "error", stopErr)
+		}
+		stopCancel()
+
+		// Delete instance from disk
+		if delErr := instStore.Delete(agentID); delErr != nil {
+			slog.Warn("reset: failed to delete talon instance", "instance", inst.Name, "error", delErr)
+		} else {
+			destroyed = append(destroyed, inst.Name)
+		}
+	}
+
+	// 4. Clear the project's agent roster (all talons removed)
+	proj.RoleAgentIDs = nil
+	proj.UpdatedAt = time.Now()
+	if saveErr := projStore.Save(*proj); saveErr != nil {
+		slog.Warn("reset: failed to save project after clearing talons", "error", saveErr)
+	}
+
+	// 5. Publish event for real-time UI
+	s.events.Publish(ProjectEvent{
+		Type:      "project_reset",
+		ProjectID: projectID,
+		Detail:    fmt.Sprintf("reset: chat cleared, %d talons destroyed", len(destroyed)),
+		Timestamp: time.Now(),
+	})
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"status":          "reset",
+		"talons_destroyed": fmt.Sprintf("%d", len(destroyed)),
+	})
+}

@@ -564,6 +564,14 @@ export async function deleteProject(id: string): Promise<void> {
   }
 }
 
+export async function resetProject(id: string): Promise<void> {
+  const res = await fetch(`${BASE}/api/projects/${id}/reset`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to reset project: ${res.statusText}`);
+  }
+}
+
 // Hierarchy API
 
 export async function fetchHierarchy(): Promise<HierarchyTree> {

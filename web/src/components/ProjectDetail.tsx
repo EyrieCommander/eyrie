@@ -30,7 +30,7 @@ import {
   MessageSquare, Pause, Target,
 } from "lucide-react";
 import type { AgentInstance } from "../lib/types";
-import { deleteProject, agentAction, instanceAction } from "../lib/api";
+import { deleteProject, resetProject, agentAction, instanceAction } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { SetCaptainDialog } from "./SetCaptainDialog";
 import { AddAgentDialog } from "./AddAgentDialog";
@@ -397,22 +397,14 @@ export default function ProjectDetail() {
             </div>
             <button
               onClick={async () => {
-                if (!confirm("reset project chat and all agent sessions for this project?")) return;
+                const talonCount = roleAgents.length;
+                const msg = talonCount > 0
+                  ? `reset project? this will clear chat, reset agent sessions, and destroy ${talonCount} talon${talonCount !== 1 ? "s" : ""}.`
+                  : "reset project chat and all agent sessions?";
+                if (!confirm(msg)) return;
                 try {
-                  // Reset project chat
-                  const chatRes = await fetch(`/api/projects/${project.id}/chat`, { method: "DELETE" });
-                  if (!chatRes.ok) throw new Error(`chat reset failed: ${chatRes.status}`);
-                  // Reset each agent's project session
-                  const sessionKey = project.id;
-                  const allAgents = [
-                    commanderName,
-                    ...(captainInstance ? [captainInstance.name] : []),
-                    ...(captainAgent ? [captainAgent.name] : []),
-                    ...roleAgents.map((a) => a.name),
-                  ].filter(Boolean);
-                  for (const name of allAgents) {
-                    await fetch(`/api/agents/${name}/sessions/${sessionKey}/reset`, { method: "POST" }).catch(() => {});
-                  }
+                  await resetProject(project.id);
+                  await ctxRefresh(false);
                   setChatKey((k) => k + 1); // remount ProjectChat with fresh state
                 } catch (e) {
                   setLoadError(e instanceof Error ? e.message : "reset failed");
