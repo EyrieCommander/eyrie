@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/persona"
@@ -115,15 +116,37 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	if req.AutoStart != nil && *req.AutoStart {
 		startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer startCancel()
-		if autoStartErr = manager.ExecuteWithConfig(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart); autoStartErr != nil {
+
+		if inst.Framework == "embedded" {
+			// Embedded agents are started by calling the adapter directly.
+			// Trigger a discovery cycle first so the adapter is created and cached.
+			agent, findErr := s.findAgentAnyState(startCtx, inst.Name)
+			if findErr != nil {
+				autoStartErr = fmt.Errorf("finding embedded adapter: %w", findErr)
+			} else {
+				autoStartErr = agent.Start(startCtx)
+			}
+		} else {
+			autoStartErr = manager.ExecuteWithConfig(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart)
+		}
+
+		if autoStartErr != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
 			inst.Status = instance.StatusError
+		} else if inst.Framework == "embedded" {
+			// Embedded Start() is synchronous — agent is running now
+			inst.Status = instance.StatusRunning
 		} else {
-			// Set to "starting" — discovery will confirm "running" once the agent is alive
+			// External frameworks: set to "starting", discovery will confirm "running"
 			inst.Status = instance.StatusStarting
 		}
 		if err := store.UpdateStatus(inst.ID, inst.Status); err != nil {
 			slog.Warn("failed to persist auto-start status", "instance", inst.Name, "error", err)
+		}
+
+		// Auto-pair ZeroClaw instances so WebSocket chat works
+		if inst.Framework == "zeroclaw" && autoStartErr == nil {
+			go autoPairZeroClaw(inst.Name, inst.Port)
 		}
 	}
 
@@ -330,20 +353,53 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 	execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer execCancel()
-	if err := manager.ExecuteWithConfig(execCtx, inst.Framework, inst.ConfigPath, mgrAction); err != nil {
-		// Persist the error status so the instance reflects the failure
-		inst.Status = instance.StatusError
-		if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {
-			slog.Warn("failed to persist error status", "instance", inst.ID, "error", updateErr)
+
+	if inst.Framework == "embedded" {
+		// Embedded agents run in-process — delegate to the adapter directly
+		// rather than calling the manager (which has no external process to manage).
+		agent, findErr := s.findAgentAnyState(execCtx, inst.Name)
+		if findErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": fmt.Sprintf("finding embedded adapter: %v", findErr)})
+			return
 		}
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		var adapterErr error
+		switch action {
+		case "start":
+			adapterErr = agent.Start(execCtx)
+		case "stop":
+			adapterErr = agent.Stop(execCtx)
+		case "restart":
+			adapterErr = agent.Restart(execCtx)
+		}
+		if adapterErr != nil {
+			inst.Status = instance.StatusError
+			if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {
+				slog.Warn("failed to persist error status", "instance", inst.ID, "error", updateErr)
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": adapterErr.Error()})
+			return
+		}
+	} else {
+		if err := manager.ExecuteWithConfig(execCtx, inst.Framework, inst.ConfigPath, mgrAction); err != nil {
+			// Persist the error status so the instance reflects the failure
+			inst.Status = instance.StatusError
+			if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {
+				slog.Warn("failed to persist error status", "instance", inst.ID, "error", updateErr)
+			}
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
-	// Update status — use "starting" for start/restart; discovery will confirm "running"
+	// Update status — for embedded agents, Start() is synchronous so we can
+	// set "running" directly. For external frameworks, use "starting" and
+	// let discovery confirm "running" once the process is alive.
 	newStatus := instance.StatusStarting
 	if action == "stop" {
 		newStatus = instance.StatusStopped
+	}
+	if inst.Framework == "embedded" && action != "stop" {
+		newStatus = instance.StatusRunning
 	}
 	if err := store.UpdateStatus(id, newStatus); err != nil {
 		slog.Warn("failed to persist instance status", "instance", id, "status", newStatus, "error", err)
@@ -365,5 +421,90 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Auto-pair ZeroClaw instances after start so WebSocket chat works.
+	// Runs in background — doesn't block the HTTP response.
+	if inst.Framework == "zeroclaw" && action == "start" {
+		go autoPairZeroClaw(inst.Name, inst.Port)
+	}
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": string(newStatus)})
+}
+
+// autoPairZeroClaw waits for a ZeroClaw gateway to become ready, fetches its
+// pairing code, pairs, and stores the token. This gives provisioned instances
+// authenticated WebSocket access for project chat streaming.
+func autoPairZeroClaw(name string, port int) {
+	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
+
+	// Wait for gateway to be ready (up to 15 seconds)
+	var ready bool
+	for i := 0; i < 30; i++ {
+		time.Sleep(500 * time.Millisecond)
+		resp, err := http.Get(baseURL + "/api/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == 200 || resp.StatusCode == 401 {
+				ready = true
+				break
+			}
+		}
+	}
+	if !ready {
+		slog.Warn("auto-pair: gateway not ready after 15s", "agent", name, "port", port)
+		return
+	}
+
+	// Fetch pairing code from admin endpoint
+	resp, err := http.Get(baseURL + "/admin/paircode")
+	if err != nil {
+		slog.Warn("auto-pair: failed to fetch paircode", "agent", name, "error", err)
+		return
+	}
+	defer resp.Body.Close()
+
+	var pcResp struct {
+		PairingCode     *string `json:"pairing_code"`
+		PairingRequired bool    `json:"pairing_required"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pcResp); err != nil {
+		slog.Warn("auto-pair: failed to decode paircode response", "agent", name, "error", err)
+		return
+	}
+
+	if pcResp.PairingCode == nil || *pcResp.PairingCode == "" {
+		// Pairing disabled or no code available — skip
+		slog.Info("auto-pair: no pairing code available, skipping", "agent", name)
+		return
+	}
+
+	// Pair with the gateway
+	pairReq, _ := http.NewRequest("POST", baseURL+"/pair", nil)
+	pairReq.Header.Set("X-Pairing-Code", *pcResp.PairingCode)
+	pairResp, err := http.DefaultClient.Do(pairReq)
+	if err != nil {
+		slog.Warn("auto-pair: pair request failed", "agent", name, "error", err)
+		return
+	}
+	defer pairResp.Body.Close()
+
+	var tokenResp struct {
+		Token string `json:"token"`
+	}
+	if err := json.NewDecoder(pairResp.Body).Decode(&tokenResp); err != nil || tokenResp.Token == "" {
+		slog.Warn("auto-pair: no token in pair response", "agent", name, "status", pairResp.StatusCode)
+		return
+	}
+
+	// Store token
+	ts, err := config.NewTokenStore()
+	if err != nil {
+		slog.Warn("auto-pair: failed to open token store", "agent", name, "error", err)
+		return
+	}
+	if err := ts.Set(name, tokenResp.Token); err != nil {
+		slog.Warn("auto-pair: failed to save token", "agent", name, "error", err)
+		return
+	}
+
+	slog.Info("auto-pair: success", "agent", name, "port", port)
 }

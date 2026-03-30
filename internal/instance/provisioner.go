@@ -50,7 +50,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	if req.Framework == "" {
 		return nil, fmt.Errorf("framework: %w", ErrRequiredField)
 	}
-	if req.Framework != "zeroclaw" && req.Framework != "openclaw" && req.Framework != "hermes" && req.Framework != "picoclaw" {
+	if req.Framework != "zeroclaw" && req.Framework != "openclaw" && req.Framework != "hermes" && req.Framework != "picoclaw" && req.Framework != "embedded" {
 		return nil, fmt.Errorf("%q: %w", req.Framework, ErrUnsupportedFramework)
 	}
 
@@ -67,9 +67,13 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 			return nil, fmt.Errorf("instance name %q: %w", req.Name, ErrNameExists)
 		}
 	}
-	port, err := AllocatePort(existing)
-	if err != nil {
-		return nil, fmt.Errorf("port allocation failed: %w", err)
+	// Embedded agents run in-process — no gateway port needed.
+	var port int
+	if req.Framework != "embedded" {
+		port, err = AllocatePort(existing)
+		if err != nil {
+			return nil, fmt.Errorf("port allocation failed: %w", err)
+		}
 	}
 
 	// Generate ID and paths
@@ -81,7 +85,7 @@ func (p *Provisioner) Provision(req CreateRequest, pers *persona.Persona) (*Inst
 	switch req.Framework {
 	case "zeroclaw":
 		configExt = "toml"
-	case "openclaw", "picoclaw":
+	case "openclaw", "picoclaw", "embedded":
 		configExt = "json"
 	case "hermes":
 		configExt = "yaml"
@@ -216,6 +220,8 @@ func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, mode
 		return p.generateHermesConfig(inst, provider, model)
 	case "picoclaw":
 		return p.generatePicoClawConfig(inst, provider, model)
+	case "embedded":
+		return p.generateEmbeddedConfig(inst, provider, model, pers)
 	default:
 		return fmt.Errorf("unsupported framework %q", inst.Framework)
 	}
@@ -230,21 +236,32 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		"default_provider":    provider,
 		"default_model":       model,
 		"default_temperature": 0.7,
-		"workspace":           inst.WorkspacePath,
+		"workspace": map[string]any{
+			"path": inst.WorkspacePath,
+		},
 		"gateway": map[string]any{
 			"port":                inst.Port,
 			"host":                "127.0.0.1",
 			"session_persistence": true,
-			"require_pairing":     false,
+			"require_pairing":     true,
 		},
+		// WHY autonomous: Provisioned agents (captains/talons) are working
+		// agents, not interactive assistants. They need to call the Eyrie API
+		// via curl, run build commands, and operate without per-command approval.
+		// The user monitors them through the project chat, not by approving
+		// individual shell commands.
 		"autonomy": map[string]any{
-			"level":            "supervised",
-			"workspace_only":   true,
-			"allowed_commands": []string{"git", "npm", "cargo", "ls", "cat", "grep", "find", "echo", "pwd", "wc", "head", "tail", "date", "curl"},
+			"level":          "autonomous",
+			"workspace_only": true,
 		},
 		"memory": map[string]any{
 			"backend":   "sqlite",
 			"auto_save": true,
+		},
+		"http_request": map[string]any{
+			"enabled":              true,
+			"allowed_domains":      []string{"localhost"},
+			"allowed_private_hosts": []string{"localhost"},
 		},
 	}
 
@@ -348,6 +365,26 @@ func (p *Provisioner) generateHermesConfig(inst *Instance, provider, model strin
 		},
 	}
 	return config.WriteYAMLAtomic(inst.ConfigPath, cfg)
+}
+
+func (p *Provisioner) generateEmbeddedConfig(inst *Instance, provider, model string, pers *persona.Persona) error {
+	// Default tool set for embedded agents. Personas can override via Tools field.
+	tools := []string{"read_file", "write_file", "list_dir", "exec"}
+	if pers != nil && len(pers.Tools) > 0 {
+		tools = pers.Tools
+	}
+
+	// Commander-capable flag: only enable for commander role instances
+	commanderCapable := inst.HierarchyRole == RoleCommander
+
+	cfg := map[string]any{
+		"provider":          provider,
+		"model":             model,
+		"tools":             tools,
+		"workspace":         inst.WorkspacePath,
+		"commander_capable": commanderCapable,
+	}
+	return config.WriteJSONAtomic(inst.ConfigPath, cfg)
 }
 
 // --- Default identity templates ---

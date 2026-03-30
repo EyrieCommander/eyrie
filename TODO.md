@@ -56,18 +56,6 @@
 
 ---
 
-## Dashboard improvements:
-- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
-- [ ] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
-
-## Rich tool output display:
-- [ ] **Canvas/frame renders**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content
-- [ ] **HTML content preview**: When tool args contain `content_type: "html"`, render a sandboxed iframe preview of the HTML content inline in the tool card
-- [ ] **Image outputs**: Detect image URLs or base64 image data in tool outputs, render inline `<img>` previews
-- [ ] **Structured JSON responses**: Syntax-highlight JSON tool outputs (API responses, config reads) with collapsible sections for large payloads
-- [ ] **File path links**: Detect file paths in tool outputs, make them clickable to open in the agent's file browser or navigate to the file
-- [ ] **Diff display**: For tool outputs containing unified diffs, render with color-coded additions/deletions
-
 ## Security
 
 - [ ] **Agent-to-Eyrie API access**: Currently agents use `curl` via `exec` tool to reach Eyrie's API at localhost:7200. OpenClaw's `web_fetch` blocks private IPs (SSRF policy). For production, explore:
@@ -75,7 +63,8 @@
   - Tailscale-based access (Eyrie binds to Tailscale IP, avoids private IP issue)
   - Agent-specific API tokens with scoped permissions
   - mTLS between agents and Eyrie
-- [ ] **Auto-pairing for provisioned instances**: Currently provisioned ZeroClaw instances disable pairing (`require_pairing = false`). For production, Eyrie should auto-pair: start the daemon, capture the pairing code from stdout, call `POST /pair`, and save the auth token.
+- [ ] **Rate limit instance creation**: Agents in autonomous mode can create talons in a loop. Add a per-project rate limit (e.g., max 10 instances per project, max 5 per minute) to prevent runaway provisioning.
+- [x] **Auto-pairing for provisioned instances**: Implemented — `autoPairZeroClaw()` runs on instance start, fetches paircode from `/admin/paircode`, pairs, and stores token in `tokens.json`. Pairing now enabled by default (`require_pairing = true`).
   - **Secure token storage**: Use restrictive file permissions (0o600) at minimum, prefer OS keyring integration. Tokens should support rotation/refresh under `~/.eyrie/tokens/`.
 - [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. Before starting a new daemon, check for and kill any existing process on the target port.
 - [ ] **API key provisioning for instances**: Currently copies encrypted api_key + .secret_key from parent ZeroClaw installation. Not ideal — shared secret key means one compromised instance exposes all. Let user choose:
@@ -102,17 +91,17 @@
 - [x] **API key broken after ZeroClaw rebuild**: Fixed — root cause was Eyrie's config editor writing masked `***MASKED***` (from ZeroClaw's GET /api/config) directly to disk, bypassing ZeroClaw's mask-restoration logic. Fix: proxy config saves through ZeroClaw's PUT /api/config when agent is online; reject disk writes containing masked placeholders as safety net. Restored working key from provisioned instance.
 - [x] **SSE streaming not rendering**: Root cause was `mountedRef` pattern — React re-renders briefly unmounted ProjectChat, causing the SSE callback to hold a stale ref and silently drop all events. Fixed by removing mountedRef, always-mounting ProjectChat (overlays for setup prompts), and using AbortController for cleanup. Vite proxy streams SSE fine.
 - [x] **Config editor expands all defaults**: Fixed — all adapters now read config from disk first (user overrides only), falling back to API only if the file is inaccessible.
-- [ ] **Vite proxy buffers SSE responses**: The Vite dev server proxy (`http-proxy`) buffers SSE POST responses instead of streaming them. Events only appear when the response completes. Workaround: bypass proxy for SSE by calling Go backend directly (`SSE_BASE = "http://localhost:7200"` in dev) + CORS handler. Doesn't affect production (same-origin, no proxy).
+- [x] **Vite proxy buffers SSE responses**: Fixed — Vite proxy configured with `Accept-Encoding: identity` + `timeout: 0` to disable compression buffering. All SSE endpoints stream through the proxy correctly now.
 
 ## Code Cleanup
 
-- [ ] **SSE_BASE unused in api.ts**: `SSE_BASE` is declared for Vite dev SSE bypass but never used by streaming functions. Either wire it into `streamMessage`/`streamProjectChat`/`streamInstall` or remove it.
+- [x] **SSE_BASE unused in api.ts**: Removed — Vite proxy streams correctly now, no bypass needed.
 - [ ] **CORS allowlist from config**: Current `corsHandler` allows localhost only. For production, add `AllowedOrigins []string` to dashboard config and pass it to corsHandler.
-- [ ] **SetCaptainDialog error surfacing**: `streamCaptainBriefing` callback only console.errors on failure and still calls `onDone()`. Surface briefing failures to the user via error state.
-- [ ] **ProjectDetail reset validation**: The reset button's fetch calls don't check `response.ok`. Failures can be silently ignored.
-- [ ] **ProjectListPage unmount safety**: The polling loop in `handleStartCaptain` can update state after unmount. Add AbortController or mounted ref.
-- [ ] **InstallPage handleManage error overwrite**: `handleManage` unconditionally writes synthetic success into `installProgress`, potentially overwriting a prior error state.
-- [ ] **AgentDetail name editing error feedback**: The display name form swallows failures silently. Add local error state to surface update failures.
+- [x] **SetCaptainDialog error surfacing**: Acceptable — briefing is fire-and-forget by design (dialog closes before callback fires). Captain creation/assignment errors are already surfaced.
+- [x] **ProjectDetail reset validation**: Fixed — chat reset now checks `response.ok` and throws on failure.
+- [x] **ProjectListPage unmount safety**: Fixed — AbortController stops polling loop on dialog unmount.
+- [x] **InstallPage handleManage error overwrite**: Fixed — `handleManage` preserves existing error state instead of overwriting with synthetic success.
+- [x] **AgentDetail name editing error feedback**: Fixed — `nameError` state surfaces update failures inline below the agent name.
 
 ## UI
 
@@ -122,15 +111,17 @@
 - [ ] **Project detail**: Add activity timeline showing what each agent is doing
 - [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept)
 - [ ] **Session management**: Test session group delete across all frameworks
+- [ ] **Destroy talons on project reset**: When resetting a project, stop and delete all talon instances associated with it. Talons are disposable agents created by the captain — resetting should clean them up. Captain and commander should be preserved.
+- [ ] **Hide project sessions from 1:1 chat**: Filter out sessions matching a project ID from the ChatPanel session list. Project conversations should only be accessed via the project chat UI — showing them in 1:1 creates split-brain confusion. Later: clicking a project session could redirect to the project detail page instead.
+- [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
+- [x] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
+- [x] **Rich tool output display**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content. Also HTML preview, image preview, JSON highlighting, file path links and diff display
 
-## Integrations
+## Integrations / Architecture
 
 - [ ] **Telegram bridge for project chat**: Mirror Eyrie project conversations into Telegram groups for mobile access
 - [ ] **Discord bridge for project chat**: Same as Telegram bridge for Discord
 - [ ] **Slack bridge**: Optional for teams using Slack
-
-## Architecture
-
 - [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/PicoClaw/Hermes (like Telegram/Discord). Deeper integration than WebSocket-based project chat.
 - [x] **PicoClaw support**: Fourth framework — adapter (978 lines), discovery, provisioning, registry, install page all wired up. Pending:
   - [ ] **Post-install onboarding UI**: After installing PicoClaw from the install page, launch the framework's onboard wizard (e.g., `picoclaw onboard`) from the dashboard so the config file gets created and discovery can pick it up. Currently requires manual CLI onboarding.
