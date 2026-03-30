@@ -56,6 +56,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -68,8 +69,9 @@ import (
 // ChatOrchestrator encapsulates the multi-agent orchestration logic for
 // project chat and intake conversations, decoupled from HTTP concerns.
 type ChatOrchestrator struct {
-	cfg       func(ctx context.Context) discovery.Result // runs discovery
-	chatStore *project.ChatStore
+	cfg         func(ctx context.Context) discovery.Result // runs discovery
+	chatStore   *project.ChatStore
+	activeChats *sync.Map // map[projectID]context.CancelFunc — for stop endpoint
 }
 
 // RunProjectChat executes the core project-chat loop: stores the user
@@ -81,8 +83,14 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// Use a detached context for agent interactions so they complete even
 	// if the HTTP client disconnects. SSE writes may fail (broken pipe)
 	// but the response will still be persisted to chat storage.
+	// The cancel is also stored in activeChats so the stop endpoint can
+	// interrupt the orchestration on user request.
 	agentCtx, agentCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer agentCancel()
+	if o.activeChats != nil {
+		o.activeChats.Store(projectID, agentCancel)
+		defer o.activeChats.Delete(projectID)
+	}
 
 	// Resolve participants
 	disc := o.cfg(agentCtx)
@@ -148,8 +156,11 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	}
 	sse.WriteEvent(map[string]any{"type": "message", "message": userMsg})
 
-	// Each agent has its own session for this project
-	sessionKey := projectSessionKey(proj)
+	// Each agent has its own session for this project, keyed by project ID.
+	// WHY project ID, not a slug: We had three different naming schemes
+	// (slug, "project-"+UUID, short UUID) causing session mismatches on
+	// reset and cross-agent communication. The ID is the canonical key.
+	sessionKey := proj.ID
 
 	// Build the single respondent for this message.
 	// Priority: @mention > [LISTENING] agent > commander (first msg) > captain (default)
@@ -338,6 +349,34 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			})
 		}
 
+	// If the user hit stop, don't store the partial response or parse
+	// directives — just emit a system message and bail. Also attempt to
+	// interrupt the agent at the framework level so it doesn't keep the
+	// partial response in its session history.
+	if agentCtx.Err() != nil {
+		slog.Info("project chat stopped by user", "project", projectID, "agent", p.name)
+
+		// Best-effort: ask the framework to discard the in-flight response.
+		// No-op today for all frameworks; will activate when upstream ships.
+		intCtx, intCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		if err := agent.Interrupt(intCtx, sessionKey); err != nil {
+			slog.Warn("interrupt failed", "agent", p.name, "error", err)
+		}
+		intCancel()
+
+		stopMsg := project.ChatMessage{
+			ID:        uuid.New().String(),
+			Sender:    "eyrie",
+			Role:      "system",
+			Content:   fmt.Sprintf("%s was stopped", p.name),
+			Timestamp: time.Now(),
+		}
+		o.chatStore.Append(projectID, stopMsg)
+		sse.WriteEvent(map[string]any{"type": "message", "message": stopMsg})
+		sse.WriteDone()
+		return nil
+	}
+
 	// WHY directive parsing: [LISTENING] is parsed from the END of the response.
 	// Agents include it as the last token so it's easy to strip from display
 	// content. [LISTENING] means "I asked a question, route the user's next
@@ -439,6 +478,22 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 				ch, err := agent.StreamMessage(agentCtx, forwardMsg, sessionKey)
 				if err != nil {
 					slog.Warn("failed to forward to mentioned agent", "agent", mentionedAgent.name, "error", err)
+					sse.WriteEvent(map[string]any{
+						"type":   "agent_event",
+						"sender": mentionedAgent.name,
+						"role":   mentionedAgent.role,
+						"event":  map[string]string{"type": "error", "content": fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, err)},
+					})
+					// Store error as system message so it's visible on reload too
+					errMsg := project.ChatMessage{
+						ID:        uuid.New().String(),
+						Sender:    "eyrie",
+						Role:      "system",
+						Content:   fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, err),
+						Timestamp: time.Now(),
+					}
+					o.chatStore.Append(projectID, errMsg)
+					sse.WriteEvent(map[string]any{"type": "message", "message": errMsg})
 				} else {
 					var fwdContent string
 					var fwdToolCalls []project.ChatPart

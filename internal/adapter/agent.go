@@ -96,6 +96,12 @@ type Agent interface {
 	// The channel is closed when the response is complete (after a "done" or "error" event).
 	StreamMessage(ctx context.Context, message, sessionKey string) (<-chan ChatEvent, error)
 
+	// Interrupt asks the framework to cancel an in-flight response for the
+	// given session. Best-effort — returns nil if the framework doesn't
+	// support interruption or no response is active. The partial response
+	// should NOT be stored as if it completed.
+	Interrupt(ctx context.Context, sessionKey string) error
+
 	// CreateSession creates a new conversation session with the given name. Returns the new session.
 	CreateSession(ctx context.Context, name string) (*Session, error)
 

@@ -1,12 +1,13 @@
 import { createContext, useContext, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { AgentInfo, Project, AgentInstance } from "./types";
-import { fetchAgents, fetchProjects, fetchInstances } from "./api";
+import type { AgentInfo, Project, AgentInstance, CommanderInfo } from "./types";
+import { fetchAgents, fetchProjects, fetchInstances, fetchCommander } from "./api";
 import { cleanDisplayName } from "./format";
 
 interface DataContextValue {
   agents: AgentInfo[];
   projects: Project[];
   instances: AgentInstance[];
+  commander: CommanderInfo | null;
   loading: boolean;
   error: string | null;
   /** True when all API fetches failed — backend is likely down or restarting. */
@@ -22,6 +23,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentInfo[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [instances, setInstances] = useState<AgentInstance[]>([]);
+  const [commander, setCommander] = useState<CommanderInfo | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [backendDown, setBackendDown] = useState(false);
@@ -43,10 +45,11 @@ export function DataProvider({ children }: { children: ReactNode }) {
       setError(null);
       const errors: string[] = [];
 
-      const [agentResult, projectResult, instanceResult] = await Promise.allSettled([
+      const [agentResult, projectResult, instanceResult, commanderResult] = await Promise.allSettled([
         fetchAgents(),
         fetchProjects(),
         fetchInstances(),
+        fetchCommander(),
       ]);
 
       if (agentResult.status === "fulfilled") {
@@ -67,7 +70,13 @@ export function DataProvider({ children }: { children: ReactNode }) {
         errors.push(`instances: ${instanceResult.reason?.message || "fetch failed"}`);
       }
 
-      // All three failed → backend is down. Fewer than three → at least
+      if (commanderResult.status === "fulfilled") {
+        setCommander(commanderResult.value ?? null);
+      }
+      // Commander fetch failure is not counted as an error — it's optional
+      // (no commander set up yet is a valid state)
+
+      // All three core fetches failed → backend is down. Fewer than three → at least
       // partially reachable, so clear the down flag.
       setBackendDown(errors.length === 3);
       if (errors.length > 0) {
@@ -131,7 +140,7 @@ export function DataProvider({ children }: { children: ReactNode }) {
   }, [refresh]);
 
   return (
-    <DataContext.Provider value={{ agents, projects, instances, loading, error, backendDown, refresh, pendingActions, setPendingAction }}>
+    <DataContext.Provider value={{ agents, projects, instances, commander, loading, error, backendDown, refresh, pendingActions, setPendingAction }}>
       {children}
     </DataContext.Provider>
   );

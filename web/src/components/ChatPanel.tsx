@@ -369,6 +369,48 @@ export function ChatPanel({
     (it) => it.kind === "message",
   ).length;
 
+  // WHY localStorage for pending reply: React state (sending) is lost on
+  // reload, but the agent may still be processing. We persist a pending flag
+  // in localStorage with a TTL so the "thinking..." indicator survives reloads
+  // and clears itself on done, error, abort, or expiry (5 min).
+  const pendingKey = `pendingReply:${agentName}:${currentSessionKey}`;
+  const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+  const setPendingReply = useCallback((active: boolean) => {
+    if (active) {
+      localStorage.setItem(pendingKey, String(Date.now()));
+    } else {
+      localStorage.removeItem(pendingKey);
+    }
+  }, [pendingKey]);
+
+  // Derive the last message in the current session for reply detection.
+  const lastCurrentMsg = useMemo(() => {
+    for (let i = flatItems.length - 1; i >= 0; i--) {
+      const it = flatItems[i];
+      if (it.kind === "message" && it.isCurrent) return it.msg;
+    }
+    return null;
+  }, [flatItems]);
+
+  const waitingForReply = useMemo(() => {
+    if (sending || loading) return false;
+    const stored = localStorage.getItem(pendingKey);
+    if (!stored) return false;
+    const elapsed = Date.now() - Number(stored);
+    if (elapsed > PENDING_TTL_MS) {
+      localStorage.removeItem(pendingKey);
+      return false;
+    }
+    // If the agent already replied (e.g. after reload, poll picked it up),
+    // clear the flag — the reply arrived while we weren't watching.
+    if (lastCurrentMsg?.role === "assistant") {
+      localStorage.removeItem(pendingKey);
+      return false;
+    }
+    return true;
+  }, [sending, loading, pendingKey, lastCurrentMsg, totalMsgCount]);
+
   // ── Auto-scroll ─────────────────────────────────────────────────────
 
   // WHY: Track briefing by a composite key (agent + timestamp) rather than
@@ -383,7 +425,7 @@ export function ChatPanel({
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [totalMsgCount, sending, streamingContent, toolCalls]);
+  }, [totalMsgCount, sending, waitingForReply, streamingContent, toolCalls]);
 
   // ── Unified chat event handler ────────────────────────────────────────
 
@@ -434,6 +476,7 @@ export function ChatPanel({
           setStreamingContent("");
           setToolCalls([]);
           setSending(false);
+          setPendingReply(false);
           onDone();
           break;
         }
@@ -442,10 +485,11 @@ export function ChatPanel({
           setStreamingContent("");
           setToolCalls([]);
           setSending(false);
+          setPendingReply(false);
           break;
       }
     },
-    [agentName],
+    [agentName, setPendingReply],
   );
 
   // ── Commander briefing ──────────────────────────────────────────────
@@ -553,6 +597,13 @@ export function ChatPanel({
     };
   }, [briefMode, alive, agentName, setSearchParams, handleChatEvent]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const handleStop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setSending(false);
+    setPendingReply(false);
+  }, [setPendingReply]);
+
   // ── Send message ────────────────────────────────────────────────────
 
   const handleSend = useCallback(() => {
@@ -562,6 +613,7 @@ export function ChatPanel({
     setInput("");
     setChatError(null);
     setSending(true);
+    setPendingReply(true);
     setStreamingContent("");
     setToolCalls([]);
     sendTimeRef.current = performance.now();
@@ -588,7 +640,7 @@ export function ChatPanel({
       },
     );
     abortRef.current = controller;
-  }, [input, sending, agentName, currentSessionKey, refreshCurrentSession, handleChatEvent]);
+  }, [input, sending, agentName, currentSessionKey, refreshCurrentSession, handleChatEvent, setPendingReply]);
 
   useEffect(() => {
     return () => {
@@ -872,7 +924,7 @@ export function ChatPanel({
             })
           )}
 
-          {sending && (
+          {(sending || waitingForReply) && (
             <div className="py-1">
               {toolCalls.map((tc, i) => (
                 <ToolCallCard key={`tc-${i}`} tc={tc} />
@@ -891,6 +943,14 @@ export function ChatPanel({
                   thinking...
                 </div>
               ) : null}
+              {sending && (
+                <button
+                  onClick={handleStop}
+                  className="mt-1 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
+                >
+                  stop
+                </button>
+              )}
             </div>
           )}
         </div>

@@ -30,7 +30,7 @@ import {
   MessageSquare, Pause, Target,
 } from "lucide-react";
 import type { AgentInstance } from "../lib/types";
-import { fetchCommander, deleteProject, agentAction, instanceAction } from "../lib/api";
+import { deleteProject, agentAction, instanceAction } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { SetCaptainDialog } from "./SetCaptainDialog";
 import { AddAgentDialog } from "./AddAgentDialog";
@@ -73,12 +73,10 @@ function AgentCard({
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { agents, projects: ctxProjects, instances: ctxInstances, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
+  const { agents, projects: ctxProjects, instances: ctxInstances, commander: ctxCommander, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [commanderName, setCommanderName] = useState("");
-  const [commanderStatus, setCommanderStatus] = useState("");
   const [startingAgent, setStartingAgent] = useState("");
   const [chatKey, setChatKey] = useState(0); // increment to remount ProjectChat
   const hasLoadedRef = useRef(false);
@@ -96,19 +94,15 @@ export default function ProjectDetail() {
     : [];
   const loading = ctxLoading && !hasLoadedRef.current;
 
-  // Fetch hierarchy for commander info
+  // Commander comes from DataContext — no separate fetch needed
+  const commanderName = ctxCommander?.name ?? "";
+  const commanderStatus = ctxCommander?.status ?? "";
+
   const refresh = useCallback(async () => {
     if (!id) return;
     try {
       setLoadError("");
-      const [commander] = await Promise.all([
-        fetchCommander().catch(() => null),
-        ctxRefresh(),
-      ]);
-      if (commander) {
-        setCommanderName(commander.name);
-        setCommanderStatus(commander.status);
-      }
+      await ctxRefresh();
       hasLoadedRef.current = true;
     } catch (err) {
       console.error("Failed to load project data:", err);

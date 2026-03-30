@@ -1073,6 +1073,14 @@ func (z *ZeroClawAdapter) loadEnrichedMessages(sessionKey string) []ChatMessage 
 
 
 
+// Interrupt asks ZeroClaw to cancel an in-flight response.
+// TODO: Call POST /api/sessions/{id}/abort once upstream ships zeroclaw-labs/zeroclaw#XXXX.
+// Until then, this is a no-op — context cancellation on the WS connection is
+// the only way to stop receiving, but the agent continues processing.
+func (z *ZeroClawAdapter) Interrupt(_ context.Context, _ string) error {
+	return nil
+}
+
 // CreateSession generates a new session ID for ZeroClaw. Upstream creates
 // sessions implicitly on first WS message, so we just return the ID.
 // The session will be created in the backend when StreamMessage connects.

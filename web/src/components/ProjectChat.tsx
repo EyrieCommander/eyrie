@@ -38,7 +38,7 @@ import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
 import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
-import { fetchProjectChat, streamProjectChat } from "../lib/api";
+import { fetchProjectChat, streamProjectChat, stopProjectChat } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
@@ -306,6 +306,15 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     send(msg);
   }, [input, send]);
 
+  const handleStop = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    setSending(false);
+    // Cancel the backend's detached orchestration so the agent stops too
+    stopProjectChat(projectId).catch(() => {});
+  }, [projectId]);
+
   // Sort messages: system before user when timestamps are within 1 second
   const sortedMessages = [...messages].sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
@@ -392,14 +401,28 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                 )}
               </div>
             )}
+            <button
+              onClick={handleStop}
+              className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
+            >
+              stop
+            </button>
           </div>
         )}
 
         {/* Waiting indicator */}
         {sending && !streamingAgent && messages.length > 0 && (
-          <div className="text-xs py-1 flex items-center gap-2 text-text-muted">
-            <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
-            waiting for agent response...
+          <div className="text-xs py-1">
+            <div className="flex items-center gap-2 text-text-muted">
+              <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
+              waiting for agent response...
+            </div>
+            <button
+              onClick={handleStop}
+              className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
+            >
+              stop
+            </button>
           </div>
         )}
       </div>

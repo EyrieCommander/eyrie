@@ -149,7 +149,18 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		p.Status = newStatus
 	}
 	if update.OrchestratorID != nil {
+		oldCaptain := p.OrchestratorID
 		p.OrchestratorID = *update.OrchestratorID
+		// Inject system message when captain is assigned/changed
+		if *update.OrchestratorID != "" && *update.OrchestratorID != oldCaptain {
+			captainName := *update.OrchestratorID
+			if is, err := instance.NewStore(); err == nil {
+				if inst, err := is.Get(*update.OrchestratorID); err == nil {
+					captainName = inst.Name
+				}
+			}
+			injectSystemMessage(id, fmt.Sprintf("captain assigned: %s", captainName))
+		}
 	}
 	if update.Progress != nil {
 		if *update.Progress < 0 || *update.Progress > 100 {
@@ -204,7 +215,7 @@ func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	// Before deleting, clean up agent sessions for this project
 	proj, _ := store.Get(id)
 	if proj != nil {
-		sessionKey := projectSessionKey(proj)
+		sessionKey := proj.ID
 		disc := s.runDiscovery(r.Context())
 		participants := resolveProjectParticipants(proj, disc)
 		for _, p := range participants {
@@ -394,8 +405,9 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orch := &ChatOrchestrator{
-		cfg:       s.runDiscovery,
-		chatStore: cs,
+		cfg:         s.runDiscovery,
+		chatStore:   cs,
+		activeChats: &s.activeChats,
 	}
 	if err := orch.RunProjectChat(r.Context(), proj, body.Message, sse); err != nil {
 		if sse.Sent() {
@@ -404,6 +416,22 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 	}
+}
+
+// handleProjectChatStop cancels an in-flight project chat orchestration.
+// POST /api/projects/{id}/chat/stop
+func (s *Server) handleProjectChatStop(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+
+	val, ok := s.activeChats.Load(projectID)
+	if !ok {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "no active chat"})
+		return
+	}
+	cancel := val.(context.CancelFunc)
+	cancel()
+	slog.Info("project chat stopped by user", "project", projectID)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})
 }
 
 type projectParticipant struct {
@@ -692,12 +720,6 @@ func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
-// projectSessionKey returns the session key for a project. Uses the stored
-// SessionKey field if present, otherwise falls back to "project-<id>" for
-// projects created before session keys were introduced.
-func projectSessionKey(proj *project.Project) string {
-	if proj.SessionKey != "" {
-		return proj.SessionKey
-	}
-	return "project-" + proj.ID
-}
+// NOTE: projectSessionKey was removed. All session keys now use proj.ID
+// directly. The old function had three naming schemes (slug, "project-"+UUID,
+// short UUID) that caused mismatches on reset and cross-agent routing.
