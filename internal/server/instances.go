@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/manager"
@@ -117,7 +118,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		startCtx, startCancel := context.WithTimeout(context.Background(), 60*time.Second)
 		defer startCancel()
 
-		if inst.Framework == "embedded" {
+		if inst.Framework == adapter.FrameworkEmbedded {
 			// Embedded agents are started by calling the adapter directly.
 			// Trigger a discovery cycle first so the adapter is created and cached.
 			agent, findErr := s.findAgentAnyState(startCtx, inst.Name)
@@ -133,7 +134,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		if autoStartErr != nil {
 			slog.Warn("auto-start failed", "instance", inst.Name, "error", autoStartErr)
 			inst.Status = instance.StatusError
-		} else if inst.Framework == "embedded" {
+		} else if inst.Framework == adapter.FrameworkEmbedded {
 			// Embedded Start() is synchronous — agent is running now
 			inst.Status = instance.StatusRunning
 		} else {
@@ -145,7 +146,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// Auto-pair ZeroClaw instances so WebSocket chat works
-		if inst.Framework == "zeroclaw" && autoStartErr == nil {
+		if inst.Framework == adapter.FrameworkZeroClaw && autoStartErr == nil {
 			go autoPairZeroClaw(inst.Name, inst.Port)
 		}
 	}
@@ -354,7 +355,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	execCtx, execCancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer execCancel()
 
-	if inst.Framework == "embedded" {
+	if inst.Framework == adapter.FrameworkEmbedded {
 		// Embedded agents run in-process — delegate to the adapter directly
 		// rather than calling the manager (which has no external process to manage).
 		agent, findErr := s.findAgentAnyState(execCtx, inst.Name)
@@ -398,7 +399,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	if action == "stop" {
 		newStatus = instance.StatusStopped
 	}
-	if inst.Framework == "embedded" && action != "stop" {
+	if inst.Framework == adapter.FrameworkEmbedded && action != "stop" {
 		newStatus = instance.StatusRunning
 	}
 	if err := store.UpdateStatus(id, newStatus); err != nil {
@@ -423,7 +424,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-pair ZeroClaw instances after start so WebSocket chat works.
 	// Runs in background — doesn't block the HTTP response.
-	if inst.Framework == "zeroclaw" && action == "start" {
+	if inst.Framework == adapter.FrameworkZeroClaw && action == "start" {
 		go autoPairZeroClaw(inst.Name, inst.Port)
 	}
 
@@ -459,12 +460,18 @@ func autoPairZeroClaw(name string, port int) {
 		return
 	}
 
+	// Open token store once — used for both the "already paired?" check and
+	// the final token save, avoiding a redundant second open.
+	ts, err := config.NewTokenStore()
+	if err != nil {
+		slog.Warn("auto-pair: failed to open token store", "agent", name, "error", err)
+		return
+	}
+
 	// Skip if already paired (another goroutine or manual pair may have beaten us)
-	if ts, err := config.NewTokenStore(); err == nil {
-		if tok := ts.Get(name); tok != "" {
-			slog.Info("auto-pair: already paired, skipping", "agent", name)
-			return
-		}
+	if tok := ts.Get(name); tok != "" {
+		slog.Info("auto-pair: already paired, skipping", "agent", name)
+		return
 	}
 
 	// Fetch pairing code from admin endpoint
@@ -507,12 +514,7 @@ func autoPairZeroClaw(name string, port int) {
 		return
 	}
 
-	// Store token
-	ts, err := config.NewTokenStore()
-	if err != nil {
-		slog.Warn("auto-pair: failed to open token store", "agent", name, "error", err)
-		return
-	}
+	// Store token (reusing the already-opened store)
 	if err := ts.Set(name, tokenResp.Token); err != nil {
 		slog.Warn("auto-pair: failed to save token", "agent", name, "error", err)
 		return

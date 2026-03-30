@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"nhooyr.io/websocket"
 )
@@ -21,9 +22,9 @@ func probeHealth(ctx context.Context, framework, host string, port int) bool {
 	defer cancel()
 
 	switch framework {
-	case "hermes":
+	case adapter.FrameworkHermes:
 		return probeHermesPID()
-	case "embedded":
+	case adapter.FrameworkEmbedded:
 		// Embedded agents have no HTTP endpoint. Liveness is determined by
 		// the adapter's running flag, checked via probeEmbeddedByName().
 		// The caller passes the agent name for embedded lookups.

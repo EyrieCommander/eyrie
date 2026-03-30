@@ -59,6 +59,17 @@ func isConnectionRefused(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "connection refused")
 }
 
+// Framework name constants. Use these instead of string literals to avoid
+// typos and enable grep-ability. Files in the embedded package that cannot
+// import adapter keep using the string literal "embedded" to avoid cycles.
+const (
+	FrameworkZeroClaw = "zeroclaw"
+	FrameworkOpenClaw = "openclaw"
+	FrameworkHermes   = "hermes"
+	FrameworkPicoClaw = "picoclaw"
+	FrameworkEmbedded = "embedded"
+)
+
 // Agent is the common interface that every Claw framework adapter implements.
 // Eyrie's CLI, web server, and discovery system all work through this interface.
 type Agent interface {
@@ -199,9 +210,9 @@ func ProbeProvider(ctx context.Context, provider string) string {
 	return "error"
 }
 
-// providerBaseURL extracts an OpenAI-compatible base URL from a provider string.
+// ProviderBaseURL extracts an OpenAI-compatible base URL from a provider string.
 // Handles "custom:http://host:port/v1" and well-known providers.
-func providerBaseURL(provider string) string {
+func ProviderBaseURL(provider string) string {
 	// Custom provider: "custom:http://127.0.0.1:3456/v1"
 	if strings.HasPrefix(provider, "custom:") {
 		u := strings.TrimPrefix(provider, "custom:")
@@ -237,7 +248,7 @@ func providerBaseURL(provider string) string {
 func providerProbeURL(provider string) string {
 	// Custom provider: use /models (we don't know what endpoints it has)
 	if strings.HasPrefix(provider, "custom:") {
-		base := providerBaseURL(provider)
+		base := ProviderBaseURL(provider)
 		if base != "" {
 			return base + "/models"
 		}

@@ -378,15 +378,26 @@ func validateFetchURL(rawURL string) error {
 	return nil
 }
 
-// isPrivateIP checks whether an IP is in a private/reserved range.
-func isPrivateIP(ip net.IP) bool {
-	privateRanges := []string{
+// privateNetworks holds parsed CIDR ranges for SSRF protection.
+// Parsed once at init to avoid re-parsing 7 CIDRs on every call.
+var privateNetworks []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
 		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
 		"127.0.0.0/8", "169.254.0.0/16", "::1/128", "fc00::/7",
-	}
-	for _, cidr := range privateRanges {
+	} {
 		_, network, _ := net.ParseCIDR(cidr)
-		if network != nil && network.Contains(ip) {
+		if network != nil {
+			privateNetworks = append(privateNetworks, network)
+		}
+	}
+}
+
+// isPrivateIP checks whether an IP is in a private/reserved range.
+func isPrivateIP(ip net.IP) bool {
+	for _, network := range privateNetworks {
+		if network.Contains(ip) {
 			return true
 		}
 	}

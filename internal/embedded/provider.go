@@ -96,20 +96,6 @@ func NewOpenAICompatProvider(apiKey, apiBase string) *OpenAICompatProvider {
 	}
 }
 
-// ProviderBaseURL returns the well-known API base URL for a provider name.
-// Returns empty string if the provider is not recognized.
-func ProviderBaseURL(provider string) string {
-	switch {
-	case strings.Contains(provider, "openrouter"):
-		return "https://openrouter.ai/api/v1"
-	case strings.Contains(provider, "openai"):
-		return "https://api.openai.com/v1"
-	case strings.HasPrefix(provider, "custom:"):
-		return strings.TrimPrefix(provider, "custom:")
-	}
-	return ""
-}
-
 func (p *OpenAICompatProvider) buildBody(messages []Message, tools []ToolDef, model string, opts map[string]any) map[string]any {
 	body := map[string]any{
 		"model":    model,
