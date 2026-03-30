@@ -14,6 +14,7 @@
 
 import type React from "react";
 import { useState } from "react";
+import { openHtmlInNewTab } from "../../lib/dom";
 
 // ── Detection ────────────────────────────────────────────────────────────
 
@@ -157,14 +158,6 @@ const IMG_URL_GROUP = 5;
 const URL_GROUP = 6;
 /** File path — group 7 */
 const PATH_GROUP = 7;
-
-/** Open HTML content in a new tab for full-screen viewing / saving */
-function openHtmlInNewTab(html: string) {
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
-}
 
 function EnhancedText({ text, htmlContent }: { text: string; htmlContent?: string }) {
   const nodes: React.ReactNode[] = [];

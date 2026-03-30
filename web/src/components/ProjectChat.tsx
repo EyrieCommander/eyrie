@@ -307,6 +307,15 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     stopProjectChat(projectId).catch(() => {});
   }, [projectId]);
 
+  const stopButton = (
+    <button
+      onClick={handleStop}
+      className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
+    >
+      stop
+    </button>
+  );
+
   // Auto-start project chat when loaded with no messages.
   // WHY autoStartedRef: Prevents double-fire in StrictMode. The ref is set
   // to true before the send call, so the re-mount cycle sees it as already
@@ -411,12 +420,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                 )}
               </div>
             )}
-            <button
-              onClick={handleStop}
-              className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
-            >
-              stop
-            </button>
+            {stopButton}
           </div>
         )}
 
@@ -427,12 +431,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
               waiting for agent response...
             </div>
-            <button
-              onClick={handleStop}
-              className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
-            >
-              stop
-            </button>
+            {stopButton}
           </div>
         )}
       </div>

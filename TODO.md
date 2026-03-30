@@ -67,10 +67,20 @@
 - [x] **Auto-pairing for provisioned instances**: Implemented — `autoPairZeroClaw()` runs on instance start, fetches paircode from `/admin/paircode`, pairs, and stores token in `tokens.json`. Pairing now enabled by default (`require_pairing = true`).
   - **Secure token storage**: Use restrictive file permissions (0o600) at minimum, prefer OS keyring integration. Tokens should support rotation/refresh under `~/.eyrie/tokens/`.
 - [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. Before starting a new daemon, check for and kill any existing process on the target port.
-- [ ] **API key provisioning for instances**: Currently copies encrypted api_key + .secret_key from parent ZeroClaw installation. Not ideal — shared secret key means one compromised instance exposes all. Let user choose:
-  - Shared API key via env var (simplest)
-  - Per-instance keys via `zeroclaw onboard` on each instance
-  - Centralized key vault in Eyrie (inject at start time, never stored on disk)
+- [ ] **Centralized key vault**: Eyrie-managed API key storage at `~/.eyrie/keys/` with per-provider entries (e.g., `anthropic.key`, `openrouter.key`). Keys stored with 0o600 permissions, optionally encrypted with a master password or OS keyring.
+  - **Manual setup**: User adds keys via settings page or `eyrie keys set anthropic <key>` CLI command. Keys are validated against the provider's API before saving.
+  - **Framework provisioning**: When a framework completes onboarding but has no API key configured, Eyrie checks the vault for a matching provider key. If found, injects it into the framework's config (env var, config file, or security file depending on framework). The API key prompt dialog (shown after setup) should offer "use key from vault" as a one-click option alongside manual entry.
+  - **Instance provisioning**: When creating new talon instances, inject the vault key at start time via environment variable (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, etc.) instead of copying encrypted key files. Key never written to instance disk — only lives in the process environment.
+  - **Key rotation**: Updating a key in the vault propagates to all running instances on next restart. Dashboard shows which instances use which vault keys and their last rotation date.
+  - **API key provisioning for instances**: Currently copies encrypted api_key + .secret_key from parent ZeroClaw installation. Not ideal — shared secret key means one compromised instance exposes all. Let user choose:
+    - Shared API key via env var (simplest)
+    - Per-instance keys via `zeroclaw onboard` on each instance
+    - Centralized key vault in Eyrie 
+  - **Per-framework key format**: Each framework stores keys differently. Vault injection must be framework-aware:
+    - ZeroClaw: encrypted `api_key` field in config.toml (or env var `ANTHROPIC_API_KEY`)
+    - OpenClaw: `.env` file in config dir (or env var)
+    - PicoClaw: `.security.yml` in config dir (or env var `PICOCLAW_CHANNELS_*`)
+    - Hermes: `.env` file in config dir (or env var)
 
 ## Functionality
 
@@ -116,6 +126,15 @@
 - [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
 - [x] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 - [x] **Rich tool output display**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content. Also HTML preview, image preview, JSON highlighting, file path links and diff display
+
+## Code Health
+
+- [ ] Extract JSONL append/read into generic utility in `internal/fileutil/` (duplicated in `embedded/sessions.go` and `project/chat.go`)
+- [ ] Replace per-request `NewStore()` calls with request-scoped or cached store (30+ call sites in `projects.go`)
+- [ ] Poll `fetchCommander()` only on project-related routes instead of globally every 30s
+- [ ] Add change-detection guard to DataContext polling to skip no-op React re-renders
+- [ ] Remove `ensureMetrics` migration shim in `useAgentMetrics.ts` once old format is obsolete
+- [ ] Parallelize talon destruction in `handleProjectReset` with errgroup
 
 ## Integrations / Architecture
 

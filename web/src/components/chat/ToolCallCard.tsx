@@ -2,6 +2,7 @@ import { useState, useId, useCallback } from "react";
 import type { ToolCall } from "../../lib/chat-events";
 import type { ChatPart } from "../../lib/types";
 import { RichOutput } from "./RichOutput";
+import { openHtmlInNewTab } from "../../lib/dom";
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
@@ -102,15 +103,6 @@ function HtmlCanvasArgs({ args, output }: { args: Record<string, any>; output?: 
       )}
     </div>
   );
-}
-
-/** Open HTML content in a new tab for full-screen viewing / saving */
-function openHtmlInNewTab(html: string) {
-  const blob = new Blob([html], { type: "text/html" });
-  const url = URL.createObjectURL(blob);
-  window.open(url, "_blank");
-  // Revoke after a delay to allow the tab to load
-  setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 
 /** Full HTML preview with iframe + "open in new tab" button */

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/Audacity88/eyrie/internal/config"
 )
 
 // KeyStore reads API keys from ~/.eyrie/keys.json and environment variables.
@@ -42,11 +44,11 @@ func (ks *KeyStore) Get(provider string) string {
 
 // load reads the on-disk key file. Called once at construction.
 func (ks *KeyStore) load() {
-	home, err := os.UserHomeDir()
+	dir, err := config.ConfigDir()
 	if err != nil {
 		return
 	}
-	path := filepath.Join(home, ".eyrie", "keys.json")
+	path := filepath.Join(dir, "keys.json")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if !os.IsNotExist(err) {

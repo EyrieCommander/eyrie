@@ -261,5 +261,5 @@ func (ss *SessionStore) loadFile(path string) []Message {
 }
 
 func isJSONL(name string) bool {
-	return len(name) > 6 && name[len(name)-6:] == ".jsonl"
+	return strings.HasSuffix(name, ".jsonl")
 }
