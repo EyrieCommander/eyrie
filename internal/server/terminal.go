@@ -153,7 +153,11 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	case "openclaw":
 		binaryPath = "/usr/local/bin/openclaw"
 		args = []string{"tui"} // openclaw needs 'tui' subcommand for terminal UI
+	case "picoclaw":
+		binaryPath = os.ExpandEnv("$HOME/go/bin/picoclaw")
+		args = []string{"agent"} // picoclaw agent subcommand for interactive chat
 	default:
+		slog.Error("No terminal support for framework", "agent", name, "framework", agentResult.Agent.Framework)
 		return
 	}
 

@@ -29,11 +29,14 @@ interface FrameworkCapabilities {
   security: Record<string, SupportLevel>;
   securityNotes: Record<string, string>;
   architecture: string;
+  /** CLI command for interactive chat (pre-populated in shell terminal) */
+  chatCommand: string;
 }
 
 const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   zeroclaw: {
     architecture: "persistent gateway",
+    chatCommand: "zeroclaw agent",
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -68,6 +71,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   },
   openclaw: {
     architecture: "persistent gateway",
+    chatCommand: "openclaw tui",
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -101,6 +105,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   },
   picoclaw: {
     architecture: "persistent gateway",
+    chatCommand: "picoclaw agent",
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -132,6 +137,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   },
   hermes: {
     architecture: "process-per-message",
+    chatCommand: "hermes",
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -326,10 +332,10 @@ export default function FrameworkCompare() {
 
   const handleManage = (frameworkId: string) => {
     setSelectedFramework(frameworkId);
-    setInstallProgress((prev) => {
-      if (prev[frameworkId]?.status === "error") return prev;
-      return { ...prev, [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success" as const, progress: 100, message: "installed", started_at: new Date().toISOString() } };
-    });
+    setInstallProgress((prev) => ({
+      ...prev,
+      [frameworkId]: { framework_id: frameworkId, phase: "complete", status: "success" as const, progress: 100, message: "installed", started_at: new Date().toISOString() },
+    }));
     if (!installLogs[frameworkId]?.length) {
       setInstallLogs((prev) => ({ ...prev, [frameworkId]: [`${frameworkId} is installed and ready.`] }));
     }
@@ -529,7 +535,16 @@ export default function FrameworkCompare() {
               <div className="flex items-center gap-2">
                 {currentProgress?.status === "success" && (
                   <>
-                    <button onClick={() => { setShowTerminal(true); setShowLogs(false); }} className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors">
+                    <button onClick={() => {
+                      const fw = selectedFramework ? frameworks.find((f) => f.id === selectedFramework) : null;
+                      const caps = selectedFramework ? CAPABILITIES[selectedFramework] : null;
+                      // Use full binary_path from registry + subcommand from capabilities
+                      const sub = caps?.chatCommand?.split(" ").slice(1).join(" ") || "";
+                      const cmd = fw?.binary_path ? `${fw.binary_path}${sub ? " " + sub : ""}` : caps?.chatCommand;
+                      setSetupCommand(cmd);
+                      setShowTerminal(true);
+                      setShowLogs(false);
+                    }} className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors">
                       <TerminalIcon className="h-3 w-3" /> launch terminal
                     </button>
                     <button onClick={() => navigate(`/agents/${selectedFramework}/config`)} className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors">
