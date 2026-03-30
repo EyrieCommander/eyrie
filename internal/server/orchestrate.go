@@ -88,7 +88,14 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	agentCtx, agentCancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer agentCancel()
 	if o.activeChats != nil {
-		o.activeChats.Store(projectID, agentCancel)
+		// WHY LoadOrStore: Store+defer Delete races when two concurrent
+		// RunProjectChat calls overlap — the second overwrites the first's
+		// cancel func, then the first's defer deletes the second's entry.
+		// LoadOrStore detects the existing entry and rejects the duplicate.
+		if _, loaded := o.activeChats.LoadOrStore(projectID, agentCancel); loaded {
+			agentCancel()
+			return fmt.Errorf("another chat is already in progress for this project")
+		}
 		defer o.activeChats.Delete(projectID)
 	}
 
@@ -371,7 +378,9 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			Content:   fmt.Sprintf("%s was stopped", p.name),
 			Timestamp: time.Now(),
 		}
-		o.chatStore.Append(projectID, stopMsg)
+		if err := o.chatStore.Append(projectID, stopMsg); err != nil {
+			slog.Warn("failed to save stop message", "project", projectID, "error", err)
+		}
 		sse.WriteEvent(map[string]any{"type": "message", "message": stopMsg})
 		sse.WriteDone()
 		return nil
@@ -492,7 +501,9 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 						Content:   fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, err),
 						Timestamp: time.Now(),
 					}
-					o.chatStore.Append(projectID, errMsg)
+					if appendErr := o.chatStore.Append(projectID, errMsg); appendErr != nil {
+						slog.Warn("failed to save error message", "project", projectID, "error", appendErr)
+					}
 					sse.WriteEvent(map[string]any{"type": "message", "message": errMsg})
 				} else {
 					var fwdContent string

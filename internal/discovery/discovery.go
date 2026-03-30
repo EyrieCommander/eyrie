@@ -20,7 +20,7 @@ import (
 // for a given agent name. See CLAUDE.md anti-pattern: "Per-request singletons".
 var (
 	embeddedAdapters   = map[string]*adapter.EmbeddedAdapter{}
-	embeddedAdaptersMu sync.Mutex
+	embeddedAdaptersMu sync.RWMutex
 )
 
 // Result holds the outcome of a discovery run.

@@ -35,10 +35,11 @@ function writeStore(store: MetricsStore) {
 function ensureMetrics(store: MetricsStore, name: string): AgentMetrics {
   if (!store[name]) store[name] = emptyMetrics();
   const m = store[name];
-  // Migrate old format that only had latencies
-  if (!m.inputTokens) m.inputTokens = [];
-  if (!m.outputTokens) m.outputTokens = [];
-  if (!m.totalCost) m.totalCost = 0;
+  // Migrate old format that only had latencies — use explicit undefined
+  // checks so existing zero values aren't overwritten.
+  if (m.inputTokens === undefined) m.inputTokens = [];
+  if (m.outputTokens === undefined) m.outputTokens = [];
+  if (m.totalCost === undefined) m.totalCost = 0;
   return m;
 }
 

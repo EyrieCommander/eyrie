@@ -275,7 +275,7 @@ func (al *AgentLoop) truncateContext(messages []Message) []Message {
 	dropped := 0
 	for i := 1; i < len(messages); i++ {
 		remaining := len(messages) - i
-		if total > al.config.MaxContextTokens && remaining >= minKeep-1 {
+		if total > al.config.MaxContextTokens && remaining >= minKeep {
 			total -= len(messages[i].Content) / 4
 			dropped++
 			continue

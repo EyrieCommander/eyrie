@@ -239,14 +239,19 @@ export default function AgentCompare() {
                         {m?.latencies.length ?? 0}
                       </td>
                       <td className="px-4 py-2.5 text-right text-text-secondary">
-                        {m?.inputTokens?.length ? (
-                          <span title={`in: ${Math.round(m.inputTokens.reduce((a, b) => a + b, 0) / m.inputTokens.length)} / out: ${Math.round(m.outputTokens.reduce((a, b) => a + b, 0) / m.outputTokens.length)}`}>
-                            {Math.round((m.inputTokens.reduce((a, b) => a + b, 0) + m.outputTokens.reduce((a, b) => a + b, 0)) / m.inputTokens.length).toLocaleString()}
-                          </span>
-                        ) : "-"}
+                        {m?.inputTokens?.length ? (() => {
+                          const inputSum = m.inputTokens.reduce((a: number, b: number) => a + b, 0);
+                          const outputSum = (m.outputTokens ?? []).reduce((a: number, b: number) => a + b, 0);
+                          const count = m.inputTokens.length;
+                          return (
+                            <span title={`in: ${Math.round(inputSum / count)} / out: ${count > 0 ? Math.round(outputSum / count) : 0}`}>
+                              {Math.round((inputSum + outputSum) / count).toLocaleString()}
+                            </span>
+                          );
+                        })() : "-"}
                       </td>
                       <td className="px-4 py-2.5 text-right text-text-secondary">
-                        {m?.totalCost ? `$${m.totalCost.toFixed(4)}` : "-"}
+                        {m?.totalCost != null ? `$${m.totalCost.toFixed(4)}` : "-"}
                       </td>
                       <td className="px-4 py-2.5 text-text-secondary truncate max-w-28">
                         {agent.status?.provider || "-"}

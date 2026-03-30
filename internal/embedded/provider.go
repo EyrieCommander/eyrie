@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 )
@@ -343,13 +344,16 @@ func parseStreamResponse(ctx context.Context, reader io.Reader, onDelta func(del
 		return nil, fmt.Errorf("streaming read error: %w", err)
 	}
 
-	// Assemble tool calls from accumulated deltas
+	// Assemble tool calls from accumulated deltas. Collect and sort
+	// the map keys to handle non-contiguous indices deterministically.
 	var toolCalls []ToolCall
-	for i := 0; i < len(activeTools); i++ {
-		acc, ok := activeTools[i]
-		if !ok {
-			continue
-		}
+	sortedIndices := make([]int, 0, len(activeTools))
+	for idx := range activeTools {
+		sortedIndices = append(sortedIndices, idx)
+	}
+	sort.Ints(sortedIndices)
+	for _, idx := range sortedIndices {
+		acc := activeTools[idx]
 		tc := ToolCall{
 			ID:   acc.id,
 			Type: "function",

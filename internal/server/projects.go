@@ -429,7 +429,12 @@ func (s *Server) handleProjectChatStop(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "no active chat"})
 		return
 	}
-	cancel := val.(context.CancelFunc)
+	cancel, castOk := val.(context.CancelFunc)
+	if !castOk {
+		slog.Error("activeChats entry has unexpected type", "project", projectID)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
 	cancel()
 	slog.Info("project chat stopped by user", "project", projectID)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "stopped"})

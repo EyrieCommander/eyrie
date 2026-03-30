@@ -393,23 +393,28 @@ export function ChatPanel({
     return null;
   }, [flatItems]);
 
+  // WHY separate useMemo + useEffect: useMemo must be pure (no side effects).
+  // The memo reads localStorage and computes a boolean. The effect handles
+  // cleanup (removing stale/expired keys) based on the same conditions.
   const waitingForReply = useMemo(() => {
     if (sending || loading) return false;
     const stored = localStorage.getItem(pendingKey);
     if (!stored) return false;
     const elapsed = Date.now() - Number(stored);
-    if (elapsed > PENDING_TTL_MS) {
-      localStorage.removeItem(pendingKey);
-      return false;
-    }
-    // If the agent already replied (e.g. after reload, poll picked it up),
-    // clear the flag — the reply arrived while we weren't watching.
-    if (lastCurrentMsg?.role === "assistant") {
-      localStorage.removeItem(pendingKey);
-      return false;
-    }
+    if (elapsed > PENDING_TTL_MS) return false;
+    if (lastCurrentMsg?.role === "assistant") return false;
     return true;
   }, [sending, loading, pendingKey, lastCurrentMsg, totalMsgCount]);
+
+  // Clean up stale pending flags outside of useMemo
+  useEffect(() => {
+    const stored = localStorage.getItem(pendingKey);
+    if (!stored) return;
+    const elapsed = Date.now() - Number(stored);
+    if (elapsed > PENDING_TTL_MS || lastCurrentMsg?.role === "assistant") {
+      localStorage.removeItem(pendingKey);
+    }
+  }, [pendingKey, lastCurrentMsg, totalMsgCount]);
 
   // ── Auto-scroll ─────────────────────────────────────────────────────
 

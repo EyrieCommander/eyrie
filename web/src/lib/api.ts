@@ -565,7 +565,7 @@ export async function deleteProject(id: string): Promise<void> {
 }
 
 export async function resetProject(id: string): Promise<void> {
-  const res = await fetch(`${BASE}/api/projects/${id}/reset`, { method: "POST" });
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${id}/reset`, { method: "POST" });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to reset project: ${res.statusText}`);
@@ -716,7 +716,11 @@ export function streamProjectChat(
 
 /** Tell the backend to cancel an in-flight project chat orchestration. */
 export async function stopProjectChat(projectId: string): Promise<void> {
-  await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/stop`, { method: "POST" });
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/stop`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.text().catch(() => res.statusText);
+    throw new Error(`Failed to stop chat: ${res.status} ${body}`);
+  }
 }
 
 export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {

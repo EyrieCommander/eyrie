@@ -2,10 +2,12 @@ package embedded
 
 import (
 	"bufio"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -46,28 +48,33 @@ func (ss *SessionStore) Get(key string) []Message {
 }
 
 // Append adds a message to the session and persists it to disk.
+// Disk write happens first — if it fails, in-memory state is not modified
+// so the two stay consistent.
 func (ss *SessionStore) Append(key string, msg Message) error {
+	if err := ss.appendToDisk(key, msg); err != nil {
+		return err
+	}
 	ss.mu.Lock()
 	ss.sessions[key] = append(ss.sessions[key], msg)
 	ss.mu.Unlock()
-
-	return ss.appendToDisk(key, msg)
+	return nil
 }
 
 // AppendMany adds multiple messages to the session and persists them.
+// All messages are written to disk first; only after success is the
+// in-memory state updated.
 func (ss *SessionStore) AppendMany(key string, msgs []Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}
-	ss.mu.Lock()
-	ss.sessions[key] = append(ss.sessions[key], msgs...)
-	ss.mu.Unlock()
-
 	for _, msg := range msgs {
 		if err := ss.appendToDisk(key, msg); err != nil {
 			return err
 		}
 	}
+	ss.mu.Lock()
+	ss.sessions[key] = append(ss.sessions[key], msgs...)
+	ss.mu.Unlock()
 	return nil
 }
 
@@ -83,30 +90,29 @@ func (ss *SessionStore) Keys() []string {
 }
 
 // Delete removes a session from memory and disk.
+// Disk removal happens first to avoid orphaned files on failure.
 func (ss *SessionStore) Delete(key string) error {
-	ss.mu.Lock()
-	delete(ss.sessions, key)
-	ss.mu.Unlock()
-
 	path := ss.filePath(key)
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing session file: %w", err)
 	}
+	ss.mu.Lock()
+	delete(ss.sessions, key)
+	ss.mu.Unlock()
 	return nil
 }
 
 // Clear removes all messages from a session (in memory and on disk) without
-// deleting the session key.
+// deleting the session key. Disk truncation happens first to avoid
+// inconsistency on failure.
 func (ss *SessionStore) Clear(key string) error {
-	ss.mu.Lock()
-	ss.sessions[key] = nil
-	ss.mu.Unlock()
-
-	// Truncate the file on disk
 	path := ss.filePath(key)
 	if err := os.Truncate(path, 0); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("truncating session file: %w", err)
 	}
+	ss.mu.Lock()
+	ss.sessions[key] = nil
+	ss.mu.Unlock()
 	return nil
 }
 
@@ -123,9 +129,11 @@ type sessionEntry struct {
 }
 
 func (ss *SessionStore) filePath(key string) string {
-	// Sanitize key for filename safety
-	safe := filepath.Base(key)
-	return filepath.Join(ss.sessionDir, safe+".jsonl")
+	// WHY hex encoding: filepath.Base strips directory components, causing
+	// keys like "project/main" and "other/main" to collide on "main.jsonl".
+	// Hex encoding is reversible and produces filesystem-safe filenames.
+	encoded := hex.EncodeToString([]byte(key))
+	return filepath.Join(ss.sessionDir, encoded+".jsonl")
 }
 
 func (ss *SessionStore) appendToDisk(key string, msg Message) error {
@@ -174,7 +182,16 @@ func (ss *SessionStore) loadAll() {
 		if e.IsDir() || !isJSONL(e.Name()) {
 			continue
 		}
-		key := e.Name()[:len(e.Name())-len(".jsonl")]
+		encoded := e.Name()[:len(e.Name())-len(".jsonl")]
+		// Decode hex-encoded key; fall back to raw name for pre-encoding files
+		key := encoded
+		if decoded, err := hex.DecodeString(encoded); err == nil {
+			key = string(decoded)
+		}
+		// Legacy: also accept old filepath.Base-style names
+		if strings.Contains(encoded, "/") || strings.Contains(encoded, "\\") {
+			key = filepath.Base(encoded)
+		}
 		msgs := ss.loadFile(filepath.Join(ss.sessionDir, e.Name()))
 		if len(msgs) > 0 {
 			ss.sessions[key] = msgs

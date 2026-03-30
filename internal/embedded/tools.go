@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -215,6 +217,9 @@ func builtinListDir(workspace string) *Tool {
 	}
 }
 
+// TODO: builtinExec needs proper sandboxing (seccomp, container, or
+// restricted shell) before production use. Currently restricted to workspace
+// directory only. See TODO.md security section.
 func builtinExec(workspace string) *Tool {
 	return &Tool{
 		Name:        "exec",
@@ -278,6 +283,11 @@ func builtinWebFetch() *Tool {
 				return "", fmt.Errorf("url is required")
 			}
 
+			// SSRF protection: block private/reserved IP ranges
+			if err := validateFetchURL(rawURL); err != nil {
+				return "", err
+			}
+
 			// 30-second timeout for web requests
 			fetchCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			defer cancel()
@@ -312,7 +322,8 @@ func builtinWebFetch() *Tool {
 }
 
 // safePath resolves a relative path against the workspace root and ensures
-// the result stays within the workspace. Prevents path traversal attacks.
+// the result stays within the workspace. Uses EvalSymlinks to prevent
+// symlink traversal attacks.
 func safePath(workspace, relPath string) (string, error) {
 	// Clean the relative path to remove .. components
 	cleaned := filepath.Clean(relPath)
@@ -320,20 +331,66 @@ func safePath(workspace, relPath string) (string, error) {
 		return "", fmt.Errorf("absolute paths not allowed: %s", relPath)
 	}
 
-	absPath := filepath.Join(workspace, cleaned)
-	// Verify the resolved path is still under workspace
-	absWorkspace, err := filepath.Abs(workspace)
+	// Resolve symlinks in the workspace root
+	absWorkspace, err := filepath.EvalSymlinks(workspace)
 	if err != nil {
 		return "", fmt.Errorf("resolving workspace: %w", err)
 	}
-	absResolved, err := filepath.Abs(absPath)
+
+	absPath := filepath.Join(absWorkspace, cleaned)
+	// Resolve symlinks in the target path (may not exist yet for writes)
+	absResolved, err := filepath.EvalSymlinks(absPath)
 	if err != nil {
-		return "", fmt.Errorf("resolving path: %w", err)
+		// If the file doesn't exist, check the parent directory
+		absResolved, err = filepath.EvalSymlinks(filepath.Dir(absPath))
+		if err != nil {
+			return "", fmt.Errorf("resolving path: %w", err)
+		}
+		absResolved = filepath.Join(absResolved, filepath.Base(absPath))
 	}
+
 	if !strings.HasPrefix(absResolved, absWorkspace+string(filepath.Separator)) && absResolved != absWorkspace {
 		return "", fmt.Errorf("path escapes workspace: %s", relPath)
 	}
 	return absResolved, nil
+}
+
+// validateFetchURL checks that a URL is safe to fetch (no SSRF to private networks).
+func validateFetchURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("invalid URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return fmt.Errorf("only http/https URLs are allowed, got %q", parsed.Scheme)
+	}
+
+	host := parsed.Hostname()
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("DNS lookup failed for %s: %w", host, err)
+	}
+	for _, ip := range ips {
+		if isPrivateIP(ip) {
+			return fmt.Errorf("blocked: %s resolves to private IP %s", host, ip)
+		}
+	}
+	return nil
+}
+
+// isPrivateIP checks whether an IP is in a private/reserved range.
+func isPrivateIP(ip net.IP) bool {
+	privateRanges := []string{
+		"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
+		"127.0.0.0/8", "169.254.0.0/16", "::1/128", "fc00::/7",
+	}
+	for _, cidr := range privateRanges {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network != nil && network.Contains(ip) {
+			return true
+		}
+	}
+	return false
 }
 
 // parseToolArgs unmarshals the raw JSON arguments string from a tool call

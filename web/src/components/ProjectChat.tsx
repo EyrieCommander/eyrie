@@ -243,7 +243,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               });
             } else if (ev.type === "done") {
               // Record token usage attributed to this agent
-              if (event.sender && (ev.input_tokens || ev.output_tokens || ev.cost_usd)) {
+              if (event.sender && (ev.input_tokens !== undefined || ev.output_tokens !== undefined || ev.cost_usd !== undefined)) {
                 recordUsage(event.sender, ev.input_tokens ?? 0, ev.output_tokens ?? 0, ev.cost_usd ?? 0);
               }
               clearStreaming();
@@ -313,6 +313,11 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   // started. The ref resets on remount (e.g. chatKey increment after reset),
   // which is exactly when we want auto-start to fire again.
   const autoStartedRef = useRef(false);
+  // Reset the auto-start flag when projectId changes so a new project
+  // can trigger auto-start without requiring a parent remount.
+  useEffect(() => {
+    autoStartedRef.current = false;
+  }, [projectId]);
   useEffect(() => {
     if (chatLoaded && !autoStartedRef.current && !sending && messages.length === 0) {
       autoStartedRef.current = true;

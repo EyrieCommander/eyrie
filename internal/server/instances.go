@@ -436,11 +436,16 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 func autoPairZeroClaw(name string, port int) {
 	baseURL := fmt.Sprintf("http://127.0.0.1:%d", port)
 
+	// WHY short-timeout client: http.DefaultClient has no timeout. If the
+	// gateway hangs (accepts TCP but never responds), the goroutine blocks
+	// indefinitely. 5s is generous for localhost health checks.
+	client := &http.Client{Timeout: 5 * time.Second}
+
 	// Wait for gateway to be ready (up to 15 seconds)
 	var ready bool
 	for i := 0; i < 30; i++ {
 		time.Sleep(500 * time.Millisecond)
-		resp, err := http.Get(baseURL + "/api/health")
+		resp, err := client.Get(baseURL + "/api/health")
 		if err == nil {
 			resp.Body.Close()
 			if resp.StatusCode == 200 || resp.StatusCode == 401 {
@@ -454,8 +459,16 @@ func autoPairZeroClaw(name string, port int) {
 		return
 	}
 
+	// Skip if already paired (another goroutine or manual pair may have beaten us)
+	if ts, err := config.NewTokenStore(); err == nil {
+		if tok := ts.Get(name); tok != "" {
+			slog.Info("auto-pair: already paired, skipping", "agent", name)
+			return
+		}
+	}
+
 	// Fetch pairing code from admin endpoint
-	resp, err := http.Get(baseURL + "/admin/paircode")
+	resp, err := client.Get(baseURL + "/admin/paircode")
 	if err != nil {
 		slog.Warn("auto-pair: failed to fetch paircode", "agent", name, "error", err)
 		return
@@ -472,7 +485,6 @@ func autoPairZeroClaw(name string, port int) {
 	}
 
 	if pcResp.PairingCode == nil || *pcResp.PairingCode == "" {
-		// Pairing disabled or no code available — skip
 		slog.Info("auto-pair: no pairing code available, skipping", "agent", name)
 		return
 	}
@@ -480,7 +492,7 @@ func autoPairZeroClaw(name string, port int) {
 	// Pair with the gateway
 	pairReq, _ := http.NewRequest("POST", baseURL+"/pair", nil)
 	pairReq.Header.Set("X-Pairing-Code", *pcResp.PairingCode)
-	pairResp, err := http.DefaultClient.Do(pairReq)
+	pairResp, err := client.Do(pairReq)
 	if err != nil {
 		slog.Warn("auto-pair: pair request failed", "agent", name, "error", err)
 		return

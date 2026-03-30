@@ -36,7 +36,8 @@ type EmbeddedAdapter struct {
 	mu        sync.Mutex
 	running   bool
 	startTime time.Time
-	cancelFn  context.CancelFunc
+	cancelCtx context.Context    // parent context for all agent goroutines
+	cancelFn  context.CancelFunc // cancels cancelCtx
 
 	// Core components, initialized on Start()
 	llmProvider  embedded.LLMProvider
@@ -197,8 +198,11 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 	loopCfg := embedded.DefaultLoopConfig()
 	a.loop = embedded.NewAgentLoop(a.llmProvider, a.tools, loopCfg, a.logBuf)
 
-	// Create cancel function for lifecycle management
-	_, cancel := context.WithCancel(context.Background())
+	// Create cancel context for lifecycle management — all long-running
+	// operations (agent loop, tool calls) use this as parent so Stop()
+	// can propagate cancellation.
+	ctx, cancel := context.WithCancel(context.Background())
+	a.cancelCtx = ctx
 	a.cancelFn = cancel
 
 	a.running = true

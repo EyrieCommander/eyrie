@@ -2,6 +2,7 @@ package embedded
 
 import (
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -45,11 +46,17 @@ func (ks *KeyStore) load() {
 	if err != nil {
 		return
 	}
-	data, err := os.ReadFile(filepath.Join(home, ".eyrie", "keys.json"))
+	path := filepath.Join(home, ".eyrie", "keys.json")
+	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			slog.Warn("failed to read keys file", "path", path, "error", err)
+		}
 		return
 	}
 	ks.mu.Lock()
 	defer ks.mu.Unlock()
-	_ = json.Unmarshal(data, &ks.keys)
+	if err := json.Unmarshal(data, &ks.keys); err != nil {
+		slog.Warn("failed to parse keys file", "path", path, "error", err)
+	}
 }

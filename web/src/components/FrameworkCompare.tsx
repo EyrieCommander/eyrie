@@ -192,16 +192,20 @@ function NoteIndicator({ note }: { note: string }) {
   return (
     <span className="relative inline-block ml-1">
       <button
+        type="button"
         onClick={(e) => { e.stopPropagation(); setOpen(!open); }}
+        onKeyDown={(e) => { if (e.key === "Escape") { setOpen(false); e.stopPropagation(); } }}
         className="text-[9px] text-text-muted hover:text-accent cursor-help"
-        title={note}
+        aria-label={`Info: ${note}`}
+        aria-expanded={open}
+        aria-controls="note-tooltip"
       >
         ?
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 w-48 rounded border border-border bg-bg p-2 text-[10px] text-text-secondary shadow-lg">
+          <div id="note-tooltip" role="tooltip" className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-50 w-48 rounded border border-border bg-bg p-2 text-[10px] text-text-secondary shadow-lg">
             {note}
           </div>
         </>
@@ -277,12 +281,20 @@ export default function FrameworkCompare() {
   const [installProgress, setInstallProgress] = useState<Record<string, InstallProgress>>({});
   const [installLogs, setInstallLogs] = useState<Record<string, string[]>>({});
   const [selectedFramework, setSelectedFramework] = useState<string | null>(null);
+  const selectedFrameworkRef = useRef<string | null>(null);
   const [showLogs, setShowLogs] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
   const abortControllers = useRef<Record<string, AbortController>>({});
   const logEndRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => { loadFrameworks(); loadInstallStatus(); }, []);
+  useEffect(() => { selectedFrameworkRef.current = selectedFramework; }, [selectedFramework]);
+  useEffect(() => {
+    loadFrameworks(); loadInstallStatus();
+    return () => {
+      // Abort in-flight install streams on unmount
+      Object.values(abortControllers.current).forEach((c) => c.abort());
+    };
+  }, []);
   useEffect(() => {
     if (showLogs && logEndRef.current) logEndRef.current.scrollIntoView({ behavior: "smooth" });
   }, [installLogs, showLogs]);
@@ -321,7 +333,7 @@ export default function FrameworkCompare() {
     const controller = streamInstall(frameworkId, undefined,
       (progress) => {
         setInstallProgress((prev) => ({ ...prev, [frameworkId]: progress }));
-        if (progress.status === "success") setTimeout(() => { if (selectedFramework === frameworkId) setShowLogs(false); }, 2000);
+        if (progress.status === "success") setTimeout(() => { if (selectedFrameworkRef.current === frameworkId) setShowLogs(false); }, 2000);
       },
       (log) => { setInstallLogs((prev) => ({ ...prev, [frameworkId]: [...(prev[frameworkId] || []), log] })); },
       shouldForce,

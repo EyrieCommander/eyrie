@@ -53,6 +53,8 @@ function HtmlCanvasArgs({ args, output }: { args: Record<string, any>; output?: 
     navigator.clipboard.writeText(content).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
+    }).catch((err) => {
+      console.warn("clipboard write failed:", err);
     });
   }, [content]);
 

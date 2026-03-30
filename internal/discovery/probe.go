@@ -78,10 +78,10 @@ func probeHermesPID() bool {
 // probeEmbeddedByName checks whether an embedded agent is running by looking
 // up its cached adapter singleton.
 func probeEmbeddedByName(name string) bool {
-	embeddedAdaptersMu.Lock()
-	a, ok := embeddedAdapters[name]
-	embeddedAdaptersMu.Unlock()
-	if !ok {
+	embeddedAdaptersMu.RLock()
+	a := embeddedAdapters[name]
+	embeddedAdaptersMu.RUnlock()
+	if a == nil {
 		return false
 	}
 	return a.IsRunning()
