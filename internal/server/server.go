@@ -13,6 +13,8 @@ import (
 
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/project"
 )
 
 //go:embed all:static
@@ -26,6 +28,15 @@ type Server struct {
 	hidden *config.HiddenStore
 	events *EventBus
 
+	// WHY cached stores: Handlers previously called NewStore() per request
+	// (38 call sites across projects.go, instances.go, hierarchy.go). Each
+	// call does os.UserHomeDir() + os.MkdirAll(). These are initialized
+	// once in New() and shared across all requests. Thread safety is handled
+	// by each store's internal RWMutex.
+	projectStore  *project.Store
+	chatStore     *project.ChatStore
+	instanceStore *instance.Store
+
 	// activeChats stores cancel functions for in-flight project chat
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
 	// to cancel the detached agent context.
@@ -38,7 +49,17 @@ func New(cfg config.Config) *Server {
 		slog.Warn("failed to load hidden sessions store", "error", err)
 		hidden = nil
 	}
-	s := &Server{cfg: cfg, hidden: hidden, events: NewEventBus()}
+	projStore, _ := project.NewStore()
+	chatSt, _ := project.NewChatStore()
+	instStore, _ := instance.NewStore()
+	s := &Server{
+		cfg:           cfg,
+		hidden:        hidden,
+		events:        NewEventBus(),
+		projectStore:  projStore,
+		chatStore:     chatSt,
+		instanceStore: instStore,
+	}
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{

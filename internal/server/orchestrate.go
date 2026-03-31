@@ -63,15 +63,17 @@ import (
 
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/project"
 )
 
 // ChatOrchestrator encapsulates the multi-agent orchestration logic for
 // project chat and intake conversations, decoupled from HTTP concerns.
 type ChatOrchestrator struct {
-	cfg         func(ctx context.Context) discovery.Result // runs discovery
-	chatStore   *project.ChatStore
-	activeChats *sync.Map // map[projectID]context.CancelFunc — for stop endpoint
+	cfg           func(ctx context.Context) discovery.Result // runs discovery
+	chatStore     *project.ChatStore
+	instanceStore *instance.Store
+	activeChats   *sync.Map // map[projectID]context.CancelFunc — for stop endpoint
 }
 
 // RunProjectChat executes the core project-chat loop: stores the user
@@ -101,7 +103,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 
 	// Resolve participants
 	disc := o.cfg(agentCtx)
-	participants := resolveProjectParticipants(proj, disc)
+	participants := resolveProjectParticipants(proj, disc, o.instanceStore)
 	if len(participants) == 0 {
 		return fmt.Errorf("no agents available — make sure the commander is running")
 	}

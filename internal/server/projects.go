@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,11 +25,7 @@ import (
 )
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	projects, err := store.List()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -42,11 +39,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	p, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -70,11 +63,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	p, err := store.Create(req)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -89,18 +78,14 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	if p.Description != "" {
 		detail += fmt.Sprintf("\ndescription: %s", p.Description)
 	}
-	injectSystemMessage(p.ID, detail)
+	s.injectSystemMessage(p.ID, detail)
 
 	writeJSON(w, http.StatusCreated, p)
 }
 
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	p, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -155,12 +140,12 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		// Inject system message when captain is assigned/changed
 		if *update.OrchestratorID != "" && *update.OrchestratorID != oldCaptain {
 			captainName := *update.OrchestratorID
-			if is, err := instance.NewStore(); err == nil {
+			if is := s.instanceStore; is != nil {
 				if inst, err := is.Get(*update.OrchestratorID); err == nil {
 					captainName = inst.Name
 				}
 			}
-			injectSystemMessage(id, fmt.Sprintf("captain assigned: %s", captainName))
+			s.injectSystemMessage(id, fmt.Sprintf("captain assigned: %s", captainName))
 		}
 	}
 	if update.Progress != nil {
@@ -207,18 +192,14 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 
 	// Before deleting, clean up agent sessions for this project
 	proj, _ := store.Get(id)
 	if proj != nil {
 		sessionKey := proj.ID
 		disc := s.runDiscovery(r.Context())
-		participants := resolveProjectParticipants(proj, disc)
+		participants := resolveProjectParticipants(proj, disc, s.instanceStore)
 		for _, p := range participants {
 			agent := discovery.NewAgent(p.agent)
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -254,11 +235,7 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	if err := store.AddAgent(projectID, body.InstanceID); err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -272,7 +249,7 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 	agentName := body.InstanceID
 	agentFramework := ""
 	agentPort := 0
-	if is, err := instance.NewStore(); err == nil {
+	if is := s.instanceStore; is != nil {
 		if inst, err := is.Get(body.InstanceID); err == nil {
 			agentName = inst.Name
 			agentFramework = inst.Framework
@@ -285,7 +262,7 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 	if agentFramework != "" {
 		detail = fmt.Sprintf("user added %s (%s, :%d)", agentName, agentFramework, agentPort)
 	}
-	injectSystemMessage(projectID, detail)
+	s.injectSystemMessage(projectID, detail)
 	s.refreshProjectContext(projectID)
 
 	s.events.Publish(ProjectEvent{
@@ -304,11 +281,7 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 	projectID := r.PathValue("id")
 	instanceID := r.PathValue("instanceId")
 
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	if err := store.RemoveAgent(projectID, instanceID); err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -320,12 +293,12 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 
 	// Resolve instance name for the event + system message
 	agentName := instanceID
-	if is, err := instance.NewStore(); err == nil {
+	if is := s.instanceStore; is != nil {
 		if inst, err := is.Get(instanceID); err == nil {
 			agentName = inst.Name
 		}
 	}
-	injectSystemMessage(projectID, fmt.Sprintf("%s removed from project", agentName))
+	s.injectSystemMessage(projectID, fmt.Sprintf("%s removed from project", agentName))
 	s.refreshProjectContext(projectID)
 	s.events.Publish(ProjectEvent{
 		Type:      "agent_removed",
@@ -342,11 +315,7 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 // GET /api/projects/{id}/chat
 func (s *Server) handleProjectChatMessages(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
-		return
-	}
+	cs := s.chatStore
 	messages, err := cs.Messages(projectID, 0)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -377,11 +346,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load project
-	pStore, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open project store"})
-		return
-	}
+	pStore := s.projectStore
 	proj, err := pStore.Get(projectID)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -393,11 +358,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
-		return
-	}
+	cs := s.chatStore
 
 	sse, err := NewSSEWriter(w)
 	if err != nil {
@@ -406,9 +367,10 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orch := &ChatOrchestrator{
-		cfg:         s.runDiscovery,
-		chatStore:   cs,
-		activeChats: &s.activeChats,
+		cfg:           s.runDiscovery,
+		chatStore:     cs,
+		instanceStore: s.instanceStore,
+		activeChats:   &s.activeChats,
 	}
 	if err := orch.RunProjectChat(r.Context(), proj, body.Message, sse); err != nil {
 		if sse.Sent() {
@@ -447,7 +409,7 @@ type projectParticipant struct {
 }
 
 // resolveInstanceName maps an instance ID or agent name to the discovered agent name.
-func resolveInstanceName(id string, disc discovery.Result) string {
+func resolveInstanceName(id string, disc discovery.Result, instStore *instance.Store) string {
 	// Direct match by name
 	for _, ar := range disc.Agents {
 		if ar.Agent.Name == id {
@@ -455,21 +417,21 @@ func resolveInstanceName(id string, disc discovery.Result) string {
 		}
 	}
 	// Try instance store lookup (UUID → name)
-	if store, err := instance.NewStore(); err == nil {
-		if inst, err := store.Get(id); err == nil {
+	if instStore != nil {
+		if inst, err := instStore.Get(id); err == nil {
 			return inst.Name
 		}
 	}
 	return id
 }
 
-func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []projectParticipant {
+func resolveProjectParticipants(proj *project.Project, disc discovery.Result, instStore *instance.Store) []projectParticipant {
 	var participants []projectParticipant
 	seen := make(map[string]bool)
 
 	// Captain first (project lead, responds by default)
 	if proj.OrchestratorID != "" {
-		captainName := resolveInstanceName(proj.OrchestratorID, disc)
+		captainName := resolveInstanceName(proj.OrchestratorID, disc, instStore)
 		for _, ar := range disc.Agents {
 			if ar.Agent.Name == captainName {
 				if ar.Alive && !seen[ar.Agent.Name] {
@@ -532,11 +494,7 @@ type ProjectActivityEvent struct {
 // GET /api/projects/{id}/activity?limit=50&type=tool_call
 func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	proj, err := store.Get(projectID)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -559,7 +517,7 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve all project agents
 	disc := s.runDiscovery(r.Context())
-	participants := resolveProjectParticipants(proj, disc)
+	participants := resolveProjectParticipants(proj, disc, s.instanceStore)
 
 	// Collect activity from each agent (historical snapshot only)
 	var allEvents []ProjectActivityEvent
@@ -621,21 +579,13 @@ func parseMention(msg string) string {
 // project. Called whenever the team roster or project details change so that
 // all agents have up-to-date context about their project and teammates.
 func (s *Server) refreshProjectContext(projectID string) {
-	projStore, err := project.NewStore()
-	if err != nil {
-		slog.Warn("refreshProjectContext: project store", "error", err)
-		return
-	}
+	projStore := s.projectStore
 	proj, err := projStore.Get(projectID)
 	if err != nil {
 		slog.Warn("refreshProjectContext: load project", "project", projectID, "error", err)
 		return
 	}
-	instStore, err := instance.NewStore()
-	if err != nil {
-		slog.Warn("refreshProjectContext: instance store", "error", err)
-		return
-	}
+	instStore := s.instanceStore
 	instances, err := instStore.List()
 	if err != nil {
 		slog.Warn("refreshProjectContext: list instances", "error", err)
@@ -690,12 +640,8 @@ func (s *Server) refreshProjectContext(projectID string) {
 // Used to surface structural changes (agent created, removed, project
 // updated) in the project chat regardless of whether the change was made
 // by a user or an agent.
-func injectSystemMessage(projectID, content string) {
-	cs, err := project.NewChatStore()
-	if err != nil {
-		slog.Warn("injectSystemMessage: chat store", "error", err)
-		return
-	}
+func (s *Server) injectSystemMessage(projectID, content string) {
+	cs := s.chatStore
 	msg := project.ChatMessage{
 		ID:        uuid.New().String(),
 		Sender:    "eyrie",
@@ -712,11 +658,7 @@ func injectSystemMessage(projectID, content string) {
 // DELETE /api/projects/{id}/chat
 func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	cs := s.chatStore
 	if err := cs.ClearChat(projectID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -742,11 +684,7 @@ func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 
-	projStore, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	projStore := s.projectStore
 	proj, err := projStore.Get(projectID)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -758,7 +696,7 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Clear project chat history and listening state
-	if cs, csErr := project.NewChatStore(); csErr == nil {
+	if cs := s.chatStore; cs != nil {
 		if clrErr := cs.ClearChat(projectID); clrErr != nil {
 			slog.Warn("reset: failed to clear chat", "project", projectID, "error", clrErr)
 		}
@@ -768,7 +706,7 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	// 2. Reset sessions for commander and captain (keep instances alive)
 	sessionKey := proj.ID
 	disc := s.runDiscovery(r.Context())
-	for _, p := range resolveProjectParticipants(proj, disc) {
+	for _, p := range resolveProjectParticipants(proj, disc, s.instanceStore) {
 		if p.role == "talon" {
 			continue // talons are destroyed below, not just reset
 		}
@@ -780,13 +718,16 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 		cancel()
 	}
 
-	// 3. Destroy talon instances: stop, delete from instance store, remove
-	//    from project roster. Talons are disposable — a reset means fresh start.
-	instStore, instErr := instance.NewStore()
-	if instErr != nil {
-		slog.Warn("reset: failed to open instance store", "error", instErr)
+	// 3. Destroy talon instances in parallel: stop, delete from instance
+	//    store, remove from project roster. Talons are disposable — a reset
+	//    means fresh start. Parallel stop avoids 30s×N sequential timeout.
+	instStore := s.instanceStore
+	type destroyResult struct {
+		name string
+		ok   bool
 	}
-	var destroyed []string
+	resultCh := make(chan destroyResult, len(proj.RoleAgentIDs))
+	var wg sync.WaitGroup
 	for _, agentID := range proj.RoleAgentIDs {
 		if instStore == nil {
 			break
@@ -796,20 +737,27 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("reset: talon instance not found, skipping", "id", agentID, "error", getErr)
 			continue
 		}
-
-		// Stop the instance (best effort, detached context so it completes
-		// even if the HTTP client disconnects)
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if stopErr := manager.ExecuteWithConfig(stopCtx, inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
-			slog.Debug("reset: failed to stop talon", "instance", inst.Name, "error", stopErr)
-		}
-		stopCancel()
-
-		// Delete instance from disk
-		if delErr := instStore.Delete(agentID); delErr != nil {
-			slog.Warn("reset: failed to delete talon instance", "instance", inst.Name, "error", delErr)
-		} else {
-			destroyed = append(destroyed, inst.Name)
+		wg.Add(1)
+		go func(inst *instance.Instance, id string) {
+			defer wg.Done()
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if stopErr := manager.ExecuteWithConfig(stopCtx, inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
+				slog.Debug("reset: failed to stop talon", "instance", inst.Name, "error", stopErr)
+			}
+			stopCancel()
+			if delErr := instStore.Delete(id); delErr != nil {
+				slog.Warn("reset: failed to delete talon instance", "instance", inst.Name, "error", delErr)
+				resultCh <- destroyResult{inst.Name, false}
+			} else {
+				resultCh <- destroyResult{inst.Name, true}
+			}
+		}(inst, agentID)
+	}
+	go func() { wg.Wait(); close(resultCh) }()
+	var destroyed []string
+	for r := range resultCh {
+		if r.ok {
+			destroyed = append(destroyed, r.name)
 		}
 	}
 

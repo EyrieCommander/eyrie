@@ -46,16 +46,8 @@ type ProjectTree struct {
 }
 
 func (s *Server) handleGetHierarchy(w http.ResponseWriter, r *http.Request) {
-	instStore, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
-	projStore, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	instStore := s.instanceStore
+	projStore := s.projectStore
 
 	instances, err := instStore.List()
 	if err != nil {
@@ -149,11 +141,7 @@ func (s *Server) handleGetCommander(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if ref.InstanceID != "" {
-		instStore, err := instance.NewStore()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
+		instStore := s.instanceStore
 		inst, err := instStore.Get(ref.InstanceID)
 		if err != nil {
 			writeJSON(w, http.StatusOK, map[string]any{"commander": nil})
@@ -216,11 +204,7 @@ func (s *Server) handleSetCommander(w http.ResponseWriter, r *http.Request) {
 
 	// Verify the target exists
 	if body.InstanceID != "" {
-		store, err := instance.NewStore()
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-			return
-		}
+		store := s.instanceStore
 		if _, err := store.Get(body.InstanceID); err != nil {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "instance not found"})
 			return
@@ -297,11 +281,7 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 
 	// Load project
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open project store"})
-		return
-	}
+	store := s.projectStore
 	proj, err := store.Get(projectID)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
@@ -324,8 +304,8 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 	}
 	if found == nil || !found.Alive {
 		// Try to auto-start if it's a provisioned instance
-		instStore, instErr := instance.NewStore()
-		if instErr == nil {
+		instStore := s.instanceStore
+		if instStore != nil {
 			if inst, getErr := instStore.Get(proj.OrchestratorID); getErr == nil {
 				slog.Info("auto-starting captain for briefing", "instance", inst.Name)
 				if startErr := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); startErr != nil {
