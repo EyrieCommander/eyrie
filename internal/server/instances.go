@@ -431,6 +431,17 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": string(newStatus)})
 }
 
+// handleMigrateInstances applies config migrations to all provisioned instances.
+// POST /api/instances/migrate
+func (s *Server) handleMigrateInstances(w http.ResponseWriter, r *http.Request) {
+	results, err := instance.MigrateAll()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, results)
+}
+
 // autoPairZeroClaw waits for a ZeroClaw gateway to become ready, fetches its
 // pairing code, pairs, and stores the token. This gives provisioned instances
 // authenticated WebSocket access for project chat streaming.

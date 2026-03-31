@@ -249,14 +249,29 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 			"session_persistence": true,
 			"require_pairing":     true,
 		},
-		// WHY autonomous: Provisioned agents (captains/talons) are working
+		// WHY full autonomy: Provisioned agents (captains/talons) are working
 		// agents, not interactive assistants. They need to call the Eyrie API
 		// via curl, run build commands, and operate without per-command approval.
 		// The user monitors them through the project chat, not by approving
-		// individual shell commands.
+		// individual shell commands. ZeroClaw expects "full" (not "autonomous").
 		"autonomy": map[string]any{
-			"level":          "autonomous",
+			"level":          "full",
 			"workspace_only": true,
+			"allowed_commands": []string{
+				"git", "npm", "cargo", "make",
+				"ls", "cat", "grep", "find", "echo", "pwd",
+				"wc", "head", "tail", "date", "curl",
+				"sleep", "mkdir", "cp", "mv", "rm", "touch",
+				"sed", "awk", "sort", "uniq", "diff",
+			},
+		},
+		// WHY sandbox=none: macOS seatbelt sandbox blocks basic operations
+		// (ls, pwd, find) even within the workspace directory. Provisioned
+		// agents are already isolated by workspace_only and allowed_commands.
+		"security": map[string]any{
+			"sandbox": map[string]any{
+				"backend": "none",
+			},
 		},
 		"memory": map[string]any{
 			"backend":   "sqlite",

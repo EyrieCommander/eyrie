@@ -87,6 +87,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/instances/{id}", s.handleGetInstance)
 	s.mux.HandleFunc("PUT /api/instances/{id}", s.handleUpdateInstance)
 	s.mux.HandleFunc("DELETE /api/instances/{id}", s.handleDeleteInstance)
+	s.mux.HandleFunc("POST /api/instances/migrate", s.handleMigrateInstances)
 	s.mux.HandleFunc("POST /api/instances/{id}/{action}", s.handleInstanceAction)
 
 	// Project endpoints

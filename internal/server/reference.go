@@ -86,6 +86,18 @@ POST /api/instances/{id}/start
 POST /api/instances/{id}/stop
 POST /api/instances/{id}/restart
 
+### Migrate instance configs
+POST /api/instances/migrate
+Updates all provisioned instance configs to current defaults (autonomy level,
+sandbox settings, allowed commands, tool iteration limits). Idempotent — safe
+to call repeatedly. Returns per-instance results with applied changes.
+
+### Reset a project
+POST /api/projects/{id}/reset
+Clears project chat, resets commander/captain sessions, and destroys all talon
+instances. The captain and commander are preserved. Use after a project needs
+a fresh start.
+
 ## Hierarchy
 
 ### Get the full hierarchy tree

@@ -108,7 +108,7 @@
 ## Code Cleanup
 
 - [x] **SSE_BASE unused in api.ts**: Removed — Vite proxy streams correctly now, no bypass needed.
-- [ ] **CORS allowlist from config**: Current `corsHandler` allows localhost only. For production, add `AllowedOrigins []string` to dashboard config and pass it to corsHandler.
+- [ ] **CORS allowlist from config**: Deferred — no production deployment planned. Current localhost-only restriction is correct for local dashboard. Revisit if Eyrie is deployed to a server or accessed over LAN.
 - [x] **SetCaptainDialog error surfacing**: Acceptable — briefing is fire-and-forget by design (dialog closes before callback fires). Captain creation/assignment errors are already surfaced.
 - [x] **ProjectDetail reset validation**: Fixed — chat reset now checks `response.ok` and throws on failure.
 - [x] **ProjectListPage unmount safety**: Fixed — AbortController stops polling loop on dialog unmount.
@@ -123,11 +123,36 @@
 - [ ] **Project detail**: Add activity timeline showing what each agent is doing
 - [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept)
 - [ ] **Session management**: Test session group delete across all frameworks
-- [ ] **Destroy talons on project reset**: When resetting a project, stop and delete all talon instances associated with it. Talons are disposable agents created by the captain — resetting should clean them up. Captain and commander should be preserved.
+- [x] **Destroy talons on project reset**: `POST /api/projects/{id}/reset` clears chat, resets commander/captain sessions, stops+deletes talons. Auto-start chat restored.
 - [ ] **Hide project sessions from 1:1 chat**: Filter out sessions matching a project ID from the ChatPanel session list. Project conversations should only be accessed via the project chat UI — showing them in 1:1 creates split-brain confusion. Later: clicking a project session could redirect to the project detail page instead.
 - [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
 - [x] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 - [x] **Rich tool output display**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content. Also HTML preview, image preview, JSON highlighting, file path links and diff display
+
+## Provisioning Config
+
+Known config requirements for provisioned agents, by framework. The provisioner (`internal/instance/provisioner.go`) handles ZeroClaw. Other frameworks need equivalent treatment.
+
+**ZeroClaw** (fixed in provisioner):
+- `autonomy.level = "full"` — ZeroClaw rejects "autonomous", expects readonly/supervised/full
+- `security.sandbox.backend = "none"` — macOS seatbelt blocks basic commands even inside workspace
+- `autonomy.allowed_commands` — must include common utilities (sleep, mkdir, cp, mv, rm, sed, etc.), default list is too restrictive for working agents
+- `max_tool_iterations = 50` — default 10 is too low for agents exploring a codebase
+- `http_request.enabled = true` + `allowed_private_hosts = ["localhost"]` — agents need to reach Eyrie API
+- API key copied from parent ZeroClaw installation with secret key
+
+**OpenClaw** (needs work):
+- [ ] Equivalent autonomy/sandbox settings for provisioned OpenClaw instances
+- [ ] Verify `sessions.json` handling for provisioned instances
+- [ ] Test captain/talon provisioning end-to-end
+
+**PicoClaw** (needs work):
+- [ ] Config generation for provisioned PicoClaw instances
+- [ ] Verify gateway port allocation and auto-discovery
+
+**Cross-framework**:
+- [ ] Config migration tool: update existing instance configs when provisioner defaults change (currently requires manual sed per instance)
+- [ ] Validation: check provisioned config against framework's schema before starting, surface errors in UI instead of silent daemon crash
 
 ## Code Health
 
