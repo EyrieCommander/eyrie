@@ -151,7 +151,7 @@ Known config requirements for provisioned agents, by framework. The provisioner 
 - [ ] Verify gateway port allocation and auto-discovery
 
 **Cross-framework**:
-- [ ] Config migration tool: update existing instance configs when provisioner defaults change (currently requires manual sed per instance)
+- [x] Config migration tool: update existing instance configs when provisioner defaults change (currently requires manual sed per instance)
 - [ ] Validation: check provisioned config against framework's schema before starting, surface errors in UI instead of silent daemon crash
 
 ## Code Health

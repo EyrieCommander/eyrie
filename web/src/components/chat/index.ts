@@ -1,5 +1,6 @@
 export { ToolCallCard, PartToolCallCard, ToolRunCard, groupPartsIntoRuns, toolCallSummary } from './ToolCallCard';
 export { RichOutput } from './RichOutput';
+export { ROLE_COLORS, roleLabel, roleColor } from './MessageHeader';
 export { MessageRow } from './MessageRow';
 export { StreamingCursor } from './StreamingCursor';
 export { SessionBar } from './SessionBar';
