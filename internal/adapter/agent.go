@@ -302,11 +302,17 @@ type Session struct {
 	ReadOnly bool       `json:"readonly,omitempty"`
 }
 
+// ChatMessage is the unified message type used across both 1:1 agent chats
+// and multi-agent project conversations. Fields like ID, Sender, and Mention
+// are only populated in project chat contexts; 1:1 chat leaves them empty.
 type ChatMessage struct {
-	Timestamp time.Time      `json:"timestamp"`
-	Role      string         `json:"role"` // "user", "assistant"
+	ID        string         `json:"id,omitempty"`
+	Sender    string         `json:"sender,omitempty"`    // agent name or "user" (project chat)
+	Role      string         `json:"role"`                // "user", "assistant", "commander", "captain", "talon", "system"
 	Content   string         `json:"content"`
+	Timestamp time.Time      `json:"timestamp"`
 	Channel   string         `json:"channel,omitempty"`
+	Mention   string         `json:"mention,omitempty"`   // "@captain", "@commander", etc. (project chat)
 	Parts     []ChatPart     `json:"parts,omitempty"`
 }
 

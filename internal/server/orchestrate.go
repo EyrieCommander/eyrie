@@ -270,6 +270,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			Goal:        proj.Goal,
 			Description: proj.Description,
 			CaptainName: captainName,
+			AgentName:   p.name,
 		}
 
 		// Select the template based on role

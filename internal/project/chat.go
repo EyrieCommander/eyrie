@@ -9,31 +9,15 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Audacity88/eyrie/internal/adapter"
 )
 
-// ChatPart is an ordered content element (text or tool call) within a message.
-type ChatPart struct {
-	Type   string         `json:"type"`             // "text" or "tool_call"
-	Text   string         `json:"text,omitempty"`
-	ID     string         `json:"id,omitempty"`
-	Name   string         `json:"name,omitempty"`
-	Args   map[string]any `json:"args,omitempty"`
-	Output string         `json:"output,omitempty"`
-	Error  bool           `json:"error,omitempty"`
-}
-
-// ChatMessage is a single message in a project's shared conversation.
-// Unlike adapter.ChatMessage, this includes sender attribution for
-// multi-participant conversations.
-type ChatMessage struct {
-	ID        string     `json:"id"`
-	Sender    string     `json:"sender"`              // "user", agent name, or instance name
-	Role      string     `json:"role"`                // "user", "commander", "captain", "talon"
-	Content   string     `json:"content"`
-	Timestamp time.Time  `json:"timestamp"`
-	Mention   string     `json:"mention,omitempty"`   // "@captain", "@commander", etc.
-	Parts     []ChatPart `json:"parts,omitempty"`     // tool calls + text parts
-}
+// ChatMessage is now a unified type defined in adapter package.
+// Type alias preserves backward compatibility — existing code that
+// references project.ChatMessage or project.ChatPart continues to work.
+type ChatMessage = adapter.ChatMessage
+type ChatPart = adapter.ChatPart
 
 // ChatStore manages the shared conversation for a project.
 //
