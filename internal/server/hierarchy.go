@@ -387,6 +387,7 @@ func composeCaptainBriefing(proj *project.Project) string {
 		ProjectID:   proj.ID,
 		Goal:        proj.Goal,
 		Description: proj.Description,
+		AgentName:   proj.OrchestratorID,
 	})
 	if err != nil {
 		slog.Warn("failed to render captain briefing template", "error", err)

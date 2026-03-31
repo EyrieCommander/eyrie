@@ -419,6 +419,14 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// handleProjectChatStatus returns whether a project chat response is in-flight.
+// GET /api/projects/{id}/chat/status
+func (s *Server) handleProjectChatStatus(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	_, active := s.activeChats.Load(projectID)
+	writeJSON(w, http.StatusOK, map[string]any{"streaming": active})
+}
+
 // handleProjectChatStop cancels an in-flight project chat orchestration.
 // POST /api/projects/{id}/chat/stop
 func (s *Server) handleProjectChatStop(w http.ResponseWriter, r *http.Request) {

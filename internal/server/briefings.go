@@ -24,6 +24,7 @@ type BriefingContext struct {
 	Goal        string
 	Description string
 	CaptainName string
+	AgentName   string // The name of the agent being briefed (so it can self-identify in API calls)
 }
 
 // renderBriefing executes a pre-parsed markdown template with the given context.

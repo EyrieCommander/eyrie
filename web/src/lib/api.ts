@@ -714,6 +714,13 @@ export function streamProjectChat(
   return controller;
 }
 
+/** Check if a project chat response is currently being streamed. */
+export async function projectChatStatus(projectId: string): Promise<{ streaming: boolean }> {
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/status`);
+  if (!res.ok) return { streaming: false };
+  return res.json();
+}
+
 /** Tell the backend to cancel an in-flight project chat orchestration. */
 export async function stopProjectChat(projectId: string): Promise<void> {
   const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/stop`, { method: "POST" });

@@ -39,7 +39,7 @@ import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
 import { PartToolCallCard, ToolRunCard, groupPartsIntoRuns, StreamingCursor } from "./ChatPanel";
 import { roleLabel, roleColor } from "./chat/MessageHeader";
-import { fetchProjectChat, streamProjectChat, stopProjectChat } from "../lib/api";
+import { fetchProjectChat, streamProjectChat, stopProjectChat, projectChatStatus } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
@@ -109,30 +109,53 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   }, []);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Load messages on mount
+  // WHY backgroundStreaming: When the user navigates away during streaming
+  // and comes back, the agent may still be responding (detached context).
+  // We detect this via the status endpoint and poll rapidly (every 1s)
+  // to show the incrementally-persisted content as it arrives.
+  const [backgroundStreaming, setBackgroundStreaming] = useState(false);
+
+  // Load messages on mount + check if a response is in-flight
   const [chatLoaded, setChatLoaded] = useState(false);
   useEffect(() => {
     setChatLoaded(false);
-    fetchProjectChat(projectId)
-      .then((msgs) => { setMessages(msgs); setChatLoaded(true); })
-      .catch((err) => { console.error(err); setChatLoaded(true); });
+    Promise.all([
+      fetchProjectChat(projectId),
+      projectChatStatus(projectId),
+    ]).then(([msgs, status]) => {
+      setMessages(msgs);
+      setBackgroundStreaming(status.streaming);
+      setChatLoaded(true);
+    }).catch((err) => { console.error(err); setChatLoaded(true); });
   }, [projectId]);
 
-  // Poll for new messages when idle
+  // Poll for new messages — fast (1s) when agent is responding in
+  // background, slow (4s) when idle. Checks status each cycle to
+  // detect when the response completes.
   useEffect(() => {
-    if (sending) return;
+    if (sending) return; // SSE handles updates while we're the sender
+    const interval = backgroundStreaming ? 1000 : 4000;
     const id = setInterval(() => {
-      fetchProjectChat(projectId).then((msgs) => {
+      const statusCheck = backgroundStreaming
+        ? projectChatStatus(projectId).then((s) => {
+            if (!s.streaming) setBackgroundStreaming(false);
+          })
+        : Promise.resolve();
+
+      Promise.all([
+        fetchProjectChat(projectId),
+        statusCheck,
+      ]).then(([msgs]) => {
         setMessages((prev) => {
-          if (msgs.length === prev.length) return prev;
-          const ids = new Set(msgs.map((m) => m.id));
+          if (msgs.length === prev.length && !backgroundStreaming) return prev;
+          const ids = new Set(msgs.map((m: ProjectChatMessage) => m.id));
           const extras = prev.filter((m) => !ids.has(m.id) && !m.id.startsWith("optimistic-"));
           return [...msgs, ...extras];
         });
       }).catch(() => {});
-    }, 4000);
+    }, interval);
     return () => clearInterval(id);
-  }, [projectId, sending]);
+  }, [projectId, sending, backgroundStreaming]);
 
   // Auto-scroll
   useEffect(() => {
@@ -423,6 +446,14 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               waiting for agent response...
             </div>
             {stopButton}
+          </div>
+        )}
+
+        {/* Background streaming indicator — agent is responding but we reconnected */}
+        {backgroundStreaming && !sending && (
+          <div className="text-xs py-1 flex items-center gap-2 text-text-muted">
+            <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
+            agent is still responding...
           </div>
         )}
       </div>

@@ -100,6 +100,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE /api/projects/{id}/agents/{instanceId}", s.handleRemoveProjectAgent)
 	s.mux.HandleFunc("GET /api/projects/{id}/chat", s.handleProjectChatMessages)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat", s.handleProjectChatSend)
+	s.mux.HandleFunc("GET /api/projects/{id}/chat/status", s.handleProjectChatStatus)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat/stop", s.handleProjectChatStop)
 	s.mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleProjectChatClear)
 	s.mux.HandleFunc("POST /api/projects/{id}/reset", s.handleProjectReset)
