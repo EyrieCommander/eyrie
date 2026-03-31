@@ -37,32 +37,23 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
-import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
+import { PartToolCallCard, ToolRunCard, groupPartsIntoRuns, StreamingCursor } from "./ChatPanel";
+import { roleLabel, roleColor } from "./chat/MessageHeader";
 import { fetchProjectChat, streamProjectChat, stopProjectChat } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
-
-const ROLE_COLORS: Record<string, string> = {
-  user: "text-green",
-  commander: "text-purple",
-  captain: "text-yellow-400",
-  talon: "text-blue-400",
-  system: "text-text-muted",
-};
 
 type StreamingPart =
   | { kind: "tool"; name: string; done: boolean; args?: any; output?: string }
   | { kind: "text"; content: string };
 
-// Shared message header: role label + display name + timestamp + tool count
-function MessageHeader({ role, sender, displayName, time, toolCount }: {
+function ProjectMessageHeader({ role, sender, displayName, time, toolCount }: {
   role: string; sender?: string; displayName?: string; time: string; toolCount?: number;
 }) {
-  const name = displayName || sender;
   return (
     <div className="flex items-baseline gap-2">
-      <span className={`font-bold ${ROLE_COLORS[role] || "text-text"}`}>
-        {role === "user" ? "you" : name || role}
+      <span className={`font-bold ${roleColor(role)}`}>
+        {roleLabel(role, displayName, sender)}
       </span>
       <span className="text-[10px] text-text-muted">{time}</span>
       {(toolCount ?? 0) > 0 && (
@@ -362,7 +353,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           const toolCount = parts.filter((p) => p.type === "tool_call").length;
           return (
             <div key={msg.id} className="text-xs">
-              <MessageHeader
+              <ProjectMessageHeader
                 role={msg.role}
                 sender={msg.sender}
                 displayName={displayNames.get(msg.sender)}
@@ -371,12 +362,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               />
               {hasParts ? (
                 <div className="mt-1 space-y-1">
-                  {parts.map((part, i) =>
-                    part.type === "tool_call" ? (
-                      <PartToolCallCard key={`${msg.id}-p-${i}`} part={part} />
-                    ) : part.type === "text" && part.text ? (
-                      <div key={`${msg.id}-p-${i}`} className="text-text whitespace-pre-wrap">{part.text}</div>
-                    ) : null
+                  {groupPartsIntoRuns(parts).map((run, ri) =>
+                    run.type === "text" ? (
+                      <div key={`${msg.id}-r-${ri}`} className="text-text whitespace-pre-wrap">{run.text}</div>
+                    ) : (
+                      <ToolRunCard key={`${msg.id}-r-${ri}`} tools={run.tools} />
+                    )
                   )}
                 </div>
               ) : (
@@ -389,7 +380,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         {/* Streaming indicator */}
         {sending && streamingAgent && (
           <div className="text-xs">
-            <MessageHeader
+            <ProjectMessageHeader
               role={streamingRole || "agent"}
               sender={streamingAgent}
               displayName={displayNames.get(streamingAgent)}
@@ -454,7 +445,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                   }}
                   className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left ${i === mentionIdx ? "bg-surface-hover" : "hover:bg-surface-hover"}`}
                 >
-                  <span className={`font-bold ${ROLE_COLORS[p.role] || "text-text"}`}>{p.role}</span>
+                  <span className={`font-bold ${roleColor(p.role)}`}>{p.role}</span>
                   <span className="text-text-muted">{p.name}</span>
                 </button>
               ))}

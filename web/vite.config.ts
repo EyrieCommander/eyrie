@@ -34,7 +34,7 @@ export default defineConfig({
           proxy.on("error", (err: any, _req, res) => {
             // Only suppress connection-refused (backend restarting)
             if (err?.code !== "ECONNREFUSED") {
-              server.config.logger.error(`[proxy] ${err.message}`);
+              server?.config?.logger?.error(`[proxy] ${err.message}`);
             }
             if (res && "writeHead" in res) {
               try {

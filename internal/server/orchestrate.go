@@ -322,13 +322,26 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			return fmt.Errorf("failed to stream to %s: %w", p.name, err)
 		}
 
-		// Collect the response and tool calls, streaming intermediate events
+		// Collect the response and tool calls, streaming intermediate events.
+		// WHY incremental persistence: If the server crashes during streaming,
+		// everything between the user message and the final Append is lost.
+		// We assign the response message an ID upfront and periodically
+		// append partial snapshots. ChatStore.Messages() deduplicates by ID,
+		// keeping only the last occurrence.
+		responseMsgID := uuid.New().String()
 		var responseContent string
+		var streamedText string
 		var toolCalls []project.ChatPart
+		// 500ms throttle — don't write on every chunk
+		lastPartialSave := time.Now()
+		const partialSaveInterval = 500 * time.Millisecond
+
 		for ev := range ch {
 			switch ev.Type {
 			case "done":
 				responseContent = ev.Content
+			case "delta":
+				streamedText += ev.Content
 			case "tool_start":
 				toolCalls = append(toolCalls, project.ChatPart{
 					Type: "tool_call",
@@ -354,22 +367,50 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 				"role":   p.role,
 				"event":  ev,
 			})
+
+			// Periodically persist a partial snapshot so content survives a crash.
+			if time.Since(lastPartialSave) > partialSaveInterval && streamedText != "" {
+				partialMsg := project.ChatMessage{
+					ID:        responseMsgID,
+					Sender:    p.name,
+					Role:      p.role,
+					Content:   streamedText,
+					Timestamp: time.Now(),
+				}
+				if err := o.chatStore.Append(projectID, partialMsg); err != nil {
+					slog.Warn("failed to save partial response", "agent", p.name, "error", err)
+				}
+				lastPartialSave = time.Now()
+			}
 		}
 
-	// If the user hit stop, don't store the partial response or parse
-	// directives — just emit a system message and bail. Also attempt to
-	// interrupt the agent at the framework level so it doesn't keep the
-	// partial response in its session history.
+	// If the user hit stop, persist whatever was streamed so far and
+	// emit a system message. The partial content is valuable — the user
+	// may want to see what the agent was saying before they stopped it.
 	if agentCtx.Err() != nil {
 		slog.Info("project chat stopped by user", "project", projectID, "agent", p.name)
 
 		// Best-effort: ask the framework to discard the in-flight response.
-		// No-op today for all frameworks; will activate when upstream ships.
 		intCtx, intCancel := context.WithTimeout(context.Background(), 5*time.Second)
 		if err := agent.Interrupt(intCtx, sessionKey); err != nil {
 			slog.Warn("interrupt failed", "agent", p.name, "error", err)
 		}
 		intCancel()
+
+		// Store the partial agent response (if any content was streamed)
+		if streamedText != "" {
+			partialMsg := project.ChatMessage{
+				ID:        responseMsgID,
+				Sender:    p.name,
+				Role:      p.role,
+				Content:   streamedText + "\n\n[stopped by user]",
+				Timestamp: time.Now(),
+			}
+			if err := o.chatStore.Append(projectID, partialMsg); err != nil {
+				slog.Warn("failed to save partial response on stop", "agent", p.name, "error", err)
+			}
+			sse.WriteEvent(map[string]any{"type": "message", "message": partialMsg})
+		}
 
 		stopMsg := project.ChatMessage{
 			ID:        uuid.New().String(),
@@ -418,7 +459,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		}
 
 		agentMsg := project.ChatMessage{
-			ID:        uuid.New().String(),
+			ID:        responseMsgID,
 			Sender:    p.name,
 			Role:      p.role,
 			Content:   displayContent,

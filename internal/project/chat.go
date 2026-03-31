@@ -180,6 +180,26 @@ func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error
 		return nil, fmt.Errorf("reading chat file: %w", err)
 	}
 
+	// WHY deduplication: When streaming is interrupted (server restart,
+	// crash), a partial message may have been appended. On completion, the
+	// final message is appended with the same ID. Keeping only the last
+	// occurrence per ID ensures the user sees the most complete version.
+	if len(messages) > 0 {
+		seen := make(map[string]int, len(messages))
+		for i, m := range messages {
+			seen[m.ID] = i
+		}
+		if len(seen) < len(messages) {
+			deduped := make([]ChatMessage, 0, len(seen))
+			for i, m := range messages {
+				if seen[m.ID] == i {
+					deduped = append(deduped, m)
+				}
+			}
+			messages = deduped
+		}
+	}
+
 	if limit > 0 && len(messages) > limit {
 		messages = messages[len(messages)-limit:]
 	}
