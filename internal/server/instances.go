@@ -14,15 +14,10 @@ import (
 	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/persona"
-	"github.com/Audacity88/eyrie/internal/project"
 )
 
 func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
-	store, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.instanceStore
 	instances, err := store.List()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -36,11 +31,7 @@ func (s *Server) handleListInstances(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetInstance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.instanceStore
 	inst, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, instance.ErrNotFound) {
@@ -60,11 +51,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.instanceStore
 
 	// Look up persona if specified
 	var pers *persona.Persona
@@ -88,7 +75,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	// Populate project context on the request so the provisioner can
 	// include project info in identity templates (TemplateContext).
 	if req.ProjectID != "" {
-		if projStore, pErr := project.NewStore(); pErr == nil {
+		if projStore := s.projectStore; projStore != nil {
 			if proj, pErr := projStore.Get(req.ProjectID); pErr == nil {
 				req.ProjectName = proj.Name
 				req.ProjectGoal = proj.Goal
@@ -156,7 +143,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 	// No separate briefing needed — role instructions are injected inline
 	// when the project chat starts.
 	if req.HierarchyRole == "captain" && req.ProjectID != "" {
-		if projStore, pErr := project.NewStore(); pErr == nil {
+		if projStore := s.projectStore; projStore != nil {
 			if proj, pErr := projStore.Get(req.ProjectID); pErr == nil {
 				proj.OrchestratorID = inst.ID
 				if pErr := projStore.Save(*proj); pErr != nil {
@@ -168,7 +155,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 	// Auto-add talon to project roster (mirrors the captain auto-link above)
 	if req.HierarchyRole == "talon" && req.ProjectID != "" {
-		if projStore, pErr := project.NewStore(); pErr == nil {
+		if projStore := s.projectStore; projStore != nil {
 			if pErr := projStore.AddAgent(req.ProjectID, inst.ID); pErr != nil {
 				slog.Warn("failed to auto-add talon to project", "project", req.ProjectID, "error", pErr)
 			}
@@ -183,7 +170,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 		if creator == "" {
 			creator = "user"
 		}
-		injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s created %s (%s, :%d)", creator, inst.Name, inst.Framework, inst.Port))
+		s.injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s created %s (%s, :%d)", creator, inst.Name, inst.Framework, inst.Port))
 	}
 
 	// Publish event for real-time UI updates
@@ -211,11 +198,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.instanceStore
 	inst, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, instance.ErrNotFound) {
@@ -255,11 +238,7 @@ func (s *Server) handleUpdateInstance(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.instanceStore
 
 	inst, err := store.Get(id)
 	if err != nil {
@@ -281,7 +260,7 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Clear any project references to this instance to avoid dangling refs
-	if projStore, pErr := project.NewStore(); pErr == nil {
+	if projStore := s.projectStore; projStore != nil {
 		if projects, pErr := projStore.List(); pErr == nil {
 			for _, proj := range projects {
 				if proj.OrchestratorID == id {
@@ -305,7 +284,7 @@ func (s *Server) handleDeleteInstance(w http.ResponseWriter, r *http.Request) {
 
 	// Publish events only after successful deletion
 	if inst.ProjectID != "" {
-		injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s removed from project", inst.Name))
+		s.injectSystemMessage(inst.ProjectID, fmt.Sprintf("%s removed from project", inst.Name))
 		s.refreshProjectContext(inst.ProjectID)
 		s.events.Publish(ProjectEvent{
 			Type:      "agent_removed",
@@ -324,11 +303,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	action := r.PathValue("action")
 
-	store, err := instance.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.instanceStore
 	inst, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, instance.ErrNotFound) {
