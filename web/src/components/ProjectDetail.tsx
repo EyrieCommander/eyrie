@@ -2,7 +2,7 @@
 //
 // WHY always-mount for ProjectChat:
 //   ProjectChat is ALWAYS rendered (never conditionally unmounted). Setup
-//   prompts (assign captain, assign commander) render as absolute overlays
+//   prompts (assign captain) render as absolute overlays
 //   ON TOP of the chat, not as replacements. This preserves:
 //   - Active SSE streaming connections (AbortController, event handlers)
 //   - In-flight optimistic messages
@@ -18,7 +18,7 @@
 //   avoids a full page reload while ensuring clean state.
 //
 // WHY overlays instead of conditional rendering:
-//   Setup prompts (no captain, no commander) use absolute positioning to
+//   Setup prompts (no captain) use absolute positioning to
 //   overlay the chat area. This means the chat component stays mounted
 //   underneath. When the user completes setup, the overlay disappears and
 //   the chat is immediately ready — no mount delay, no lost state.
@@ -199,10 +199,8 @@ export default function ProjectDetail() {
 
   // Check if required agents are stopped (only after initial load)
   const needsStart: { name: string; role: string; isInstance: boolean; id: string }[] = [];
-  if (commanderName && commanderStatus && commanderStatus !== "running") {
-    const cmdInst = instances.find((i) => i.name === commanderName);
-    needsStart.push({ name: commanderName, role: "commander", isInstance: !!cmdInst, id: cmdInst?.id || commanderName });
-  }
+  // WHY no commander check: Commander is a system-level agent, not required
+  // for project chat. Only the captain needs to be running.
   if (captainInstance && captainInstance.status !== "running") {
     needsStart.push({ name: captainInstance.display_name || captainInstance.name, role: "captain", isInstance: true, id: captainInstance.id });
   }
@@ -454,18 +452,8 @@ export default function ProjectDetail() {
         {/* Main workspace area — ProjectChat is ALWAYS mounted to preserve
             streaming state. Setup prompts overlay on top when needed. */}
         <div className="relative flex flex-1 flex-col overflow-hidden">
-          {/* Setup overlays */}
-          {hasLoadedRef.current && !commanderName && (
-            <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
-              <div className="text-center space-y-3">
-                <p className="text-xs text-text-muted">no commander set up yet</p>
-                <button onClick={() => navigate("/mission-control")} className="rounded bg-accent px-4 py-2 text-xs font-medium text-white hover:bg-accent/80">
-                  set up commander
-                </button>
-              </div>
-            </div>
-          )}
-          {hasLoadedRef.current && commanderName && !hasCaptain && (
+          {/* Setup overlays — commander is NOT required for project chat */}
+          {hasLoadedRef.current && !hasCaptain && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-3">
                 <p className="text-xs text-text-muted">assign a captain to start</p>
@@ -475,7 +463,7 @@ export default function ProjectDetail() {
               </div>
             </div>
           )}
-          {hasLoadedRef.current && commanderName && hasCaptain && needsStart.length > 0 && (
+          {hasLoadedRef.current && hasCaptain && needsStart.length > 0 && (
             <div className="absolute inset-0 z-10 flex items-center justify-center bg-bg/90">
               <div className="text-center space-y-4">
                 <p className="text-xs text-text-muted">agents need to be running</p>
@@ -504,7 +492,6 @@ export default function ProjectDetail() {
             key={chatKey}
             projectId={project.id}
             participants={[
-              ...(commanderName ? [{ name: commanderName, role: "commander" }] : []),
               ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
               ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
               ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),

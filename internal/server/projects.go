@@ -453,25 +453,10 @@ func resolveProjectParticipants(proj *project.Project, disc discovery.Result, in
 		}
 	}
 
-	// Commander
-	ref := loadCommanderRef()
-	commanderName := ref.AgentName
-	if commanderName == "" {
-		commanderName = ref.InstanceID
-	}
-	if commanderName != "" {
-		for _, ar := range disc.Agents {
-			if ar.Agent.Name == commanderName {
-				if ar.Alive && !seen[ar.Agent.Name] {
-					seen[ar.Agent.Name] = true
-					participants = append(participants, projectParticipant{
-						name: ar.Agent.Name, role: "commander", agent: ar.Agent,
-					})
-				}
-				break
-			}
-		}
-	}
+	// WHY no commander: The commander is a system-level agent for cross-project
+	// oversight, not a project chat participant. Users can still @mention the
+	// commander by name if needed — the fallback lookup in the forwarding chain
+	// will find them. But they're not in the default participant list.
 
 	// Talons
 	for _, agentID := range proj.RoleAgentIDs {

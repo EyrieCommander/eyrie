@@ -105,12 +105,12 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	disc := o.cfg(agentCtx)
 	participants := resolveProjectParticipants(proj, disc, o.instanceStore)
 	if len(participants) == 0 {
-		return fmt.Errorf("no agents available — make sure the commander is running")
+		return fmt.Errorf("no agents available — make sure the captain is running")
 	}
 
 	// WHY: Check for first USER message specifically — system messages from
 	// provisioning ("project created", "captain assigned") don't count.
-	// First-message triggers commander-first routing and inline role instructions.
+	// First-message triggers inline role instructions for the captain.
 	existing, err := o.chatStore.Messages(projectID, 0)
 	if err != nil {
 		return fmt.Errorf("failed to check existing messages for project %s: %w", projectID, err)
@@ -143,7 +143,6 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			Role:      "system",
 			Content:   initContent,
 			Timestamp: time.Now(),
-			Mention:   "commander",
 		}
 		if err := o.chatStore.Append(projectID, initMsg); err != nil {
 			return fmt.Errorf("failed to save init message: %w", err)
@@ -172,9 +171,12 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	sessionKey := proj.ID
 
 	// Build the single respondent for this message.
-	// Priority: @mention > [LISTENING] agent > commander (first msg) > captain (default)
+	// Priority: @mention > [LISTENING] agent > captain (default)
 	// Only ONE agent responds per user message. Agent-to-agent handoff happens
 	// via @mentions in the response (see forwarding logic after the main call).
+	// WHY no commander in project chat: The commander is a system-level agent
+	// for cross-project oversight, not a project chat participant. Adding it
+	// to the critical path doubled the round trips before any work happened.
 	var respondent *projectParticipant
 	if mention != "" {
 		for i, p := range participants {
@@ -191,16 +193,8 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			}
 		}
 		o.chatStore.ClearListening(projectID)
-	} else if firstMessage {
-		// Commander speaks first — hands off to captain via @mention
-		for i, p := range participants {
-			if p.role == "commander" {
-				respondent = &participants[i]
-				break
-			}
-		}
 	} else {
-		// Captain is the default responder
+		// Captain is the default responder (including first message)
 		for i, p := range participants {
 			if p.role == "captain" {
 				respondent = &participants[i]
@@ -243,7 +237,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 
 	// Build the message with context
 	var labeledMsg string
-	if firstMessage && p.role == "commander" {
+	if firstMessage && initContent != "" {
 		labeledMsg = fmt.Sprintf("[system]: %s\n\n[user]: %s", initContent, message)
 	} else if len(contextLines) > 0 {
 		labeledMsg = strings.Join(contextLines, "\n") + "\n\n[user]: " + message
@@ -449,9 +443,10 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 
 	// WHY directive parsing: [LISTENING] is parsed from the END of the response.
 	// Agents include it as the last token so it's easy to strip from display
-	// content. [LISTENING] means "I asked a question, route the user's next
-	// message back to me." Without it, the agent goes idle (only responds when
-	// @mentioned). Agent-to-agent handoff uses @mentions, not directives.
+	// content. [LISTENING] means "I want the next message" — whether from a
+	// user or from agents responding to my @mentions. Without it, the agent
+	// goes idle (only responds when @mentioned). This unifies user→agent and
+	// agent→agent routing under one mechanism.
 	trimmed := strings.TrimSpace(responseContent)
 	isListening := strings.HasSuffix(trimmed, "[LISTENING]")
 
@@ -512,18 +507,22 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// WHY agent-to-agent @mention forwarding with chaining:
 	// When an agent's response contains @another-agent, automatically forward
 	// the message to the mentioned agent. This enables chains like:
-	//   captain → @commander (report plan) → commander → @captain (approved)
-	// Without chaining, the second hop is lost and the captain never hears back.
+	//   captain → @talon (do work) → talon responds → captain gets follow-up
 	//
-	// WHY max 5 hops: Prevents infinite A→B→A→B loops while allowing
-	// reasonable chains. The lastSpeaker check prevents immediate pingpong
-	// (A can't forward to A), but multi-step cycles are caught by the limit.
+	// WHY [LISTENING] follow-up: After forwarding completes, if the agent that
+	// triggered the @mentions set [LISTENING], route the accumulated context
+	// back to them. This unifies the routing model — [LISTENING] means "I want
+	// the next message" regardless of whether it comes from a user or an agent.
+	// Example: captain says "@talon do X [LISTENING]" → talon responds → captain
+	// gets a follow-up turn with the talon's response in context.
 	//
-	// WHY briefing injection only on firstMessage: On the first user message,
-	// agents haven't received inline role instructions yet. The main respondent
-	// gets them above; forwarded agents get them here. On subsequent messages,
-	// all agents already have their instructions from the first round.
+	// WHY max 5 hops / 3 rounds: Hops limit @mention chains within one round.
+	// Rounds limit [LISTENING] follow-ups (agent→forward→listener→forward→...).
+	// Together they cap the total agent calls per user message.
 	const maxForwardHops = 5
+	const maxRounds = 3
+	for round := 0; round < maxRounds; round++ {
+	forwarded := false
 	for hop := 0; hop < maxForwardHops; hop++ {
 		lastAgentContent := lastStoredAgentMsg(contextLines)
 		if lastAgentContent == "" {
@@ -546,7 +545,6 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		// Process each @mention from the agent's response sequentially.
 		// WHY sequential not parallel: SSE is a single stream — interleaving
 		// responses from concurrent agents would produce garbled output.
-		forwarded := false
 		for _, agentMention := range agentMentions {
 			var mentionedAgent *projectParticipant
 			for i, pp := range participants {
@@ -723,7 +721,126 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		if !forwarded {
 			break // No mentions could be resolved or produced content
 		}
+	} // end forwarding hop loop
+
+	// [LISTENING] follow-up: if an agent set [LISTENING] and forwarding
+	// happened, route the accumulated context back to the listener.
+	listener := o.chatStore.Listener(projectID)
+	if listener == "" || !forwarded {
+		break // No listener or nothing to follow up on
 	}
+
+	// Find the listener in participants
+	var listenerAgent *projectParticipant
+	for i, pp := range participants {
+		if pp.name == listener {
+			listenerAgent = &participants[i]
+			break
+		}
+	}
+	if listenerAgent == nil {
+		break
+	}
+
+	o.chatStore.ClearListening(projectID)
+
+	slog.Info("[LISTENING] follow-up: routing back to listener", "agent", listener, "project", projectID, "round", round+1)
+	sse.WriteEvent(map[string]any{
+		"type": "debug",
+		"msg":  fmt.Sprintf("[LISTENING] follow-up → %s (round %d)", listener, round+1),
+	})
+
+	// Build context and send to listener
+	fupAgent := discovery.NewAgent(listenerAgent.agent)
+	var fupMsg string
+	if len(contextLines) > 0 {
+		fupMsg = strings.Join(contextLines, "\n")
+	}
+
+	fupCh, fupErr := fupAgent.StreamMessage(agentCtx, fupMsg, sessionKey)
+	if fupErr != nil {
+		slog.Warn("failed to reach listener for follow-up", "agent", listener, "error", fupErr)
+		errMsg := project.ChatMessage{
+			ID:      uuid.New().String(),
+			Sender:  "eyrie",
+			Role:    "system",
+			Content: fmt.Sprintf("failed to reach %s for follow-up: %v", listener, fupErr),
+			Timestamp: time.Now(),
+		}
+		if appendErr := o.chatStore.Append(projectID, errMsg); appendErr != nil {
+			slog.Warn("failed to save follow-up error", "project", projectID, "error", appendErr)
+		}
+		sse.WriteEvent(map[string]any{"type": "message", "message": errMsg})
+		break
+	}
+
+	// Stream the listener's follow-up response
+	var fupContent string
+	var fupToolCalls []project.ChatPart
+	for ev := range fupCh {
+		switch ev.Type {
+		case "done":
+			fupContent = ev.Content
+		case "tool_start":
+			fupToolCalls = append(fupToolCalls, project.ChatPart{
+				Type: "tool_call", ID: ev.ToolID, Name: ev.Tool, Args: ev.Args,
+			})
+		case "tool_result":
+			for i := len(fupToolCalls) - 1; i >= 0; i-- {
+				if (ev.ToolID != "" && fupToolCalls[i].ID == ev.ToolID) ||
+					(ev.ToolID == "" && fupToolCalls[i].Name == ev.Tool && fupToolCalls[i].Output == "") {
+					fupToolCalls[i].Output = ev.Output
+					if ev.Success != nil && !*ev.Success {
+						fupToolCalls[i].Error = true
+					}
+					break
+				}
+			}
+		}
+		sse.WriteEvent(map[string]any{
+			"type":   "agent_event",
+			"sender": listenerAgent.name,
+			"role":   listenerAgent.role,
+			"event":  ev,
+		})
+	}
+
+	// Strip directives and store
+	fupTrimmed := strings.TrimSpace(fupContent)
+	fupDisplay := fupTrimmed
+	fupListening := strings.HasSuffix(fupDisplay, "[LISTENING]")
+	if fupListening {
+		fupDisplay = strings.TrimSpace(strings.TrimSuffix(fupDisplay, "[LISTENING]"))
+		o.chatStore.SetListening(projectID, listenerAgent.name)
+	}
+
+	if fupDisplay != "" {
+		var fupParts []project.ChatPart
+		if len(fupToolCalls) > 0 {
+			fupParts = append(fupParts, fupToolCalls...)
+			fupParts = append(fupParts, project.ChatPart{Type: "text", Text: fupDisplay})
+		}
+		fupStored := project.ChatMessage{
+			ID:        uuid.New().String(),
+			Sender:    listenerAgent.name,
+			Role:      listenerAgent.role,
+			Content:   fupDisplay,
+			Timestamp: time.Now(),
+			Parts:     fupParts,
+		}
+		if err := o.chatStore.Append(projectID, fupStored); err != nil {
+			slog.Warn("failed to save follow-up response", "agent", listenerAgent.name, "error", err)
+		}
+		sse.WriteEvent(map[string]any{"type": "message", "message": fupStored})
+		contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", listenerAgent.name, listenerAgent.role, fupDisplay))
+	}
+
+	// Reset forwarded flag for next round — the listener's response
+	// may contain @mentions that trigger another forwarding chain.
+	forwarded = false
+	// Continue outer loop → forwarding chain runs on listener's new response
+
+	} // end round loop
 
 	// Signal completion
 	sse.WriteDone()

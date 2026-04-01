@@ -22,17 +22,16 @@
 - EyrieClaw embedded agents: in-process lightweight talons (in progress)
 
 ### Role hierarchy:
-- **Commander**: creates projects + assigns captains. User can also create projects via UI (dual control).
-- **Captain**: project lead. Owns planning, execution, coordination. Creates and manages talons. User can also add talons via persona picker (dual control).
+- **Commander**: System-level strategic agent (optional). NOT in the project chat critical path — operates via 1:1 chat and system-level APIs. See "Commander Features" below for planned capabilities.
+- **Captain**: project lead. First responder in project chat. Owns planning, execution, coordination. Creates and manages talons. User can also add talons via persona picker (dual control).
 - **Talon**: specialist agent (researcher, developer, writer, etc.). Created by captain or user.
-- **Daily sync (planned)**: captains sync with commander daily, commander syncs with user.
 
 ### Next steps (by phase):
 
 **Phase 3 — Control Room UI (frontend)**
 9. [x] **Project workspace** — split view: agent roster sidebar + hierarchy diagram + chat workspace
 10. [x] **Real-time SSE streaming** — project chat streams messages, tool calls, and deltas in real-time
-11. [x] **Commander/captain routing** — commander speaks first, hands off to captain via @mention, agent-to-agent forwarding
+11. [x] **Project chat routing** — captain is first responder, @mention forwarding with chaining, [LISTENING] follow-up for agent responses
 12. [x] **Mission control** — dashboard with metrics, swim-lane timeline, hierarchy subpage, commander bar. Route: /mission-control
 13. [ ] **Agent profile** — identity/soul/memory display + 1:1 chat
 14. [ ] **Activity timeline** — chronological event feed with filters
@@ -86,13 +85,19 @@
 
 ## Functionality
 
-- [x] **Project group chat**: Real-time SSE streaming with @mention routing — commander introduces, captain takes over
+- [x] **Project group chat**: Real-time SSE streaming with @mention routing — captain is first responder, [LISTENING] follow-up for delegated work
 - [x] **Captain briefing**: Runs in background at captain assignment, not at chat start
 - [x] **Captain creating talons**: Captain calls `POST /api/instances` via curl — tested end-to-end
 - [x] **Cross-agent messaging**: Retry with backoff, failures surfaced as system messages
 - [ ] **Instance provisioning for all frameworks**: ZeroClaw and PicoClaw provisioning implemented. Need OpenClaw and Hermes instance provisioning testing (config gen, port alloc, startup)
-- [ ] **Commander creating captains**: Commander should provision captain instances when setting up new projects
-- [ ] **Daily sync cron**: Captains sync progress with commander daily; commander aggregates and syncs with user
+
+### Commander Features (system-level, not project chat)
+The commander operates via 1:1 chat and system-level APIs, not as a participant in project conversations. These features are planned:
+- [ ] **Autonomous project creation**: User tells commander "build me a video editor" → commander creates project, picks captain persona, provisions captain instance, kicks off briefing
+- [ ] **Cross-project oversight**: Commander can query all projects' status, spot duplicated effort, flag misaligned goals
+- [ ] **Daily sync cron**: Captains report progress to commander daily; commander aggregates into a single user-facing summary
+- [ ] **Resource allocation**: Commander reassigns talons between projects based on priority ("move talon-research from project A to B")
+- [ ] **Strategic planning**: Commander breaks high-level goals into projects ("here are our Q2 goals → create 3 projects")
 - [ ] **ZeroClaw observe-group**: Cherry-pick or reimplement `observe_group` from closed PR #4328 so ZeroClaw agents can store group history without responding
 - [ ] **OpenClaw observe-group**: Use native `requireMention: true` in group config for project chat participants
 
