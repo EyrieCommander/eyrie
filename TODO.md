@@ -156,12 +156,12 @@ Known config requirements for provisioned agents, by framework. The provisioner 
 
 ## Code Health
 
-- [ ] Extract JSONL append/read into generic utility in `internal/fileutil/` (duplicated in `embedded/sessions.go` and `project/chat.go`)
-- [ ] Replace per-request `NewStore()` calls with request-scoped or cached store (30+ call sites in `projects.go`)
-- [ ] Poll `fetchCommander()` only on project-related routes instead of globally every 30s
-- [ ] Add change-detection guard to DataContext polling to skip no-op React re-renders
+- [ ] Extract JSONL append/read into generic utility in `internal/fileutil/` (duplicated in `embedded/sessions.go` and `project/chat.go`) — deferred: different message types make shared extraction low-ROI without generics
+- [x] Replace per-request `NewStore()` calls with cached stores on Server struct (38 call sites eliminated across projects.go, instances.go, hierarchy.go)
+- [ ] Poll `fetchCommander()` only on project-related routes instead of globally every 30s — deferred: needs route-level context refactor
+- [x] Add change-detection guard to DataContext polling — JSON.stringify comparison skips no-op re-renders on 30s poll
 - [ ] Remove `ensureMetrics` migration shim in `useAgentMetrics.ts` once old format is obsolete
-- [ ] Parallelize talon destruction in `handleProjectReset` with errgroup
+- [x] Parallelize talon destruction in `handleProjectReset` with sync.WaitGroup — 30s (slowest) instead of 30s×N
 
 ## Integrations / Architecture
 
