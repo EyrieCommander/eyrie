@@ -543,6 +543,14 @@ func (z *ZeroClawAdapter) parseActivityEvent(eventType, data string) *ActivityEv
 func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 	body, err := z.getRaw(ctx, "/api/sessions")
 	if err != nil {
+		// WHY SQLite fallback: When the agent is stopped, the gateway is
+		// unreachable but the session database on disk is still readable.
+		// This lets the user browse chat history for stopped agents.
+		if sessions, dbErr := z.sessionsFromDB(); dbErr == nil && len(sessions) > 0 {
+			return sessions, nil
+		} else if dbErr != nil {
+			slog.Debug("sessionsFromDB fallback failed", "agent", z.name, "error", dbErr)
+		}
 		return z.sessionsLegacy(ctx)
 	}
 
@@ -606,6 +614,52 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 	}
 
 	return z.sessionsLegacy(ctx)
+}
+
+// sessionsFromDB reads session metadata directly from ZeroClaw's SQLite
+// database on disk. Used when the gateway is unreachable (agent stopped).
+func (z *ZeroClawAdapter) sessionsFromDB() ([]Session, error) {
+	dbPath := z.sessionDBPath()
+	if dbPath == "" {
+		return nil, fmt.Errorf("no session DB path")
+	}
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT session_key, name, last_activity, message_count FROM session_metadata ORDER BY last_activity DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		var key, lastActivity string
+		var name sql.NullString
+		var count int
+		if err := rows.Scan(&key, &name, &lastActivity, &count); err != nil {
+			continue
+		}
+		// WHY strip gw_ prefix: ChatHistory() prepends "gw_" when querying
+		// the sessions table. The gateway API returns keys without the prefix,
+		// so we must match that convention to avoid double-prefixing.
+		displayKey := strings.TrimPrefix(key, "gw_")
+		sess := Session{
+			Key:   displayKey,
+			Title: displayKey,
+		}
+		if name.Valid && name.String != "" {
+			sess.Title = name.String
+		}
+		if t, err := time.Parse(time.RFC3339Nano, lastActivity); err == nil {
+			sess.LastMsg = &t
+		}
+		sessions = append(sessions, sess)
+	}
+	return sessions, nil
 }
 
 func (z *ZeroClawAdapter) sessionsLegacy(ctx context.Context) ([]Session, error) {
