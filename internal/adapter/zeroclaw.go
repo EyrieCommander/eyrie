@@ -583,7 +583,10 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 			}
 			sessions = append(sessions, sess)
 		}
-		return sessions, nil
+		// WHY merge with SQLite: The gateway API only returns sessions loaded
+		// in the current runtime. Older sessions (e.g., briefings from before
+		// a restart) are persisted in SQLite but not listed by the API.
+		return z.mergeDBSessions(sessions), nil
 	}
 
 	// Try older named-session format: {"sessions": [{"id": "...", "name": "...", ...}]}
@@ -614,6 +617,25 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 	}
 
 	return z.sessionsLegacy(ctx)
+}
+
+// mergeDBSessions supplements gateway sessions with any additional sessions
+// found in the SQLite database. Gateway sessions take precedence (fresher data).
+func (z *ZeroClawAdapter) mergeDBSessions(gateway []Session) []Session {
+	dbSessions, err := z.sessionsFromDB()
+	if err != nil || len(dbSessions) == 0 {
+		return gateway
+	}
+	seen := make(map[string]bool, len(gateway))
+	for _, s := range gateway {
+		seen[s.Key] = true
+	}
+	for _, s := range dbSessions {
+		if !seen[s.Key] {
+			gateway = append(gateway, s)
+		}
+	}
+	return gateway
 }
 
 // sessionsFromDB reads session metadata directly from ZeroClaw's SQLite

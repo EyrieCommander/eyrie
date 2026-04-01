@@ -257,10 +257,15 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		// via curl, run build commands, and operate without per-command approval.
 		// The user monitors them through the project chat, not by approving
 		// individual shell commands. ZeroClaw expects "full" (not "autonomous").
+		// WHY just level+allowlist: The previous config added block_high_risk_commands,
+		// require_approval_for_medium_risk, and auto_approve — but these broke shell
+		// access because ZeroClaw classifies curl as high-risk and the block overrides
+		// allowed_commands. The working config is simple: full autonomy with an explicit
+		// command allowlist. workspace_only provides the safety boundary.
 		"autonomy": map[string]any{
 			"level":            "full",
 			"workspace_only":   true,
-			"allowed_commands": DefaultAllowedCommands,
+			"allowed_commands": DefaultAllowedCommands(),
 		},
 		// WHY sandbox=none: macOS seatbelt sandbox blocks basic operations
 		// (ls, pwd, find) even within the workspace directory. Provisioned
@@ -274,10 +279,24 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 			"backend":   "sqlite",
 			"auto_save": true,
 		},
+		// WHY disable claude_code tools: ZeroClaw's claude_code and
+		// claude_code_runner tools delegate to a Claude Code subprocess with
+		// its own permission system that blocks Bash for headless agents.
+		// With these disabled, the agent uses ZeroClaw's native "shell" tool
+		// which respects the autonomy config (level: full + allowed_commands).
+		"claude_code": map[string]any{
+			"enabled": false,
+		},
+		"claude_code_runner": map[string]any{
+			"enabled": false,
+		},
 		"http_request": map[string]any{
-			"enabled":              true,
-			"allowed_domains":      []string{"localhost"},
-			"allowed_private_hosts": []string{"localhost"},
+			"enabled":         true,
+			"allowed_domains": []string{"localhost"},
+			// WHY allow_private_hosts (not allowed_private_hosts): ZeroClaw's
+			// http_request struct uses "allow_private_hosts" while the web_fetch
+			// struct uses "allowed_private_hosts". Different field names.
+			"allow_private_hosts": []string{"localhost"},
 		},
 	}
 
