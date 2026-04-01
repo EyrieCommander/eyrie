@@ -37,15 +37,17 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
-import { PartToolCallCard, ToolRunCard, groupPartsIntoRuns, StreamingCursor } from "./ChatPanel";
+import { ToolRunCard, groupPartsIntoRuns } from "./ChatPanel";
+import { ChatError } from "./chat/ChatError";
+import { StreamingIndicator } from "./chat/StreamingIndicator";
+import type { StreamingPart } from "./chat/StreamingIndicator";
 import { roleLabel, roleColor } from "./chat/MessageHeader";
 import { fetchProjectChat, streamProjectChat, stopProjectChat, projectChatStatus } from "../lib/api";
+import { useAutoScroll } from "../lib/useAutoScroll";
 import { useData } from "../lib/DataContext";
 import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
-type StreamingPart =
-  | { kind: "tool"; name: string; done: boolean; args?: any; output?: string }
-  | { kind: "text"; content: string };
+// StreamingPart type imported from chat/StreamingIndicator
 
 function ProjectMessageHeader({ role, sender, displayName, time, toolCount }: {
   role: string; sender?: string; displayName?: string; time: string; toolCount?: number;
@@ -88,7 +90,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useAutoScroll([messages, streamingParts]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latency tracking: measures time from handoff to first token per agent.
@@ -99,12 +101,14 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
   const RESPONSE_TIMEOUT = 60_000; // 60 seconds with no SSE activity
 
+  // WHY no abort on timeout: The agent may still be processing (tool
+  // calls, long LLM response). Aborting would kill the SSE stream and
+  // cause message loss. Instead, show a warning and let the stream
+  // continue. If the agent truly isn't responding, the user can click stop.
   const resetTimeout = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      setSending(false);
-      setChatError("agent did not respond — try again or check agent status");
-      if (abortRef.current) abortRef.current.abort();
+      setChatError("agent may be unresponsive — click stop if needed");
     }, RESPONSE_TIMEOUT);
   }, []);
   const abortRef = useRef<AbortController | null>(null);
@@ -157,10 +161,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     return () => clearInterval(id);
   }, [projectId, sending, backgroundStreaming]);
 
-  // Auto-scroll
-  useEffect(() => {
-    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-  }, [messages, streamingParts]);
+  // Auto-scroll handled by useAutoScroll above
 
   useEffect(() => () => {
     abortRef.current?.abort();
@@ -321,15 +322,6 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     stopProjectChat(projectId).catch(() => {});
   }, [projectId]);
 
-  const stopButton = (
-    <button
-      onClick={handleStop}
-      className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
-    >
-      stop
-    </button>
-  );
-
   // Auto-start project chat when loaded with no messages.
   // WHY autoStartedRef: Prevents double-fire in StrictMode. The ref is set
   // to true before the send call, so the re-mount cycle sees it as already
@@ -364,7 +356,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
         {/* Error display */}
         {chatError && (
-          <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red">{chatError}</div>
+          <ChatError message={chatError} />
         )}
 
         {/* Messages — hide pre-chat system messages until chat has started */}
@@ -402,51 +394,32 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
         {/* Streaming indicator */}
         {sending && streamingAgent && (
-          <div className="text-xs">
-            <ProjectMessageHeader
-              role={streamingRole || "agent"}
-              sender={streamingAgent}
-              displayName={displayNames.get(streamingAgent)}
-              time={streamingTime}
-            />
-            {streamingParts.length === 0 && (
-              <div className="mt-0.5 text-text-muted animate-pulse">thinking...</div>
-            )}
-            {streamingParts.length > 0 && (
-              <div className="mt-1 space-y-1">
-                {streamingParts.map((part, i) =>
-                  part.kind === "tool" ? (
-                    <PartToolCallCard
-                      key={i}
-                      part={{
-                        type: "tool_call",
-                        name: part.name,
-                        args: part.args,
-                        output: part.output,
-                        pending: !part.done,
-                      }}
-                    />
-                  ) : (
-                    <div key={i} className="text-text whitespace-pre-wrap">
-                      {part.content}<StreamingCursor />
-                    </div>
-                  )
-                )}
-              </div>
-            )}
-            {stopButton}
-          </div>
+          <StreamingIndicator
+            parts={streamingParts}
+            onStop={handleStop}
+            header={
+              <ProjectMessageHeader
+                role={streamingRole || "agent"}
+                sender={streamingAgent}
+                displayName={displayNames.get(streamingAgent)}
+                time={streamingTime}
+              />
+            }
+          />
         )}
 
         {/* Waiting indicator */}
         {sending && !streamingAgent && messages.length > 0 && (
-          <div className="text-xs py-1">
-            <div className="flex items-center gap-2 text-text-muted">
-              <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
-              waiting for agent response...
-            </div>
-            {stopButton}
-          </div>
+          <StreamingIndicator
+            parts={[]}
+            onStop={handleStop}
+            header={
+              <div className="flex items-center gap-2 text-text-muted">
+                <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
+                waiting for agent response...
+              </div>
+            }
+          />
         )}
 
         {/* Background streaming indicator — agent is responding but we reconnected */}

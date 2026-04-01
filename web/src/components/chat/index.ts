@@ -2,7 +2,10 @@ export { ToolCallCard, PartToolCallCard, ToolRunCard, groupPartsIntoRuns, toolCa
 export { RichOutput } from './RichOutput';
 export { ROLE_COLORS, roleLabel, roleColor } from './MessageHeader';
 export { MessageRow } from './MessageRow';
+export { ChatError } from './ChatError';
 export { StreamingCursor } from './StreamingCursor';
+export { StreamingIndicator } from './StreamingIndicator';
+export type { StreamingPart } from './StreamingIndicator';
 export { SessionBar } from './SessionBar';
 export type { SessionGroup, SessionBarProps } from './SessionBar';
 export type { ToolCallCardProps, PartToolCallCardProps } from './ToolCallCard';

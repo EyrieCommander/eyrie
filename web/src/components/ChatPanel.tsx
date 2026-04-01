@@ -26,12 +26,14 @@ import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 export type { ToolCall };
 
 import {
-  ToolCallCard,
+  ChatError,
   MessageRow,
-  StreamingCursor,
   SessionBar,
   type SessionGroup,
 } from "./chat";
+import { StreamingIndicator } from "./chat/StreamingIndicator";
+import type { StreamingPart } from "./chat/StreamingIndicator";
+import { useAutoScroll } from "../lib/useAutoScroll";
 
 // ── Types ───────────────────────────────────────────────────────────────
 
@@ -117,7 +119,6 @@ export function ChatPanel({
   disabled = false,
   heightOffset = 240,
 }: ChatPanelProps) {
-  const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -417,6 +418,7 @@ export function ChatPanel({
   }, [pendingKey, lastCurrentMsg, totalMsgCount]);
 
   // ── Auto-scroll ─────────────────────────────────────────────────────
+  const scrollRef = useAutoScroll([totalMsgCount, sending, waitingForReply, streamingContent, toolCalls]);
 
   // WHY: Track briefing by a composite key (agent + timestamp) rather than
   // a simple boolean. A boolean ref gets reset by React Strict Mode's
@@ -425,12 +427,6 @@ export function ChatPanel({
   // fire if the current key doesn't match. A new ?brief=commander navigation
   // generates a fresh key via the URL change itself.
   const briefedKey = useRef<string | null>(null);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [totalMsgCount, sending, waitingForReply, streamingContent, toolCalls]);
 
   // ── Unified chat event handler ────────────────────────────────────────
 
@@ -929,43 +925,32 @@ export function ChatPanel({
             })
           )}
 
-          {(sending || waitingForReply) && (
-            <div className="py-1">
-              {toolCalls.map((tc, i) => (
-                <ToolCallCard key={`tc-${i}`} tc={tc} />
-              ))}
-              {streamingContent ? (
-                <div className="py-1">
-                  <span className="text-purple font-medium">assistant:</span>{" "}
-                  <span className="text-text whitespace-pre-wrap">
-                    {streamingContent}
-                  </span>
-                  <StreamingCursor />
-                </div>
-              ) : toolCalls.length === 0 ? (
-                <div className="py-1 text-text-muted animate-pulse">
-                  <span className="text-purple font-medium">assistant:</span>{" "}
-                  thinking...
-                </div>
-              ) : null}
-              {sending && (
-                <button
-                  onClick={handleStop}
-                  className="mt-1 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
-                >
-                  stop
-                </button>
-              )}
-            </div>
-          )}
+          {(sending || waitingForReply) && (() => {
+            // Build StreamingPart[] from ChatPanel's separate state
+            const parts: StreamingPart[] = [
+              ...toolCalls.map((tc): StreamingPart => ({
+                kind: "tool",
+                name: tc.tool,
+                done: tc.done,
+                args: tc.args,
+                output: tc.output,
+              })),
+              ...(streamingContent ? [{ kind: "text" as const, content: streamingContent }] : []),
+            ];
+            return (
+              <StreamingIndicator
+                parts={parts}
+                onStop={sending ? handleStop : undefined}
+                header={
+                  <span className="text-purple font-medium">assistant:</span>
+                }
+              />
+            );
+          })()}
         </div>
       </div>
 
-      {chatError && (
-        <div className="border-x border-border bg-red/5 px-4 py-2 text-[10px] text-red">
-          {chatError}
-        </div>
-      )}
+      {chatError && <ChatError message={chatError} />}
 
       {/* Input */}
       <div className="relative flex items-center gap-2 rounded-b border border-border bg-surface-hover p-3">
