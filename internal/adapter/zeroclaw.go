@@ -613,7 +613,7 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 			}
 			sessions = append(sessions, sess)
 		}
-		return sessions, nil
+		return z.mergeDBSessions(sessions), nil
 	}
 
 	return z.sessionsLegacy(ctx)

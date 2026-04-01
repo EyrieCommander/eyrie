@@ -781,7 +781,7 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 		cs.ClearListening(projectID)
 	}
 
-	// 2. Reset sessions for commander and captain (keep instances alive)
+	// 2. Reset sessions for captain: project chat session + briefing session
 	sessionKey := proj.ID
 	disc := s.runDiscovery(r.Context())
 	for _, p := range resolveProjectParticipants(proj, disc, s.instanceStore) {
@@ -789,11 +789,22 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 			continue // talons are destroyed below, not just reset
 		}
 		agent := discovery.NewAgent(p.agent)
+		// Reset the project chat session
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		if err := agent.ResetSession(ctx, sessionKey); err != nil {
-			slog.Debug("reset: could not reset session", "agent", p.name, "role", p.role, "error", err)
+			slog.Debug("reset: could not reset project session", "agent", p.name, "error", err)
 		}
 		cancel()
+		// Reset the briefing session so the captain gets a fresh briefing
+		ctx2, cancel2 := context.WithTimeout(r.Context(), 5*time.Second)
+		if err := agent.ResetSession(ctx2, "eyrie-captain-briefing"); err != nil {
+			slog.Debug("reset: could not reset briefing session", "agent", p.name, "error", err)
+		}
+		cancel2()
+		// Unhide the briefing session if it was hidden
+		if s.hidden != nil {
+			_ = s.hidden.Unhide(p.name, "eyrie-captain-briefing")
+		}
 	}
 
 	// 3. Destroy talon instances in parallel: stop, delete from instance
