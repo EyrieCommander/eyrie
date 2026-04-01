@@ -569,18 +569,33 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, allEvents)
 }
 
-// parseMention extracts an @mention from a message (e.g., "@captain" → "captain")
+// parseMention extracts the first @mention from a message (e.g., "@captain" → "captain").
+// Used for user message routing where only one respondent is selected.
 func parseMention(msg string) string {
+	mentions := parseMentions(msg)
+	if len(mentions) > 0 {
+		return mentions[0]
+	}
+	return ""
+}
+
+// parseMentions extracts all unique @mentions from a message, in order of appearance.
+// Used for agent-to-agent forwarding where a response may mention multiple agents
+// (e.g., "@talon-code do X" and "@talon-research do Y" in the same message).
+func parseMentions(msg string) []string {
+	seen := make(map[string]bool)
+	var mentions []string
 	for _, word := range strings.Fields(msg) {
 		if strings.HasPrefix(word, "@") {
 			mention := strings.TrimPrefix(word, "@")
 			mention = strings.TrimRight(mention, ".,!?;:")
-			if mention != "" {
-				return mention
+			if mention != "" && !seen[strings.ToLower(mention)] {
+				seen[strings.ToLower(mention)] = true
+				mentions = append(mentions, mention)
 			}
 		}
 	}
-	return ""
+	return mentions
 }
 
 // refreshProjectContext regenerates PROJECT.md for every agent in the given
@@ -648,6 +663,11 @@ func (s *Server) refreshProjectContext(projectID string) {
 // and creates one if missing. Runs in the background (goroutine) so it
 // doesn't block the HTTP response.
 func (s *Server) ensureCaptainBriefing(proj *project.Project) {
+	// WHY 5s delay: The captain's session was just reset. Give the agent
+	// a moment to stabilize before attempting the briefing — otherwise
+	// the gateway may not be ready and the SendMessage call times out.
+	time.Sleep(5 * time.Second)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 

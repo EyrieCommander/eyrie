@@ -454,10 +454,20 @@ func autoPairZeroClaw(name string, port int) {
 		return
 	}
 
-	// Skip if already paired (another goroutine or manual pair may have beaten us)
+	// Check if existing token is still valid. If the daemon was restarted,
+	// the old token is stale and we need to re-pair.
 	if tok := ts.Get(name); tok != "" {
-		slog.Info("auto-pair: already paired, skipping", "agent", name)
-		return
+		checkReq, _ := http.NewRequest("GET", baseURL+"/api/health", nil)
+		checkReq.Header.Set("Authorization", "Bearer "+tok)
+		checkResp, checkErr := client.Do(checkReq)
+		if checkErr == nil {
+			checkResp.Body.Close()
+			if checkResp.StatusCode != 401 {
+				slog.Info("auto-pair: existing token valid, skipping", "agent", name)
+				return
+			}
+		}
+		slog.Info("auto-pair: existing token stale, re-pairing", "agent", name)
 	}
 
 	// Fetch pairing code from admin endpoint

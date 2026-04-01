@@ -107,6 +107,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [streamingAgent, setStreamingAgent] = useState("");
   const [streamingRole, setStreamingRole] = useState("");
   const [streamingTime, setStreamingTime] = useState("");
+  const [pendingAgent, setPendingAgent] = useState(""); // set from routing debug event
   const [streamingParts, setStreamingParts] = useState<StreamingPart[]>([]);
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
@@ -202,6 +203,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const clearStreaming = () => {
     setStreamingAgent("");
     setStreamingParts([]);
+    setPendingAgent("");
     setStreamingTime("");
   };
 
@@ -314,6 +316,11 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
         case "debug":
           console.log(`[eyrie] ${event.msg}`, event.detail || "");
+          // "routing to magnus (commander)" → extract "magnus"
+          if (event.msg?.startsWith("routing to ")) {
+            const name = event.msg.slice(11).replace(/ \(.*\)$/, "");
+            setPendingAgent(displayNames.get(name) || name);
+          }
           break;
 
         case "error":
@@ -441,7 +448,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           <div className="text-xs py-1">
             <div className="flex items-center gap-2 text-text-muted animate-pulse">
               <span className="h-1 w-1 rounded-full bg-accent" />
-              waiting for agent response...
+              {pendingAgent ? `waiting for ${pendingAgent}...` : "waiting for agent response..."}
             </div>
             <button
               onClick={handleStop}
@@ -457,7 +464,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           <div className="text-xs py-1">
             <div className="flex items-center gap-2 text-text-muted animate-pulse">
               <span className="h-1 w-1 rounded-full bg-accent" />
-              waiting for agent response...
+              {pendingAgent ? `waiting for ${pendingAgent}...` : "waiting for agent response..."}
             </div>
           </div>
         )}

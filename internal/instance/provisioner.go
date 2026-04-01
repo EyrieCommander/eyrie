@@ -206,8 +206,11 @@ func (p *Provisioner) renderIdentityFiles(workspaceDir string, role HierarchyRol
 }
 
 func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, modelOverride string) error {
-	model := "anthropic/claude-sonnet-4-20250514"
-	provider := "openrouter"
+	// WHY inherit from parent: The provisioner used to hardcode "openrouter"
+	// and a specific model ID, breaking any setup that uses a different provider
+	// (e.g., custom proxy, direct Anthropic API). Reading the parent's config
+	// ensures provisioned instances use the same LLM backend as the parent.
+	model, provider := parentProviderDefaults(inst.Framework)
 	if pers != nil && pers.PreferredModel != "" {
 		model = pers.PreferredModel
 	}
@@ -304,6 +307,33 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 	}
 
 	return config.WriteTOMLAtomic(inst.ConfigPath, cfg)
+}
+
+// parentProviderDefaults reads the parent framework's default_provider and
+// default_model from its config file. Falls back to sensible defaults if
+// the parent config can't be read.
+func parentProviderDefaults(framework string) (model, provider string) {
+	// Fallbacks if parent config is unreadable
+	model = "claude-sonnet-4"
+	provider = "openrouter"
+
+	var parentConfigPath string
+	switch framework {
+	case "zeroclaw":
+		parentConfigPath = config.ExpandHome("~/.zeroclaw/config.toml")
+	default:
+		// Other frameworks: use fallback defaults for now.
+		// TODO: read parent config for openclaw, picoclaw, hermes
+		return
+	}
+
+	if p := readTOMLField(parentConfigPath, "default_provider"); p != "" {
+		provider = p
+	}
+	if m := readTOMLField(parentConfigPath, "default_model"); m != "" {
+		model = m
+	}
+	return
 }
 
 // readTOMLField reads a single top-level string field from a TOML file.
