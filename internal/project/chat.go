@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/fileutil"
 )
 
 // ChatMessage is now a unified type defined in adapter package.
@@ -188,6 +189,72 @@ func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error
 		messages = messages[len(messages)-limit:]
 	}
 	return messages, nil
+}
+
+// Compact rewrites the chat JSONL file without duplicate IDs.
+// WHY: Incremental persistence appends partial snapshots during streaming
+// (same ID, growing content) for crash recovery. After the final message is
+// written, compaction removes the partials so the file stays clean and
+// Messages() doesn't need to dedup on every read.
+func (cs *ChatStore) Compact(projectID string) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	path := cs.chatPath(projectID)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("opening chat file for compaction: %w", err)
+	}
+
+	var messages []ChatMessage
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var msg ChatMessage
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		messages = append(messages, msg)
+	}
+	f.Close()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading chat file for compaction: %w", err)
+	}
+
+	// Dedup: keep last occurrence per ID
+	seen := make(map[string]int, len(messages))
+	for i, m := range messages {
+		seen[m.ID] = i
+	}
+	if len(seen) == len(messages) {
+		return nil // Already clean, nothing to compact
+	}
+
+	deduped := make([]ChatMessage, 0, len(seen))
+	for i, m := range messages {
+		if seen[m.ID] == i {
+			deduped = append(deduped, m)
+		}
+	}
+
+	// Rewrite atomically
+	var buf []byte
+	for _, m := range deduped {
+		line, err := json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("marshaling during compaction: %w", err)
+		}
+		buf = append(buf, line...)
+		buf = append(buf, '\n')
+	}
+
+	return fileutil.AtomicWrite(path, buf, 0o600)
 }
 
 // FormatForAgent formats the conversation history as a text block suitable

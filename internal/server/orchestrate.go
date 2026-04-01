@@ -256,15 +256,16 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 	// the project chat session — agents entered without knowing the protocol.
 	// Inline injection on first message ensures agents always have their
 	// instructions when the conversation starts, regardless of session state.
-	if firstMessage {
-		// Find the captain's name for the commander's instructions
-		captainName := ""
-		for _, pp := range participants {
-			if pp.role == "captain" {
-				captainName = pp.name
-				break
-			}
+	// Find the captain's name — used in both direct briefing and forwarding briefing
+	captainName := ""
+	for _, pp := range participants {
+		if pp.role == "captain" {
+			captainName = pp.name
+			break
 		}
+	}
+
+	if firstMessage {
 
 		ctx := BriefingContext{
 			ProjectName: proj.Name,
@@ -299,6 +300,22 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		}
 
 		labeledMsg = roleInstructions + routingRules + "\n\n" + labeledMsg
+
+		// Store a system message so the user can see that a briefing was sent.
+		// The full briefing text is in Detail — the frontend renders it as
+		// an expandable section so the user can inspect what agents received.
+		briefingNote := project.ChatMessage{
+			ID:        uuid.New().String(),
+			Sender:    "eyrie",
+			Role:      "system",
+			Content:   fmt.Sprintf("briefing sent to %s (%s)", p.name, p.role),
+			Timestamp: time.Now(),
+			Detail:    roleInstructions + routingRules,
+		}
+		if appendErr := o.chatStore.Append(projectID, briefingNote); appendErr != nil {
+			slog.Warn("failed to save briefing note", "error", appendErr)
+		}
+		sse.WriteEvent(map[string]any{"type": "message", "message": briefingNote})
 	}
 
 		sse.WriteEvent(map[string]any{
@@ -484,131 +501,223 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		slog.Info("agent set listening", "agent", p.name, "project", projectID)
 	}
 
-	// WHY agent-to-agent @mention forwarding:
+	// Compact the JSONL to remove partial snapshots now that the final
+	// message is stored. Runs in a goroutine so it doesn't block SSE.
+	go func() {
+		if err := o.chatStore.Compact(projectID); err != nil {
+			slog.Warn("chat compaction failed", "project", projectID, "error", err)
+		}
+	}()
+
+	// WHY agent-to-agent @mention forwarding with chaining:
 	// When an agent's response contains @another-agent, automatically forward
-	// the message to the mentioned agent as a follow-up turn. This enables
-	// the captain to report to the commander (e.g., "@commander here's the
-	// plan") without requiring the user to relay messages manually. The
-	// mentioned agent sees the full context + the mentioning agent's message.
+	// the message to the mentioned agent. This enables chains like:
+	//   captain → @commander (report plan) → commander → @captain (approved)
+	// Without chaining, the second hop is lost and the captain never hears back.
 	//
-	// This runs AFTER the priority loop so it doesn't interfere with normal
-	// routing. It only fires when an agent explicitly @mentions another agent
-	// in its response content.
-	lastAgentContent := lastStoredAgentMsg(contextLines)
-	if lastAgentContent != "" {
-		if agentMention := parseMention(lastAgentContent); agentMention != "" {
-			// Find the mentioned agent in participants (but not the one who just spoke)
-			var mentionedAgent *projectParticipant
-			lastSpeaker := ""
-			if len(contextLines) > 0 {
-				// Extract speaker name from last context line "[name (role)]: content"
-				last := contextLines[len(contextLines)-1]
-				if idx := strings.Index(last, " ("); idx > 1 {
-					lastSpeaker = last[1:idx] // strip leading "["
-				}
+	// WHY max 5 hops: Prevents infinite A→B→A→B loops while allowing
+	// reasonable chains. The lastSpeaker check prevents immediate pingpong
+	// (A can't forward to A), but multi-step cycles are caught by the limit.
+	//
+	// WHY briefing injection only on firstMessage: On the first user message,
+	// agents haven't received inline role instructions yet. The main respondent
+	// gets them above; forwarded agents get them here. On subsequent messages,
+	// all agents already have their instructions from the first round.
+	const maxForwardHops = 5
+	for hop := 0; hop < maxForwardHops; hop++ {
+		lastAgentContent := lastStoredAgentMsg(contextLines)
+		if lastAgentContent == "" {
+			break
+		}
+		agentMention := parseMention(lastAgentContent)
+		if agentMention == "" {
+			break
+		}
+
+		// Find the mentioned agent (but not the one who just spoke)
+		var mentionedAgent *projectParticipant
+		lastSpeaker := ""
+		if len(contextLines) > 0 {
+			last := contextLines[len(contextLines)-1]
+			if idx := strings.Index(last, " ("); idx > 1 {
+				lastSpeaker = last[1:idx] // strip leading "["
 			}
-			for i, p := range participants {
-				if (strings.EqualFold(agentMention, p.name) || strings.EqualFold(agentMention, p.role)) && p.name != lastSpeaker {
-					mentionedAgent = &participants[i]
+		}
+		for i, pp := range participants {
+			if (strings.EqualFold(agentMention, pp.name) || strings.EqualFold(agentMention, pp.role)) && pp.name != lastSpeaker {
+				mentionedAgent = &participants[i]
+				break
+			}
+		}
+
+		// WHY fallback lookup: Agents created mid-conversation (e.g., captain
+		// provisioning talons during its response) aren't in the participants
+		// list, which was resolved before the conversation started. Fall back
+		// to the instance store + fresh discovery to find newly created agents.
+		if mentionedAgent == nil && o.instanceStore != nil {
+			instances, _ := o.instanceStore.List()
+			for _, inst := range instances {
+				if strings.EqualFold(agentMention, inst.Name) && inst.ProjectID == projectID {
+					freshDisc := o.cfg(agentCtx)
+					for _, ar := range freshDisc.Agents {
+						if ar.Agent.Name == inst.Name && ar.Alive {
+							newParticipant := projectParticipant{
+								name:  ar.Agent.Name,
+								role:  string(inst.HierarchyRole),
+								agent: ar.Agent,
+							}
+							participants = append(participants, newParticipant)
+							mentionedAgent = &participants[len(participants)-1]
+							slog.Info("found newly created agent via fallback", "agent", inst.Name, "project", projectID)
+							break
+						}
+					}
 					break
 				}
 			}
+		}
 
-			if mentionedAgent != nil {
-				slog.Info("agent-to-agent mention detected", "from", lastSpeaker, "to", mentionedAgent.name, "project", projectID)
-				sse.WriteEvent(map[string]any{
-					"type": "debug",
-					"msg":  fmt.Sprintf("agent @mention: %s → %s", lastSpeaker, mentionedAgent.name),
-				})
+		if mentionedAgent == nil {
+			slog.Debug("mentioned agent not found or not alive", "mention", agentMention, "project", projectID)
+			break
+		}
 
-				// Build context for the mentioned agent
-				agent := discovery.NewAgent(mentionedAgent.agent)
-				var forwardMsg string
-				if len(contextLines) > 0 {
-					forwardMsg = strings.Join(contextLines, "\n")
+		slog.Info("agent-to-agent mention detected", "from", lastSpeaker, "to", mentionedAgent.name, "project", projectID, "hop", hop+1)
+		sse.WriteEvent(map[string]any{
+			"type": "debug",
+			"msg":  fmt.Sprintf("agent @mention: %s → %s (hop %d)", lastSpeaker, mentionedAgent.name, hop+1),
+		})
+
+		// Build context for the mentioned agent
+		fwdAgent := discovery.NewAgent(mentionedAgent.agent)
+		var forwardMsg string
+		if len(contextLines) > 0 {
+			forwardMsg = strings.Join(contextLines, "\n")
+		}
+
+		// Inject role instructions on first message for agents that haven't
+		// been briefed yet (the main respondent was briefed above).
+		if firstMessage {
+			fwdCtx := BriefingContext{
+				ProjectName: proj.Name,
+				ProjectID:   proj.ID,
+				Goal:        proj.Goal,
+				Description: proj.Description,
+				CaptainName: captainName,
+				AgentName:   mentionedAgent.name,
+			}
+			var fwdTemplate string
+			switch mentionedAgent.role {
+			case "commander":
+				fwdTemplate = "commander-project-chat.md"
+			case "captain":
+				fwdTemplate = "captain-project-chat.md"
+			default:
+				fwdTemplate = "talon-project-chat.md"
+			}
+			if fwdInstructions, fwdErr := renderBriefing(fwdTemplate, fwdCtx); fwdErr == nil {
+				fwdRouting, _ := renderBriefing("routing-rules.md", fwdCtx)
+				forwardMsg = fwdInstructions + fwdRouting + "\n\n" + forwardMsg
+
+				briefingNote := project.ChatMessage{
+					ID:        uuid.New().String(),
+					Sender:    "eyrie",
+					Role:      "system",
+					Content:   fmt.Sprintf("briefing sent to %s (%s)", mentionedAgent.name, mentionedAgent.role),
+					Timestamp: time.Now(),
+					Detail:    fwdInstructions + fwdRouting,
 				}
+				if appendErr := o.chatStore.Append(projectID, briefingNote); appendErr != nil {
+					slog.Warn("failed to save forwarding briefing note", "error", appendErr)
+				}
+				sse.WriteEvent(map[string]any{"type": "message", "message": briefingNote})
+			}
+		}
 
-				ch, err := agent.StreamMessage(agentCtx, forwardMsg, sessionKey)
-				if err != nil {
-					slog.Warn("failed to forward to mentioned agent", "agent", mentionedAgent.name, "error", err)
-					sse.WriteEvent(map[string]any{
-						"type":   "agent_event",
-						"sender": mentionedAgent.name,
-						"role":   mentionedAgent.role,
-						"event":  map[string]string{"type": "error", "content": fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, err)},
-					})
-					// Store error as system message so it's visible on reload too
-					errMsg := project.ChatMessage{
-						ID:        uuid.New().String(),
-						Sender:    "eyrie",
-						Role:      "system",
-						Content:   fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, err),
-						Timestamp: time.Now(),
-					}
-					if appendErr := o.chatStore.Append(projectID, errMsg); appendErr != nil {
-						slog.Warn("failed to save error message", "project", projectID, "error", appendErr)
-					}
-					sse.WriteEvent(map[string]any{"type": "message", "message": errMsg})
-				} else {
-					var fwdContent string
-					var fwdToolCalls []project.ChatPart
-					for ev := range ch {
-						switch ev.Type {
-						case "done":
-							fwdContent = ev.Content
-						case "tool_start":
-							fwdToolCalls = append(fwdToolCalls, project.ChatPart{
-								Type: "tool_call", ID: ev.ToolID, Name: ev.Tool, Args: ev.Args,
-							})
-						case "tool_result":
-							for i := len(fwdToolCalls) - 1; i >= 0; i-- {
-								if (ev.ToolID != "" && fwdToolCalls[i].ID == ev.ToolID) ||
-									(ev.ToolID == "" && fwdToolCalls[i].Name == ev.Tool && fwdToolCalls[i].Output == "") {
-									fwdToolCalls[i].Output = ev.Output
-									if ev.Success != nil && !*ev.Success {
-										fwdToolCalls[i].Error = true
-									}
-									break
-								}
-							}
-						}
-						sse.WriteEvent(map[string]any{
-							"type":   "agent_event",
-							"sender": mentionedAgent.name,
-							"role":   mentionedAgent.role,
-							"event":  ev,
-						})
-					}
+		ch, fwdErr := fwdAgent.StreamMessage(agentCtx, forwardMsg, sessionKey)
+		if fwdErr != nil {
+			slog.Warn("failed to forward to mentioned agent", "agent", mentionedAgent.name, "error", fwdErr)
+			sse.WriteEvent(map[string]any{
+				"type":   "agent_event",
+				"sender": mentionedAgent.name,
+				"role":   mentionedAgent.role,
+				"event":  map[string]string{"type": "error", "content": fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, fwdErr)},
+			})
+			errMsg := project.ChatMessage{
+				ID:        uuid.New().String(),
+				Sender:    "eyrie",
+				Role:      "system",
+				Content:   fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, fwdErr),
+				Timestamp: time.Now(),
+			}
+			if appendErr := o.chatStore.Append(projectID, errMsg); appendErr != nil {
+				slog.Warn("failed to save error message", "project", projectID, "error", appendErr)
+			}
+			sse.WriteEvent(map[string]any{"type": "message", "message": errMsg})
+			break // Stop chaining on error
+		}
 
-					// Strip directives and store
-					fwdTrimmed := strings.TrimSpace(fwdContent)
-					fwdDisplay := fwdTrimmed
-					if strings.HasSuffix(fwdDisplay, "[LISTENING]") {
-						fwdDisplay = strings.TrimSpace(strings.TrimSuffix(fwdDisplay, "[LISTENING]"))
-						o.chatStore.SetListening(projectID, mentionedAgent.name)
-					}
-
-					if fwdDisplay != "" {
-						var fwdParts []project.ChatPart
-						if len(fwdToolCalls) > 0 {
-							fwdParts = append(fwdParts, fwdToolCalls...)
-							fwdParts = append(fwdParts, project.ChatPart{Type: "text", Text: fwdDisplay})
+		var fwdContent string
+		var fwdToolCalls []project.ChatPart
+		for ev := range ch {
+			switch ev.Type {
+			case "done":
+				fwdContent = ev.Content
+			case "tool_start":
+				fwdToolCalls = append(fwdToolCalls, project.ChatPart{
+					Type: "tool_call", ID: ev.ToolID, Name: ev.Tool, Args: ev.Args,
+				})
+			case "tool_result":
+				for i := len(fwdToolCalls) - 1; i >= 0; i-- {
+					if (ev.ToolID != "" && fwdToolCalls[i].ID == ev.ToolID) ||
+						(ev.ToolID == "" && fwdToolCalls[i].Name == ev.Tool && fwdToolCalls[i].Output == "") {
+						fwdToolCalls[i].Output = ev.Output
+						if ev.Success != nil && !*ev.Success {
+							fwdToolCalls[i].Error = true
 						}
-						fwdMsg := project.ChatMessage{
-							ID:        uuid.New().String(),
-							Sender:    mentionedAgent.name,
-							Role:      mentionedAgent.role,
-							Content:   fwdDisplay,
-							Timestamp: time.Now(),
-							Parts:     fwdParts,
-						}
-						if err := o.chatStore.Append(projectID, fwdMsg); err != nil {
-							slog.Warn("failed to save forwarded response", "agent", mentionedAgent.name, "error", err)
-						}
-						sse.WriteEvent(map[string]any{"type": "message", "message": fwdMsg})
+						break
 					}
 				}
 			}
+			sse.WriteEvent(map[string]any{
+				"type":   "agent_event",
+				"sender": mentionedAgent.name,
+				"role":   mentionedAgent.role,
+				"event":  ev,
+			})
+		}
+
+		// Strip directives and store
+		fwdTrimmed := strings.TrimSpace(fwdContent)
+		fwdDisplay := fwdTrimmed
+		if strings.HasSuffix(fwdDisplay, "[LISTENING]") {
+			fwdDisplay = strings.TrimSpace(strings.TrimSuffix(fwdDisplay, "[LISTENING]"))
+			o.chatStore.SetListening(projectID, mentionedAgent.name)
+		}
+
+		if fwdDisplay != "" {
+			var fwdParts []project.ChatPart
+			if len(fwdToolCalls) > 0 {
+				fwdParts = append(fwdParts, fwdToolCalls...)
+				fwdParts = append(fwdParts, project.ChatPart{Type: "text", Text: fwdDisplay})
+			}
+			fwdMsg := project.ChatMessage{
+				ID:        uuid.New().String(),
+				Sender:    mentionedAgent.name,
+				Role:      mentionedAgent.role,
+				Content:   fwdDisplay,
+				Timestamp: time.Now(),
+				Parts:     fwdParts,
+			}
+			if err := o.chatStore.Append(projectID, fwdMsg); err != nil {
+				slog.Warn("failed to save forwarded response", "agent", mentionedAgent.name, "error", err)
+			}
+			sse.WriteEvent(map[string]any{"type": "message", "message": fwdMsg})
+
+			// Update context so the next hop sees this response
+			contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", mentionedAgent.name, mentionedAgent.role, fwdDisplay))
+		} else {
+			break // No content to chain from
 		}
 	}
 

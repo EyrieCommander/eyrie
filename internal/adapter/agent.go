@@ -314,6 +314,7 @@ type ChatMessage struct {
 	Channel   string         `json:"channel,omitempty"`
 	Mention   string         `json:"mention,omitempty"`   // "@captain", "@commander", etc. (project chat)
 	Parts     []ChatPart     `json:"parts,omitempty"`
+	Detail    string         `json:"detail,omitempty"`    // expandable content (e.g., full briefing text)
 }
 
 // ChatPart is an ordered content element within a message.

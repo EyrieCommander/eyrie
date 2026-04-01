@@ -272,6 +272,7 @@ export interface ProjectChatMessage {
   timestamp: string;
   mention?: string;
   parts?: ChatPart[];
+  detail?: string; // expandable content (e.g., full briefing text)
 }
 
 export const FRAMEWORK_EMOJI: Record<string, string> = {
