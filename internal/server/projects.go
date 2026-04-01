@@ -644,6 +644,51 @@ func (s *Server) refreshProjectContext(projectID string) {
 	slog.Debug("refreshProjectContext: updated", "project", projectID, "agents", len(workspaces))
 }
 
+// ensureCaptainBriefing checks whether the captain has a briefing session
+// and creates one if missing. Runs in the background (goroutine) so it
+// doesn't block the HTTP response.
+func (s *Server) ensureCaptainBriefing(proj *project.Project) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	disc := s.runDiscovery(ctx)
+	var found *discovery.AgentResult
+	for i := range disc.Agents {
+		a := disc.Agents[i].Agent
+		if a.Name == proj.OrchestratorID || a.InstanceID == proj.OrchestratorID {
+			found = &disc.Agents[i]
+			break
+		}
+	}
+	if found == nil || !found.Alive {
+		slog.Debug("ensureCaptainBriefing: captain not found or not running", "orchestrator", proj.OrchestratorID)
+		return
+	}
+
+	agent := discovery.NewAgent(found.Agent)
+	sessions, err := agent.Sessions(ctx)
+	if err != nil {
+		slog.Debug("ensureCaptainBriefing: failed to list sessions", "error", err)
+		return
+	}
+	for _, sess := range sessions {
+		if sess.Key == "eyrie-captain-briefing" {
+			return // already briefed
+		}
+	}
+
+	// No briefing session — run the briefing
+	briefing := composeCaptainBriefing(proj)
+	agentName := proj.OrchestratorID
+	// streamBriefing requires an SSEWriter, but we're in a background goroutine
+	// with no HTTP response. Use SendMessage directly instead.
+	if _, err := agent.SendMessage(ctx, briefing, "eyrie-captain-briefing"); err != nil {
+		slog.Warn("ensureCaptainBriefing: briefing failed", "captain", agentName, "error", err)
+	} else {
+		slog.Info("ensureCaptainBriefing: captain briefed", "captain", agentName, "project", proj.ID)
+	}
+}
+
 // injectSystemMessage appends a system message to a project's chat log.
 // Used to surface structural changes (agent created, removed, project
 // updated) in the project chat regardless of whether the change was made
@@ -776,7 +821,14 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("reset: failed to save project after clearing talons", "error", saveErr)
 	}
 
-	// 5. Publish event for real-time UI
+	// 5. Re-brief the captain if it doesn't have a briefing session.
+	//    The briefing session is created on initial captain assignment but
+	//    may have been cleared by a reset or never created (pre-existing captain).
+	if proj.OrchestratorID != "" {
+		go s.ensureCaptainBriefing(proj)
+	}
+
+	// 6. Publish event for real-time UI
 	s.events.Publish(ProjectEvent{
 		Type:      "project_reset",
 		ProjectID: projectID,

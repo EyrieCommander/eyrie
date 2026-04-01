@@ -81,7 +81,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Zoom */}
-        <div className="rounded border border-border bg-surface p-4 space-y-3">
+        <div className="rounded border border-border bg-surface p-4 space-y-3 overflow-hidden">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-xs font-medium text-text">zoom level</h3>

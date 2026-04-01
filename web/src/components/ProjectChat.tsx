@@ -35,7 +35,7 @@
 //   real-time updates so polling is disabled.
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Send } from "lucide-react";
+import { Send, ChevronRight } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
 import { ToolRunCard, groupPartsIntoRuns } from "./ChatPanel";
 import { ChatError } from "./chat/ChatError";
@@ -60,6 +60,27 @@ function ProjectMessageHeader({ role, sender, displayName, time, toolCount }: {
       <span className="text-[10px] text-text-muted">{time}</span>
       {(toolCount ?? 0) > 0 && (
         <span className="text-[10px] text-accent/60">[{toolCount} tool{toolCount! > 1 ? "s" : ""}]</span>
+      )}
+    </div>
+  );
+}
+
+/** Expandable system message — shows summary with clickable detail. */
+function DetailMessage({ content, detail }: { content: string; detail: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="mt-0.5">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-1 text-text-muted hover:text-text transition-colors"
+      >
+        <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`} />
+        <span>{content}</span>
+      </button>
+      {expanded && (
+        <pre className="mt-1 ml-4 p-2 rounded bg-surface-hover text-text-secondary text-[11px] whitespace-pre-wrap overflow-x-auto max-h-80 overflow-y-auto border border-border/50">
+          {detail}
+        </pre>
       )}
     </div>
   );
@@ -318,6 +339,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     abortRef.current = null;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setSending(false);
+    // Don't clearStreaming() — keep the partial content visible so the
+    // user can see what the agent was doing when they stopped it.
+    // Streaming state is cleared on the next send().
     // Cancel the backend's detached orchestration so the agent stops too
     stopProjectChat(projectId).catch(() => {});
   }, [projectId]);
@@ -385,6 +409,8 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                     )
                   )}
                 </div>
+              ) : msg.detail ? (
+                <DetailMessage content={msg.content} detail={msg.detail} />
               ) : (
                 <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
               )}
@@ -393,10 +419,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         })}
 
         {/* Streaming indicator */}
-        {sending && streamingAgent && (
+        {/* Show streaming indicator while actively streaming, or after stop
+            if there's partial content to preserve */}
+        {((sending && streamingAgent) || (!sending && streamingParts.length > 0)) && (
           <StreamingIndicator
             parts={streamingParts}
-            onStop={handleStop}
+            onStop={sending ? handleStop : undefined}
             header={
               <ProjectMessageHeader
                 role={streamingRole || "agent"}
@@ -408,25 +436,29 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           />
         )}
 
-        {/* Waiting indicator */}
+        {/* Waiting indicator — before the agent starts streaming */}
         {sending && !streamingAgent && messages.length > 0 && (
-          <StreamingIndicator
-            parts={[]}
-            onStop={handleStop}
-            header={
-              <div className="flex items-center gap-2 text-text-muted">
-                <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
-                waiting for agent response...
-              </div>
-            }
-          />
+          <div className="text-xs py-1">
+            <div className="flex items-center gap-2 text-text-muted animate-pulse">
+              <span className="h-1 w-1 rounded-full bg-accent" />
+              waiting for agent response...
+            </div>
+            <button
+              onClick={handleStop}
+              className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
+            >
+              stop
+            </button>
+          </div>
         )}
 
         {/* Background streaming indicator — agent is responding but we reconnected */}
         {backgroundStreaming && !sending && (
-          <div className="text-xs py-1 flex items-center gap-2 text-text-muted">
-            <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
-            agent is still responding...
+          <div className="text-xs py-1">
+            <div className="flex items-center gap-2 text-text-muted animate-pulse">
+              <span className="h-1 w-1 rounded-full bg-accent" />
+              waiting for agent response...
+            </div>
           </div>
         )}
       </div>

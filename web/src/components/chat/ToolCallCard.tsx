@@ -18,6 +18,16 @@ function classifyOutput(output: string | undefined): OutputStatus {
     return "error";
   }
 
+  // JSON responses with "error" key (e.g., API error responses)
+  if (lower.startsWith("{") && lower.includes('"error"')) {
+    return "error";
+  }
+
+  // HTTP error status codes in output
+  if (/\b(4\d{2}|5\d{2})\b/.test(lower) && (lower.includes("not found") || lower.includes("internal server") || lower.includes("bad request"))) {
+    return "error";
+  }
+
   // Permission / approval / security blocks
   if (lower.includes("requires approval") || lower.includes("command not allowed") ||
       lower.includes("not allowed by security") || lower.includes("permission denied") ||
@@ -377,7 +387,6 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
             <PartToolCallCard
               key={part.id || `tc-${i}`}
               part={part}
-              defaultExpanded
             />
           ))}
         </div>

@@ -110,31 +110,35 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
     );
   }
 
+  // WHY CSS grid instead of flex: flex-1 divides widths with fractional
+  // pixels, causing vertical column borders to misalign across rows
+  // (the "jagged lines" problem). Grid with fr units snaps to pixel
+  // boundaries consistently.
+  const gridCols = `200px repeat(${days.length}, 1fr)`;
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex-1 overflow-auto">
         {/* Date headers */}
-        <div className="flex sticky top-0 z-10 bg-bg">
-          <div className="flex-shrink-0 w-[200px] border-r border-b border-border px-3 py-2">
+        <div className="grid sticky top-0 z-10 bg-bg" style={{ gridTemplateColumns: gridCols }}>
+          <div className="border-r border-b border-border px-3 py-2">
             <span className="text-[9px] font-medium text-text-muted">// projects</span>
           </div>
-          <div className="flex flex-1">
-            {days.map((day, di) => {
-              const isToday = sameDay(day, today);
-              return (
-                <div
-                  key={di}
-                  className={`flex-1 flex items-center justify-center py-2 border-b ${
-                    isToday ? "border-accent" : "border-border"
-                  } ${di < days.length - 1 ? "border-r border-r-border" : ""}`}
-                >
-                  <span className={`text-[10px] font-medium ${isToday ? "text-accent" : "text-text-muted"}`}>
-                    {formatDay(day)}
-                  </span>
-                </div>
-              );
-            })}
-          </div>
+          {days.map((day, di) => {
+            const isToday = sameDay(day, today);
+            return (
+              <div
+                key={di}
+                className={`flex items-center justify-center py-2 border-b min-w-0 ${
+                  isToday ? "border-accent" : "border-border"
+                } ${di < days.length - 1 ? "border-r border-border" : ""}`}
+              >
+                <span className={`text-[10px] font-medium ${isToday ? "text-accent" : "text-text-muted"}`}>
+                  {formatDay(day)}
+                </span>
+              </div>
+            );
+          })}
         </div>
 
         {/* Project rows */}
@@ -143,14 +147,14 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
           const events = collectProjectEvents(tree);
           const agentCount = (tree.captain ? 1 : 0) + tree.talons.length;
           return (
-            <div key={proj.id} className="flex border-b border-border">
+            <div key={proj.id} className="grid border-b border-border" style={{ gridTemplateColumns: gridCols }}>
               {/* Project card */}
               <div
                 onClick={() => onProjectClick?.(proj.id)}
                 onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onProjectClick?.(proj.id); } }}
                 role="button"
                 tabIndex={0}
-                className="flex-shrink-0 w-[200px] border-r border-border p-3 space-y-1.5 cursor-pointer hover:bg-surface-hover/30 transition-colors"
+                className="border-r border-border p-3 space-y-1.5 cursor-pointer hover:bg-surface-hover/30 transition-colors"
               >
                 <div className="flex items-center gap-2">
                   <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${
@@ -169,31 +173,29 @@ function SwimLaneTimeline({ projects, onProjectClick }: {
               </div>
 
               {/* Day columns with real events */}
-              <div className="flex flex-1">
-                {days.map((day, di) => {
-                  const isToday = sameDay(day, today);
-                  const dayEvents = events.filter((e) => sameDay(new Date(e.date), day));
-                  return (
-                    <div
-                      key={di}
-                      className={`flex-1 flex flex-col items-start justify-center gap-1 px-1.5 py-1 ${
-                        di < days.length - 1 ? "border-r border-border" : ""
-                      } ${isToday ? "bg-accent/5" : ""}`}
-                    >
-                      {dayEvents.map((evt, ei) => (
-                        <div
-                          key={ei}
-                          className={`flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[9px] truncate max-w-full ${EVENT_BG[evt.type]}`}
-                          title={evt.label}
-                        >
-                          <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_DOT[evt.type]}`} />
-                          <span className="truncate text-text-secondary">{evt.label}</span>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-              </div>
+              {days.map((day, di) => {
+                const isToday = sameDay(day, today);
+                const dayEvents = events.filter((e) => sameDay(new Date(e.date), day));
+                return (
+                  <div
+                    key={di}
+                    className={`flex flex-col items-start justify-center gap-1 px-1.5 py-1 min-w-0 overflow-hidden ${
+                      di < days.length - 1 ? "border-r border-border" : ""
+                    } ${isToday ? "bg-accent/5" : ""}`}
+                  >
+                    {dayEvents.map((evt, ei) => (
+                      <div
+                        key={ei}
+                        className={`flex items-center gap-1 rounded-sm px-1.5 py-0.5 text-[9px] truncate max-w-full ${EVENT_BG[evt.type]}`}
+                        title={evt.label}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${EVENT_DOT[evt.type]}`} />
+                        <span className="truncate text-text-secondary">{evt.label}</span>
+                      </div>
+                    ))}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
