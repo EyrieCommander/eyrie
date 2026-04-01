@@ -200,12 +200,19 @@ export default function ProjectDetail() {
   // Check if required agents are stopped (only after initial load)
   const needsStart: { name: string; role: string; isInstance: boolean; id: string }[] = [];
   // WHY no commander check: Commander is a system-level agent, not required
-  // for project chat. Only the captain needs to be running.
+  // for project chat. Only the captain and talons need to be running.
   if (captainInstance && captainInstance.status !== "running") {
     needsStart.push({ name: captainInstance.display_name || captainInstance.name, role: "captain", isInstance: true, id: captainInstance.id });
   }
   if (captainAgent && !captainAgent.alive) {
     needsStart.push({ name: captainAgent.name, role: "captain", isInstance: false, id: captainAgent.name });
+  }
+  for (const talon of roleAgents) {
+    // Skip "starting" — the talon was just created and is booting up.
+    // Only show talons that are definitively stopped or errored.
+    if (talon.status !== "running" && talon.status !== "starting" && talon.status !== "created") {
+      needsStart.push({ name: talon.display_name || talon.name, role: "talon", isInstance: true, id: talon.id });
+    }
   }
 
   return (
@@ -483,6 +490,19 @@ export default function ProjectDetail() {
                     </div>
                   ))}
                 </div>
+                {needsStart.length > 1 && (
+                  <button
+                    disabled={!!startingAgent}
+                    onClick={async () => {
+                      for (const a of needsStart) {
+                        await startAgent(a.id, a.isInstance);
+                      }
+                    }}
+                    className="rounded bg-accent px-4 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
+                  >
+                    start all
+                  </button>
+                )}
               </div>
             </div>
           )}

@@ -32,7 +32,8 @@ function classifyOutput(output: string | undefined): OutputStatus {
   if (lower.includes("requires approval") || lower.includes("command not allowed") ||
       lower.includes("not allowed by security") || lower.includes("permission denied") ||
       lower.includes("not permitted") || lower.includes("access denied") ||
-      lower.includes("forbidden") || lower.includes("unauthorized")) {
+      lower.includes("forbidden") || lower.includes("unauthorized") ||
+      lower.includes("haven't granted") || lower.includes("requested permissions")) {
     return "blocked";
   }
 
@@ -75,7 +76,7 @@ function HtmlCanvasArgs({ args, output }: { args: Record<string, any>; output?: 
         <div>
           <span className="text-text-muted">args: </span>
           <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-            {JSON.stringify(meta, null, 2)}
+            {formatArgs(meta)}
           </pre>
         </div>
       )}
@@ -139,6 +140,13 @@ function HtmlPreview({ html }: { html: string }) {
       </div>
     </div>
   );
+}
+
+/** Format args JSON with literal newlines rendered inside string values. */
+function formatArgs(args: Record<string, any>): string {
+  return JSON.stringify(args, null, 2)
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t");
 }
 
 export function toolCallSummary(
@@ -246,7 +254,7 @@ export function PartToolCallCard({
                 <div>
                   <span className="text-text-muted">args: </span>
                   <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                    {JSON.stringify(part.args, null, 2)}
+                    {formatArgs(part.args)}
                   </pre>
                 </div>
               )}
@@ -312,7 +320,7 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
                 <div>
                   <span className="text-text-muted">args: </span>
                   <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                    {JSON.stringify(tc.args, null, 2)}
+                    {formatArgs(tc.args)}
                   </pre>
                 </div>
               )}

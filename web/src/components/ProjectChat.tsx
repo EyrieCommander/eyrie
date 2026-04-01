@@ -35,9 +35,9 @@
 //   real-time updates so polling is disabled.
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
-import { Send, ChevronRight } from "lucide-react";
+import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
-import { ToolRunCard, groupPartsIntoRuns } from "./ChatPanel";
+import { MessageRow } from "./ChatPanel";
 import { ChatError } from "./chat/ChatError";
 import { StreamingIndicator } from "./chat/StreamingIndicator";
 import type { StreamingPart } from "./chat/StreamingIndicator";
@@ -49,42 +49,9 @@ import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
 // StreamingPart type imported from chat/StreamingIndicator
 
-function ProjectMessageHeader({ role, sender, displayName, time, toolCount }: {
-  role: string; sender?: string; displayName?: string; time: string; toolCount?: number;
-}) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className={`font-bold ${roleColor(role)}`}>
-        {roleLabel(role, displayName, sender)}
-      </span>
-      <span className="text-[10px] text-text-muted">{time}</span>
-      {(toolCount ?? 0) > 0 && (
-        <span className="text-[10px] text-accent/60">[{toolCount} tool{toolCount! > 1 ? "s" : ""}]</span>
-      )}
-    </div>
-  );
-}
+// Message rendering handled by shared MessageRow component
 
-/** Expandable system message — shows summary with clickable detail. */
-function DetailMessage({ content, detail }: { content: string; detail: string }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <div className="mt-0.5">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1 text-text-muted hover:text-text transition-colors"
-      >
-        <ChevronRight className={`h-3 w-3 transition-transform ${expanded ? "rotate-90" : ""}`} />
-        <span>{content}</span>
-      </button>
-      {expanded && (
-        <pre className="mt-1 ml-4 p-2 rounded bg-surface-hover text-text-secondary text-[11px] whitespace-pre-wrap overflow-x-auto max-h-80 overflow-y-auto border border-border/50">
-          {detail}
-        </pre>
-      )}
-    </div>
-  );
-}
+// Message rendering handled by shared MessageRow component
 
 export interface ProjectChatProps {
   projectId: string;
@@ -109,6 +76,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [streamingTime, setStreamingTime] = useState("");
   const [pendingAgent, setPendingAgent] = useState(""); // set from routing debug event
   const [streamingParts, setStreamingParts] = useState<StreamingPart[]>([]);
+  const [toggledSet, setToggledSet] = useState<Set<string>>(new Set());
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
@@ -384,7 +352,27 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4 text-xs">
+        {/* Expand/collapse controls — sticky top-right, same as 1:1 chat */}
+        {sortedMessages.length > 1 && (
+          <div className="sticky top-0 z-10 float-right flex gap-0.5 pr-2 pt-2">
+            <button
+              onClick={() => setToggledSet(new Set())}
+              className="text-green font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
+              title="Expand all"
+            >
+              +
+            </button>
+            <button
+              onClick={() => setToggledSet(new Set(sortedMessages.map((m) => m.id)))}
+              className="text-purple font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
+              title="Compact all"
+            >
+              {"\u2212"}
+            </button>
+          </div>
+        )}
+
         {/* Error display */}
         {chatError && (
           <ChatError message={chatError} />
@@ -394,34 +382,26 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         {sortedMessages
           .filter((m) => messages.some((x) => x.role !== "system") || m.role !== "system")
           .map((msg) => {
-          const parts = msg.parts ?? [];
-          const hasParts = parts.length > 0;
-          const toolCount = parts.filter((p) => p.type === "tool_call").length;
+          // Default: expanded. Toggle collapses.
+          const expanded = !toggledSet.has(msg.id);
           return (
-            <div key={msg.id} className="text-xs">
-              <ProjectMessageHeader
-                role={msg.role}
-                sender={msg.sender}
-                displayName={displayNames.get(msg.sender)}
-                time={new Date(msg.timestamp).toLocaleTimeString()}
-                toolCount={toolCount}
-              />
-              {hasParts ? (
-                <div className="mt-1 space-y-1">
-                  {groupPartsIntoRuns(parts).map((run, ri) =>
-                    run.type === "text" ? (
-                      <div key={`${msg.id}-r-${ri}`} className="text-text whitespace-pre-wrap">{run.text}</div>
-                    ) : (
-                      <ToolRunCard key={`${msg.id}-r-${ri}`} tools={run.tools} />
-                    )
-                  )}
-                </div>
-              ) : msg.detail ? (
-                <DetailMessage content={msg.content} detail={msg.detail} />
-              ) : (
-                <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
-              )}
-            </div>
+            <MessageRow
+              key={msg.id}
+              msg={{
+                ...msg,
+                timestamp: typeof msg.timestamp === "string" ? msg.timestamp : new Date(msg.timestamp).toISOString(),
+                display_name: displayNames.get(msg.sender),
+              }}
+              expanded={expanded}
+              onToggle={() => {
+                setToggledSet((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(msg.id)) next.delete(msg.id);
+                  else next.add(msg.id);
+                  return next;
+                });
+              }}
+            />
           );
         })}
 
@@ -433,12 +413,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
             parts={streamingParts}
             onStop={sending ? handleStop : undefined}
             header={
-              <ProjectMessageHeader
-                role={streamingRole || "agent"}
-                sender={streamingAgent}
-                displayName={displayNames.get(streamingAgent)}
-                time={streamingTime}
-              />
+              <>
+                <span className="text-text-muted">{streamingTime}</span>{" "}
+                <span className={`font-medium ${roleColor(streamingRole || "agent")}`}>
+                  {roleLabel(streamingRole || "agent", displayNames.get(streamingAgent), streamingAgent)}:
+                </span>
+              </>
             }
           />
         )}
