@@ -49,10 +49,6 @@ import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
 // StreamingPart type imported from chat/StreamingIndicator
 
-// Message rendering handled by shared MessageRow component
-
-// Message rendering handled by shared MessageRow component
-
 export interface ProjectChatProps {
   projectId: string;
   participants: { name: string; role: string }[];
@@ -340,7 +336,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   }, [chatLoaded, sending, messages.length, send]);
 
   // Sort messages: system before user when timestamps are within 1 second
-  const sortedMessages = [...messages].sort((a, b) => {
+  const sortedMessages = useMemo(() => [...messages].sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
     const tb = new Date(b.timestamp).getTime();
     if (Math.abs(ta - tb) < 1000) {
@@ -348,7 +344,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       if (a.role === "user" && b.role === "system") return 1;
     }
     return ta - tb;
-  });
+  }), [messages]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
@@ -379,9 +375,10 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         )}
 
         {/* Messages — hide pre-chat system messages until chat has started */}
-        {sortedMessages
-          .filter((m) => messages.some((x) => x.role !== "system") || m.role !== "system")
-          .map((msg) => {
+        {(() => {
+          const hasNonSystem = sortedMessages.some((x) => x.role !== "system");
+          return sortedMessages.filter((m) => hasNonSystem || m.role !== "system");
+        })().map((msg) => {
           // Default: expanded. Toggle collapses.
           const expanded = !toggledSet.has(msg.id);
           return (

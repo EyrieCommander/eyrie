@@ -55,9 +55,18 @@ func New(cfg config.Config) *Server {
 		slog.Warn("failed to load key vault", "error", err)
 		vault = config.GetKeyVault() // fallback to singleton (empty if both fail)
 	}
-	projStore, _ := project.NewStore()
-	chatSt, _ := project.NewChatStore()
-	instStore, _ := instance.NewStore()
+	projStore, err := project.NewStore()
+	if err != nil {
+		slog.Error("failed to create project store", "error", err)
+	}
+	chatSt, err := project.NewChatStore()
+	if err != nil {
+		slog.Error("failed to create chat store", "error", err)
+	}
+	instStore, err := instance.NewStore()
+	if err != nil {
+		slog.Error("failed to create instance store", "error", err)
+	}
 	s := &Server{
 		cfg:           cfg,
 		hidden:        hidden,

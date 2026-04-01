@@ -68,20 +68,12 @@
 - [x] **Auto-pairing for provisioned instances**: Implemented — `autoPairZeroClaw()` runs on instance start, fetches paircode from `/admin/paircode`, pairs, and stores token in `tokens.json`. Pairing now enabled by default (`require_pairing = true`).
   - **Secure token storage**: Use restrictive file permissions (0o600) at minimum, prefer OS keyring integration. Tokens should support rotation/refresh under `~/.eyrie/tokens/`.
 - [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. Before starting a new daemon, check for and kill any existing process on the target port.
-- [ ] **Centralized key vault**: Eyrie-managed API key storage at `~/.eyrie/keys/` with per-provider entries (e.g., `anthropic.key`, `openrouter.key`). Keys stored with 0o600 permissions, optionally encrypted with a master password or OS keyring.
-  - **Manual setup**: User adds keys via settings page or `eyrie keys set anthropic <key>` CLI command. Keys are validated against the provider's API before saving.
-  - **Framework provisioning**: When a framework completes onboarding but has no API key configured, Eyrie checks the vault for a matching provider key. If found, injects it into the framework's config (env var, config file, or security file depending on framework). The API key prompt dialog (shown after setup) should offer "use key from vault" as a one-click option alongside manual entry.
-  - **Instance provisioning**: When creating new talon instances, inject the vault key at start time via environment variable (`ANTHROPIC_API_KEY`, `OPENROUTER_API_KEY`, etc.) instead of copying encrypted key files. Key never written to instance disk — only lives in the process environment.
-  - **Key rotation**: Updating a key in the vault propagates to all running instances on next restart. Dashboard shows which instances use which vault keys and their last rotation date.
-  - **API key provisioning for instances**: Currently copies encrypted api_key + .secret_key from parent ZeroClaw installation. Not ideal — shared secret key means one compromised instance exposes all. Let user choose:
-    - Shared API key via env var (simplest)
-    - Per-instance keys via `zeroclaw onboard` on each instance
-    - Centralized key vault in Eyrie 
-  - **Per-framework key format**: Each framework stores keys differently. Vault injection must be framework-aware:
-    - ZeroClaw: encrypted `api_key` field in config.toml (or env var `ANTHROPIC_API_KEY`)
-    - OpenClaw: `.env` file in config dir (or env var)
-    - PicoClaw: `.security.yml` in config dir (or env var `PICOCLAW_CHANNELS_*`)
-    - Hermes: `.env` file in config dir (or env var)
+- [x] **Centralized key vault**: `config/vault.go` — flat JSON store at `~/.eyrie/keys.json` (0600 permissions) with singleton accessor. REST API (`GET/PUT/DELETE /api/keys`, `POST /api/keys/{provider}/validate`). Keys injected into framework processes via env vars (`EnvSlice()`) through `ExecuteWithConfigEnv`. Settings page UI for add/edit/delete with provider validation. Embedded agents use vault directly via `SetVault()`. Pending improvements:
+  - [ ] **Encryption at rest**: Keys stored as plain JSON. Add ChaCha20-Poly1305 encryption (like ZeroClaw's SecretStore) with a master key in `~/.eyrie/.vault_key` (0600).
+  - [ ] **Per-instance key overrides**: Currently one key per provider globally. Add optional per-instance overrides for multi-tenant setups (e.g., different OpenRouter keys for different projects).
+  - [ ] **Custom env var names**: Provider-to-env-var mapping is hardcoded. Add optional `env_var` field per key for frameworks with non-standard env var names (e.g., `PICOCLAW_CHANNELS_*`).
+  - [ ] **CLI command**: `eyrie keys set <provider> <key>` — API + UI are sufficient for now.
+  - [ ] **Key rotation dashboard**: Show which instances use which vault keys, last rotation date, and "restart required" indicator when a key changes.
 
 ## Functionality
 
@@ -167,6 +159,15 @@ Known config requirements for provisioned agents, by framework. The provisioner 
 - [x] Add change-detection guard to DataContext polling — JSON.stringify comparison skips no-op re-renders on 30s poll
 - [ ] Remove `ensureMetrics` migration shim in `useAgentMetrics.ts` once old format is obsolete
 - [x] Parallelize talon destruction in `handleProjectReset` with sync.WaitGroup — 30s (slowest) instead of 30s×N
+- [x] Extract `dedupMessages` helper in chat.go (was duplicated between Messages and Compact)
+- [x] Extract `consumeAgentStream` + `storeAgentResponse` helpers in orchestrate.go (was duplicated 3x)
+- [x] Extract `DefaultAllowedCommands` shared constant (was duplicated between provisioner and migrator)
+- [x] Use `strings.Builder` for streamed text accumulation (was O(n²) string concat)
+- [ ] Add `?since=` parameter to `GET /api/projects/{id}/chat` to avoid fetching full history on every poll
+- [ ] Extract main respondent streaming into `consumeAgentStream` (currently separate due to incremental persistence)
+- [ ] Use `reflect.DeepEqual` in migrate.go `setNestedValue` instead of `fmt.Sprintf("%v")` comparison
+- [ ] Extract `briefingTemplateForRole(role) string` helper (switch duplicated in orchestrate.go)
+- [ ] Extract `"eyrie-captain-briefing"` session key as a named constant
 
 ## Integrations / Architecture
 
@@ -180,7 +181,11 @@ Known config requirements for provisioned agents, by framework. The provisioner 
 - [x] **Nanobot / ShibaClaw evaluation**: Cloned both to `claws/nanobot/` and `claws/shibaclaw/`. Posted security audit to zeroclaw-labs/zeroclaw/discussions/4876. Not integrating yet.
   - **v0.0.6b reassessment (2026-03-29)**: ShibaClaw fixed 6/9 findings — removed litellm, fixed CORS (safe defaults), masked auth token in logs, redacted secrets in /api/settings, set `restrict_to_workspace: true`, and implemented randomized tool output delimiters. Still not integrating because the 3 remaining issues are the ones that matter for Eyrie: blocklist-only shell exec (9 regex patterns, no sandbox), gateway binds `0.0.0.0` by default, and `os.execv` restart with no permission check. All inherited from Nanobot upstream. Revisit when ShibaClaw adds real shell sandboxing or Nanobot merges the Bubblewrap PR (HKUDS/nanobot#1873). Note: maintainer said he's open to adding a plain REST/WS API alongside Socket.IO for Eyrie integration once security blockers are resolved.
 - [ ] **Auto-fix button**: Error events on the dashboard get a "fix it" button that dispatches to either an agent (via existing orchestration) or Claude Code (via `claude -p` subprocess with structured JSON output). Server endpoint `POST /api/errors/{id}/autofix` with `backend: "claude-code" | "agent"` parameter. Claude Code path is a thin integration, not a full adapter.
-- [ ] **EyrieClaw (embedded agent)**: Go-native agent loop that runs inside the Eyrie process as goroutines instead of separate framework processes. Zero-overhead talons — no gateway, no port, no HTTP roundtrip. Uses OpenAI-compatible API client for LLM calls, Go channels for orchestrator communication. Value prop: spin up 20 lightweight talons without 20 processes. Research phase — evaluating Go LLM libraries and what Eyrie internals can be reused.
+- [x] **EyrieClaw (embedded agent)**: Go-native agent loop (1,874 lines) running inside the Eyrie process as goroutines. OpenAI-compatible provider, 5 built-in tools (workspace-sandboxed), ring buffer logging, JSONL sessions. Strong default for talons. Pending improvements:
+  - [ ] **Native Anthropic provider**: Use `anthropic-sdk-go` for direct Anthropic API with extended thinking support.
+  - [ ] **MCP client integration**: Use official `modelcontextprotocol/go-sdk` for skill-based tool injection (e.g., Remotion video authoring skill).
+  - [ ] **Skill package format**: Define the format for reusable knowledge packages that teach agents specific technologies. Skills = API reference + patterns + scaffolding knowledge + optional MCP tools.
+  - [ ] **Automatic context summarization**: V1 uses hard truncation when token budget exceeded. Add LLM-powered summarization of older messages as a follow-up.
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
 - [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)
 - [ ] **Server middleware layer**: Request logging, panic recovery, and rate limiting middleware — per PLAN.md `internal/server/middleware.go`. Currently all 52 routes are registered bare with no central error handling or observability.

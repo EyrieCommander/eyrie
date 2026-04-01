@@ -91,15 +91,9 @@ var zeroClawRules = []tomlRule{
 	},
 }
 
-// zeroClawEnsureCommands is the minimum set of allowed commands.
+// zeroClawEnsureCommands references the shared default list.
 // Migration adds any missing commands without removing existing ones.
-var zeroClawEnsureCommands = []string{
-	"git", "npm", "cargo", "make",
-	"ls", "cat", "grep", "find", "echo", "pwd",
-	"wc", "head", "tail", "date", "curl",
-	"sleep", "mkdir", "cp", "mv", "rm", "touch",
-	"sed", "awk", "sort", "uniq", "diff",
-}
+var zeroClawEnsureCommands = DefaultAllowedCommands
 
 func migrateZeroClaw(configPath string) ([]string, error) {
 	configPath = econfig.ExpandHome(configPath)

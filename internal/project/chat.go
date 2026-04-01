@@ -165,25 +165,7 @@ func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error
 		return nil, fmt.Errorf("reading chat file: %w", err)
 	}
 
-	// WHY deduplication: When streaming is interrupted (server restart,
-	// crash), a partial message may have been appended. On completion, the
-	// final message is appended with the same ID. Keeping only the last
-	// occurrence per ID ensures the user sees the most complete version.
-	if len(messages) > 0 {
-		seen := make(map[string]int, len(messages))
-		for i, m := range messages {
-			seen[m.ID] = i
-		}
-		if len(seen) < len(messages) {
-			deduped := make([]ChatMessage, 0, len(seen))
-			for i, m := range messages {
-				if seen[m.ID] == i {
-					deduped = append(deduped, m)
-				}
-			}
-			messages = deduped
-		}
-	}
+	messages = dedupMessages(messages)
 
 	if limit > 0 && len(messages) > limit {
 		messages = messages[len(messages)-limit:]
@@ -227,20 +209,9 @@ func (cs *ChatStore) Compact(projectID string) error {
 		return fmt.Errorf("reading chat file for compaction: %w", err)
 	}
 
-	// Dedup: keep last occurrence per ID
-	seen := make(map[string]int, len(messages))
-	for i, m := range messages {
-		seen[m.ID] = i
-	}
-	if len(seen) == len(messages) {
+	deduped := dedupMessages(messages)
+	if len(deduped) == len(messages) {
 		return nil // Already clean, nothing to compact
-	}
-
-	deduped := make([]ChatMessage, 0, len(seen))
-	for i, m := range messages {
-		if seen[m.ID] == i {
-			deduped = append(deduped, m)
-		}
 	}
 
 	// Rewrite atomically
@@ -255,6 +226,29 @@ func (cs *ChatStore) Compact(projectID string) error {
 	}
 
 	return fileutil.AtomicWrite(path, buf, 0o600)
+}
+
+// dedupMessages keeps only the last occurrence of each message ID.
+// WHY: Incremental persistence appends partial snapshots with the same ID.
+// Keeping the last occurrence ensures the most complete version is returned.
+func dedupMessages(messages []ChatMessage) []ChatMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+	seen := make(map[string]int, len(messages))
+	for i, m := range messages {
+		seen[m.ID] = i
+	}
+	if len(seen) == len(messages) {
+		return messages // No duplicates
+	}
+	deduped := make([]ChatMessage, 0, len(seen))
+	for i, m := range messages {
+		if seen[m.ID] == i {
+			deduped = append(deduped, m)
+		}
+	}
+	return deduped
 }
 
 // FormatForAgent formats the conversation history as a text block suitable

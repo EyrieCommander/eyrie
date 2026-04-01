@@ -258,15 +258,9 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		// The user monitors them through the project chat, not by approving
 		// individual shell commands. ZeroClaw expects "full" (not "autonomous").
 		"autonomy": map[string]any{
-			"level":          "full",
-			"workspace_only": true,
-			"allowed_commands": []string{
-				"git", "npm", "cargo", "make",
-				"ls", "cat", "grep", "find", "echo", "pwd",
-				"wc", "head", "tail", "date", "curl",
-				"sleep", "mkdir", "cp", "mv", "rm", "touch",
-				"sed", "awk", "sort", "uniq", "diff",
-			},
+			"level":            "full",
+			"workspace_only":   true,
+			"allowed_commands": DefaultAllowedCommands,
 		},
 		// WHY sandbox=none: macOS seatbelt sandbox blocks basic operations
 		// (ls, pwd, find) even within the workspace directory. Provisioned
@@ -331,13 +325,27 @@ func parentProviderDefaults(framework string) (model, provider string) {
 		return
 	}
 
-	if p := readTOMLField(parentConfigPath, "default_provider"); p != "" {
+	var raw map[string]any
+	if err := config.ParseTOMLFile(parentConfigPath, &raw); err != nil {
+		return
+	}
+	if p := tomlString(raw, "default_provider"); p != "" {
 		provider = p
 	}
-	if m := readTOMLField(parentConfigPath, "default_model"); m != "" {
+	if m := tomlString(raw, "default_model"); m != "" {
 		model = m
 	}
 	return
+}
+
+// tomlString extracts a top-level string field from a parsed TOML map.
+func tomlString(raw map[string]any, field string) string {
+	if val, ok := raw[field]; ok {
+		if s, ok := val.(string); ok {
+			return s
+		}
+	}
+	return ""
 }
 
 // readTOMLField reads a single top-level string field from a TOML file.
@@ -346,12 +354,7 @@ func readTOMLField(path, field string) string {
 	if err := config.ParseTOMLFile(path, &raw); err != nil {
 		return ""
 	}
-	if val, ok := raw[field]; ok {
-		if s, ok := val.(string); ok {
-			return s
-		}
-	}
-	return ""
+	return tomlString(raw, field)
 }
 
 func (p *Provisioner) generateOpenClawConfig(inst *Instance, provider, model string) error {
