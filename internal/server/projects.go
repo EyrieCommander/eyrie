@@ -146,6 +146,11 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			s.injectSystemMessage(id, fmt.Sprintf("captain assigned: %s", captainName))
+			// WHY brief on assignment: The general briefing teaches the captain
+			// to use ZeroClaw's native shell tool and the Eyrie API. Without it,
+			// the LLM defaults to Claude Code tools (Bash, Read) which have a
+			// separate permission system that blocks headless agents.
+			go s.ensureCaptainBriefing(p)
 		}
 	}
 	if update.Progress != nil {
@@ -316,6 +321,10 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 func (s *Server) handleProjectChatMessages(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 	cs := s.chatStore
+	if cs == nil {
+		writeJSON(w, http.StatusOK, []project.ChatMessage{})
+		return
+	}
 	messages, err := cs.Messages(projectID, 0)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -644,16 +653,18 @@ func (s *Server) refreshProjectContext(projectID string) {
 	slog.Debug("refreshProjectContext: updated", "project", projectID, "agents", len(workspaces))
 }
 
-// ensureCaptainBriefing checks whether the captain has a briefing session
-// and creates one if missing. Runs in the background (goroutine) so it
-// doesn't block the HTTP response.
-func (s *Server) ensureCaptainBriefing(proj *project.Project) {
-	// WHY 5s delay: The captain's session was just reset. Give the agent
-	// a moment to stabilize before attempting the briefing — otherwise
-	// the gateway may not be ready and the SendMessage call times out.
+// ensureCaptainBriefing sends a briefing to the captain if it doesn't have
+// one (or if force=true, e.g., after a project reset). Runs in the background
+// (goroutine) so it doesn't block the HTTP response.
+func (s *Server) ensureCaptainBriefing(proj *project.Project, force ...bool) {
+	// WHY 5s delay: The captain may have just been started or reset. Give
+	// the agent a moment to stabilize before attempting the briefing.
 	time.Sleep(5 * time.Second)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	// WHY 3 minutes: The briefing triggers an LLM call + tool execution
+	// (curl API reference, save TOOLS.md). 60s was too short — the agent
+	// needs time for inference + tool calls + streaming the response back.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
 	disc := s.runDiscovery(ctx)
@@ -671,26 +682,35 @@ func (s *Server) ensureCaptainBriefing(proj *project.Project) {
 	}
 
 	agent := discovery.NewAgent(found.Agent)
-	sessions, err := agent.Sessions(ctx)
-	if err != nil {
-		slog.Debug("ensureCaptainBriefing: failed to list sessions", "error", err)
-		return
-	}
-	for _, sess := range sessions {
-		if sess.Key == "eyrie-captain-briefing" {
-			return // already briefed
+	if len(force) == 0 || !force[0] {
+		sessions, err := agent.Sessions(ctx)
+		if err != nil {
+			slog.Debug("ensureCaptainBriefing: failed to list sessions", "error", err)
+			return
+		}
+		for _, sess := range sessions {
+			if sess.Key == "eyrie-captain-briefing" {
+				return // already briefed
+			}
 		}
 	}
 
-	// No briefing session — run the briefing
+	// Reset the briefing session before re-sending so the captain gets
+	// a clean context with fresh project info (not stale + fresh mixed).
+	resetCtx, resetCancel := context.WithTimeout(ctx, 5*time.Second)
+	if resetErr := agent.ResetSession(resetCtx, "eyrie-captain-briefing"); resetErr != nil {
+		slog.Debug("ensureCaptainBriefing: could not reset old briefing session", "error", resetErr)
+	}
+	resetCancel()
+
 	briefing := composeCaptainBriefing(proj)
 	agentName := proj.OrchestratorID
-	// streamBriefing requires an SSEWriter, but we're in a background goroutine
-	// with no HTTP response. Use SendMessage directly instead.
 	if _, err := agent.SendMessage(ctx, briefing, "eyrie-captain-briefing"); err != nil {
 		slog.Warn("ensureCaptainBriefing: briefing failed", "captain", agentName, "error", err)
+		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing failed for %s: %v", agentName, err))
 	} else {
 		slog.Info("ensureCaptainBriefing: captain briefed", "captain", agentName, "project", proj.ID)
+		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing sent to %s", agentName))
 	}
 }
 
@@ -826,11 +846,10 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("reset: failed to save project after clearing talons", "error", saveErr)
 	}
 
-	// 5. Re-brief the captain if it doesn't have a briefing session.
-	//    The briefing session is created on initial captain assignment but
-	//    may have been cleared by a reset or never created (pre-existing captain).
+	// 5. Re-brief the captain (force=true: always re-brief on reset, even
+	//    if the old briefing session exists — project context may have changed).
 	if proj.OrchestratorID != "" {
-		go s.ensureCaptainBriefing(proj)
+		go s.ensureCaptainBriefing(proj, true)
 	}
 
 	// 6. Publish event for real-time UI
