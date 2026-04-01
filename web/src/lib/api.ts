@@ -17,6 +17,9 @@ import type {
   CreateProjectRequest,
   HierarchyTree,
   ProjectChatMessage,
+  KeyEntry,
+  SetKeyResponse,
+  ValidateKeyResponse,
 } from "./types";
 
 const BASE = "";
@@ -740,4 +743,55 @@ export async function setCommander(opts: { instanceId?: string; agentName?: stri
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to set commander: ${res.statusText}`);
   }
+}
+
+// --- Key Vault API ---
+
+export async function fetchKeys(): Promise<KeyEntry[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys`);
+  if (!res.ok) throw new Error(`Failed to fetch keys: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setKey(
+  provider: string,
+  key: string,
+  skipValidation = false,
+): Promise<SetKeyResponse> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys/${encodeURIComponent(provider)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key, skip_validation: skipValidation }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to set key: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteKey(provider: string): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys/${encodeURIComponent(provider)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to delete key: ${res.statusText}`);
+  }
+}
+
+export async function validateKey(
+  provider: string,
+  key: string,
+): Promise<ValidateKeyResponse> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys/${encodeURIComponent(provider)}/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to validate key: ${res.statusText}`);
+  }
+  return res.json();
 }

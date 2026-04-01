@@ -287,8 +287,12 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		},
 	}
 
-	// Copy API key from parent ZeroClaw installation so provisioned instances
-	// can use the same provider without manual onboarding.
+	// WHY copy secret key: ZeroClaw encrypts api_key in its config using a
+	// per-install .secret_key. Copying both lets provisioned instances decrypt
+	// the key at startup. This is a legacy path — vault env var injection
+	// (ANTHROPIC_API_KEY etc.) supersedes it for providers the vault knows
+	// about, but encrypted config keys remain needed for providers not in
+	// the vault's env var map or when the vault has no key for this provider.
 	parentConfigDir := config.ExpandHome("~/.zeroclaw")
 	parentConfigPath := filepath.Join(parentConfigDir, "config.toml")
 	if apiKey := readTOMLField(parentConfigPath, "api_key"); apiKey != "" {

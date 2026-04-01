@@ -27,6 +27,7 @@ type Server struct {
 	server *http.Server
 	hidden *config.HiddenStore
 	events *EventBus
+	vault  *config.KeyVault
 
 	// WHY cached stores: Handlers previously called NewStore() per request
 	// (38 call sites across projects.go, instances.go, hierarchy.go). Each
@@ -49,12 +50,18 @@ func New(cfg config.Config) *Server {
 		slog.Warn("failed to load hidden sessions store", "error", err)
 		hidden = nil
 	}
+	vault, err := config.NewKeyVault()
+	if err != nil {
+		slog.Warn("failed to load key vault", "error", err)
+		vault = config.GetKeyVault() // fallback to singleton (empty if both fail)
+	}
 	projStore, _ := project.NewStore()
 	chatSt, _ := project.NewChatStore()
 	instStore, _ := instance.NewStore()
 	s := &Server{
 		cfg:           cfg,
 		hidden:        hidden,
+		vault:         vault,
 		events:        NewEventBus(),
 		projectStore:  projStore,
 		chatStore:     chatSt,
@@ -137,6 +144,12 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/hierarchy/commander", s.handleSetCommander)
 	s.mux.HandleFunc("POST /api/hierarchy/commander/brief", s.handleBriefCommander)
 	s.mux.HandleFunc("POST /api/projects/{id}/captain/brief", s.handleBriefCaptain)
+
+	// Key vault endpoints
+	s.mux.HandleFunc("GET /api/keys", s.handleListKeys)
+	s.mux.HandleFunc("PUT /api/keys/{provider}", s.handleSetKey)
+	s.mux.HandleFunc("DELETE /api/keys/{provider}", s.handleDeleteKey)
+	s.mux.HandleFunc("POST /api/keys/{provider}/validate", s.handleValidateKey)
 
 	// Persona endpoints (also aliased under /api/registry/ for consistency)
 	s.mux.HandleFunc("GET /api/registry/personas", s.handleListPersonas)

@@ -117,9 +117,9 @@ func (s *Server) handleAgentModels(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set auth header from environment if available. Provider APIs typically
+	// Set auth header from vault if available. Provider APIs typically
 	// require authentication to list models.
-	if key := providerAPIKey(st.Provider); key != "" {
+	if key := s.providerAPIKey(st.Provider); key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}
 
@@ -714,17 +714,21 @@ func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, map[string]string{"display_name": cleaned})
 }
 
-// providerAPIKey returns an API key for the given provider from environment
-// variables. Returns "" if no key is configured.
-func providerAPIKey(provider string) string {
-	switch {
-	case strings.HasPrefix(provider, "openrouter"), provider == "openrouter":
-		return os.Getenv("OPENROUTER_API_KEY")
-	case strings.HasPrefix(provider, "openai"), provider == "openai":
-		return os.Getenv("OPENAI_API_KEY")
-	default:
-		return ""
+// providerAPIKey returns an API key for the given provider. The vault checks
+// env vars first, then the on-disk store. Normalizes composite provider
+// strings like "custom:http://..." to just the prefix.
+func (s *Server) providerAPIKey(provider string) string {
+	// Normalize: "custom:http://..." → "" (no key for custom endpoints)
+	// "openrouter" or "openrouter:something" → "openrouter"
+	normalized := provider
+	if idx := strings.Index(provider, ":"); idx > 0 {
+		prefix := provider[:idx]
+		if prefix == "custom" {
+			return ""
+		}
+		normalized = prefix
 	}
+	return s.vault.Get(normalized)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

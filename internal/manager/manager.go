@@ -294,6 +294,79 @@ func processExistsByConfigDir(configDir string) (bool, error) {
 	return true, nil
 }
 
+// ExecuteWithConfigEnv runs a lifecycle action for a framework using a specific
+// config path, with extra environment variables appended. Starts from
+// os.Environ() and appends extraEnv — never replaces the full environment.
+// This is the primary entry point when vault env vars need injection.
+func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, action LifecycleAction, extraEnv []string) error {
+	switch framework {
+	case "zeroclaw":
+		configDir := filepath.Dir(configPath)
+		logDir := filepath.Join(configDir, "logs")
+		switch action {
+		case ActionStart:
+			_, _ = killByConfigDir(configDir)
+			return runDetachedWithEnv(ctx, logDir, mergeEnv(extraEnv), "zeroclaw", "daemon", "--config-dir", configDir)
+		case ActionStop:
+			_, err := killByConfigDir(configDir)
+			return err
+		case ActionRestart:
+			if _, stopErr := killByConfigDir(configDir); stopErr != nil {
+				fmt.Fprintf(os.Stderr, "eyrie: zeroclaw stop (config-dir %s): %v\n", configDir, stopErr)
+			}
+			for i := 0; i < 10; i++ {
+				time.Sleep(100 * time.Millisecond)
+				found, err := processExistsByConfigDir(configDir)
+				if err != nil || !found {
+					break
+				}
+			}
+			if still, _ := processExistsByConfigDir(configDir); still {
+				return fmt.Errorf("old process for config-dir %s still running after 1s — not starting duplicate", configDir)
+			}
+			return runDetachedWithEnv(ctx, logDir, mergeEnv(extraEnv), "zeroclaw", "daemon", "--config-dir", configDir)
+		default:
+			return fmt.Errorf("unknown action %q for zeroclaw", action)
+		}
+	case "openclaw":
+		if action == ActionStart || action == ActionRestart {
+			ocLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+			env := mergeEnv(extraEnv)
+			// Also prepend Node 22 to PATH
+			if n22 := node22BinDir(); n22 != "" {
+				for i, e := range env {
+					if strings.HasPrefix(e, "PATH=") {
+						env[i] = "PATH=" + n22 + string(os.PathListSeparator) + e[5:]
+						break
+					}
+				}
+			}
+			return runDetachedWithEnv(ctx, ocLogDir, env, "openclaw", "gateway", string(action), "--config", configPath)
+		}
+		return runWithNode22(ctx, "openclaw", "gateway", string(action), "--config", configPath)
+	case "hermes":
+		if action == ActionStart || action == ActionRestart {
+			hLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+			return runDetachedWithEnv(ctx, hLogDir, mergeEnv(extraEnv), "hermes", "gateway", string(action), "--config", configPath)
+		}
+		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	case "embedded":
+		return nil
+	default:
+		return fmt.Errorf("unknown framework %q", framework)
+	}
+}
+
+// mergeEnv starts from os.Environ() and appends extra env vars. If extraEnv
+// is nil or empty, returns os.Environ() unchanged.
+func mergeEnv(extraEnv []string) []string {
+	env := os.Environ()
+	if len(extraEnv) == 0 {
+		return env
+	}
+	return append(env, extraEnv...)
+}
+
 // ExecuteWithConfig runs a lifecycle action for a framework using a specific config path.
 // This is used for provisioned instances that have their own config files.
 func ExecuteWithConfig(ctx context.Context, framework, configPath string, action LifecycleAction) error {

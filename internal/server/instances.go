@@ -115,7 +115,7 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 				autoStartErr = agent.Start(startCtx)
 			}
 		} else {
-			autoStartErr = manager.ExecuteWithConfig(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart)
+			autoStartErr = manager.ExecuteWithConfigEnv(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart, s.vault.EnvSlice())
 		}
 
 		if autoStartErr != nil {
@@ -356,7 +356,7 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if err := manager.ExecuteWithConfig(execCtx, inst.Framework, inst.ConfigPath, mgrAction); err != nil {
+		if err := manager.ExecuteWithConfigEnv(execCtx, inst.Framework, inst.ConfigPath, mgrAction, s.vault.EnvSlice()); err != nil {
 			// Persist the error status so the instance reflects the failure
 			inst.Status = instance.StatusError
 			if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {

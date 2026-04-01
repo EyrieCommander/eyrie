@@ -3,7 +3,9 @@ import { useFont, FONT_OPTIONS, type FontId } from "../lib/useFont";
 import { useTheme, type Theme } from "../lib/useTheme";
 import { useLatencyThresholds } from "../lib/useLatencyThresholds";
 import { useState, useEffect, useRef } from "react";
-import { Minus, Plus, RotateCcw, Moon, Sun, Check } from "lucide-react";
+import { Minus, Plus, RotateCcw, Moon, Sun, Check, Key, Trash2, Loader2, Eye, EyeOff, ShieldCheck, ShieldAlert } from "lucide-react";
+import { fetchKeys, setKey, deleteKey } from "../lib/api";
+import type { KeyEntry } from "../lib/types";
 
 export default function SettingsPage() {
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
@@ -48,6 +50,9 @@ export default function SettingsPage() {
           // dashboard appearance
         </p>
       </div>
+
+      {/* API Keys */}
+      <ApiKeysSection />
 
       {/* Theme + Zoom + Latency */}
       <div className="grid gap-4 md:grid-cols-3">
@@ -217,6 +222,185 @@ export default function SettingsPage() {
         </div>
       </div>
 
+    </div>
+  );
+}
+
+// --- API Keys Section ---
+
+const KNOWN_PROVIDERS = ["anthropic", "openrouter", "openai", "deepseek"];
+
+function ApiKeysSection() {
+  const [keys, setKeys] = useState<KeyEntry[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [newProvider, setNewProvider] = useState("");
+  const [newKey, setNewKey] = useState("");
+  const [showNewKey, setShowNewKey] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  const loadKeys = async () => {
+    try {
+      setLoading(true);
+      const data = await fetchKeys();
+      setKeys(data);
+    } catch {
+      // Silently handle — keys may not exist yet
+      setKeys([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { loadKeys(); }, []);
+
+  // Clear success message after 3 seconds
+  useEffect(() => {
+    if (!successMsg) return;
+    const t = setTimeout(() => setSuccessMsg(null), 3000);
+    return () => clearTimeout(t);
+  }, [successMsg]);
+
+  const handleAdd = async () => {
+    if (!newProvider || !newKey) return;
+    try {
+      setSaving(true);
+      setError(null);
+      await setKey(newProvider, newKey);
+      setNewProvider("");
+      setNewKey("");
+      setShowNewKey(false);
+      setSuccessMsg(`${newProvider} key saved`);
+      await loadKeys();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to save key");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (provider: string) => {
+    try {
+      setError(null);
+      await deleteKey(provider);
+      setSuccessMsg(`${provider} key removed`);
+      await loadKeys();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to delete key");
+    }
+  };
+
+  // Providers that don't already have a stored key
+  const availableProviders = KNOWN_PROVIDERS.filter(
+    (p) => !keys.some((k) => k.provider === p),
+  );
+
+  return (
+    <div className="rounded border border-border bg-surface p-4 space-y-3">
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="text-xs font-medium text-text flex items-center gap-1.5">
+            <Key className="h-3.5 w-3.5" />
+            api keys
+          </h3>
+          <p className="text-[10px] text-text-muted mt-0.5">
+            centralized key vault — injected as env vars on agent start. changes require restart.
+          </p>
+        </div>
+      </div>
+
+      {error && (
+        <div className="text-[10px] text-red bg-red/5 border border-red/20 rounded px-2 py-1">
+          {error}
+        </div>
+      )}
+      {successMsg && (
+        <div className="flex items-center gap-1 text-[10px] text-accent">
+          <Check className="h-2.5 w-2.5" /> {successMsg}
+        </div>
+      )}
+
+      {loading ? (
+        <div className="flex items-center gap-2 text-[10px] text-text-muted py-2">
+          <Loader2 className="h-3 w-3 animate-spin" /> loading keys...
+        </div>
+      ) : (
+        <>
+          {/* Existing keys */}
+          {keys.length > 0 && (
+            <div className="space-y-1.5">
+              {keys.map((entry) => (
+                <div
+                  key={entry.provider}
+                  className="flex items-center justify-between rounded border border-border px-3 py-2 text-xs"
+                >
+                  <div className="flex items-center gap-2">
+                    <ShieldCheck className="h-3.5 w-3.5 text-accent" />
+                    <span className="font-medium text-text">{entry.provider}</span>
+                    <span className="text-text-muted font-mono text-[10px]">{entry.masked_key}</span>
+                  </div>
+                  <button
+                    onClick={() => handleDelete(entry.provider)}
+                    className="p-1 rounded text-text-muted hover:text-red hover:bg-red/5 transition-colors"
+                    title="remove key"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {keys.length === 0 && (
+            <div className="text-[10px] text-text-muted py-1 flex items-center gap-1.5">
+              <ShieldAlert className="h-3 w-3" />
+              no api keys configured — agents will rely on environment variables
+            </div>
+          )}
+
+          {/* Add new key */}
+          {availableProviders.length > 0 && (
+            <div className="flex items-center gap-2 pt-1">
+              <select
+                value={newProvider}
+                onChange={(e) => setNewProvider(e.target.value)}
+                className="rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
+              >
+                <option value="">provider...</option>
+                {availableProviders.map((p) => (
+                  <option key={p} value={p}>{p}</option>
+                ))}
+              </select>
+              <div className="relative flex-1">
+                <input
+                  type={showNewKey ? "text" : "password"}
+                  value={newKey}
+                  onChange={(e) => setNewKey(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
+                  placeholder="sk-..."
+                  className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowNewKey(!showNewKey)}
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                >
+                  {showNewKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                </button>
+              </div>
+              <button
+                onClick={handleAdd}
+                disabled={!newProvider || !newKey || saving}
+                className="rounded border border-accent bg-accent/5 px-3 py-1.5 text-xs font-medium text-accent hover:bg-accent/10 disabled:opacity-30 transition-colors flex items-center gap-1"
+              >
+                {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
+                save
+              </button>
+            </div>
+          )}
+        </>
+      )}
     </div>
   );
 }

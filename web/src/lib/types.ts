@@ -275,6 +275,26 @@ export interface ProjectChatMessage {
   detail?: string; // expandable content (e.g., full briefing text)
 }
 
+// --- Key vault types ---
+
+export interface KeyEntry {
+  provider: string;
+  masked_key: string;
+  has_key: boolean;
+}
+
+export interface SetKeyResponse {
+  provider: string;
+  masked_key: string;
+  valid: boolean;
+  verified: boolean;
+}
+
+export interface ValidateKeyResponse {
+  valid: boolean;
+  error?: string;
+}
+
 export const FRAMEWORK_EMOJI: Record<string, string> = {
   zeroclaw: "🌀",
   openclaw: "🦞",

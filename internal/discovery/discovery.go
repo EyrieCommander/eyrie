@@ -278,6 +278,7 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 			workspacePath = filepath.Join(filepath.Dir(d.ConfigPath), "workspace")
 		}
 		a := adapter.NewEmbeddedAdapter(d.Name, d.Name, d.ConfigPath, workspacePath)
+		a.SetVault(config.GetKeyVault())
 		embeddedAdapters[d.Name] = a
 		embeddedAdaptersMu.Unlock()
 		return a

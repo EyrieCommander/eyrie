@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/embedded"
 	"github.com/google/uuid"
 )
@@ -62,7 +63,7 @@ type EmbeddedAdapter struct {
 	sessions     *embedded.SessionStore
 	logBuf       *embedded.LogBuffer
 	loop         *embedded.AgentLoop
-	keyStore     *embedded.KeyStore
+	vault        *config.KeyVault
 
 	// Cached identity files to avoid re-reading disk on every message
 	idCache identityCache
@@ -85,7 +86,6 @@ func NewEmbeddedAdapter(id, name, configPath, workspacePath string) *EmbeddedAda
 		configPath:    configPath,
 		workspacePath: workspacePath,
 		logBuf:        embedded.NewLogBuffer(500),
-		keyStore:      embedded.NewKeyStore(),
 	}
 
 	// Read config to populate provider, model, tools, and capability flags
@@ -191,8 +191,12 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 		return nil // Already running
 	}
 
-	// Resolve API key from the central key store
-	apiKey := a.keyStore.Get(a.provider)
+	// Resolve API key from the centralized vault. Falls back to env vars
+	// automatically (vault.Get checks env first, then on-disk store).
+	var apiKey string
+	if a.vault != nil {
+		apiKey = a.vault.Get(a.provider)
+	}
 	if apiKey == "" {
 		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q", a.provider))
 	}
@@ -572,6 +576,13 @@ func (a *EmbeddedAdapter) Personality(_ context.Context) (*Personality, error) {
 
 func (a *EmbeddedAdapter) Capabilities() AgentCapabilities {
 	return AgentCapabilities{CommanderCapable: a.commanderCapable}
+}
+
+// SetVault injects the centralized key vault after construction. Called by
+// discovery after creating the adapter singleton, avoiding import cycles
+// between adapter and config packages at construction time.
+func (a *EmbeddedAdapter) SetVault(v *config.KeyVault) {
+	a.vault = v
 }
 
 // IsRunning returns whether the embedded agent is currently active.
