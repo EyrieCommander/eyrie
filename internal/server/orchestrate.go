@@ -496,6 +496,16 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		slog.Info("agent set listening", "agent", p.name, "project", projectID)
 	}
 
+	// WHY auto-listen on @mention: LLMs don't reliably include [LISTENING]
+	// in every response, even when briefed to do so. The instruction works
+	// on the first response (briefing is fresh) but fades over long
+	// conversations. If the respondent @mentioned other agents, they're
+	// delegating work and should always hear back — set listening implicitly.
+	if !isListening && len(parseMentions(displayContent)) > 0 {
+		o.chatStore.SetListening(projectID, p.name)
+		slog.Info("auto-listen: agent @mentioned others", "agent", p.name, "project", projectID)
+	}
+
 	// Compact the JSONL to remove partial snapshots now that the final
 	// message is stored. Runs in a goroutine so it doesn't block SSE.
 	go func() {
