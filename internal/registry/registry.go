@@ -12,13 +12,30 @@ import (
 )
 
 const (
-	// DefaultRegistryURL points to the canonical Eyrie registry
-	// TODO: Update this to the actual hosted registry URL
-	DefaultRegistryURL = "file:///Users/natalie/Development/eyrie/registry.example.json"
-
 	// CacheTTL defines how long cached registry data is valid
 	CacheTTL = 24 * time.Hour
 )
+
+// defaultRegistryURL returns the registry URL, resolving ~ to the user's home directory.
+// Looks for ~/.eyrie/registry.json first, then falls back to ~/.eyrie/cache/registry.json.
+// TODO: Update this to the actual hosted registry URL for production.
+func defaultRegistryURL() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	// Prefer user-provided registry
+	custom := filepath.Join(home, ".eyrie", "registry.json")
+	if _, err := os.Stat(custom); err == nil {
+		return "file://" + custom
+	}
+	// Fall back to cached copy
+	cached := filepath.Join(home, ".eyrie", "cache", "registry.json")
+	if _, err := os.Stat(cached); err == nil {
+		return "file://" + cached
+	}
+	return ""
+}
 
 // Client fetches and caches the Claw frameworks registry
 type Client struct {
@@ -30,7 +47,10 @@ type Client struct {
 // NewClient creates a new registry client
 func NewClient(registryURL string) (*Client, error) {
 	if registryURL == "" {
-		registryURL = DefaultRegistryURL
+		registryURL = defaultRegistryURL()
+	}
+	if registryURL == "" {
+		return nil, fmt.Errorf("no registry found: place registry.json in ~/.eyrie/ or set a registry URL")
 	}
 
 	cacheDir, err := getCacheDir()

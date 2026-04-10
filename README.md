@@ -42,21 +42,31 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 
 <img width="1324" height="759" alt="Screen Shot 2026-03-29 at 2 19 34 PM" src="https://github.com/user-attachments/assets/ad151ea2-0195-472f-be07-bf694f0413a5" />
 
+## Prerequisites
+
+- **Go 1.21+** — [install instructions](https://go.dev/doc/install) or `brew install go`
+- **Node.js 22+** — required for the web dashboard (`nvm install 22` or [nodejs.org](https://nodejs.org))
+
 ## Install
-
-```bash
-go install github.com/Audacity88/eyrie/cmd/eyrie@latest
-```
-
-Or build from source:
 
 ```bash
 git clone https://github.com/Audacity88/eyrie.git
 cd eyrie
-make build
+cd web && npm install && cd ..   # install frontend dependencies
+make build                       # builds React frontend + Go binary
+make install                     # adds to PATH; installs to ~/.local/bin/
 ```
 
 ## Quick Start
+
+Using web dashboard (recommended):
+
+```bash
+# Start the web dashboard
+eyrie dashboard
+```
+
+Using terminal:
 
 ```bash
 # See all discovered agents and their status
@@ -68,14 +78,11 @@ eyrie status zeroclaw
 # Tail logs from an agent
 eyrie logs zeroclaw
 
-# Start the web dashboard
-eyrie dashboard
-
 # Install a new framework
 eyrie install hermes
 ```
 
-## CLI Commands
+## Additional CLI Commands
 
 | Command | Description |
 |---------|-------------|
@@ -154,7 +161,7 @@ Installation proceeds through five phases:
 
 The web dashboard shows real-time progress via SSE streaming. Installed frameworks show a purple "already installed" badge; available ones show a white install button.
 
-The framework registry (`registry.example.json`) defines available frameworks with their install method, config format, default ports, and binary paths. For production, host the registry at a stable URL; Eyrie caches it locally at `~/.eyrie/cache/registry.json` (24h TTL).
+The framework registry (`registry.json`) defines available frameworks with their install method, config format, default ports, and binary paths. `make install` copies it to `~/.eyrie/registry.json`. For production, host the registry at a stable URL; Eyrie caches it locally at `~/.eyrie/cache/registry.json` (24h TTL).
 
 ## Development
 
@@ -196,6 +203,13 @@ All services use different ports and can run simultaneously:
 - ZeroClaw: `~/.zeroclaw/config.toml` (TOML syntax)
 - OpenClaw: `~/.openclaw/openclaw.json` (JSON syntax)
 - Eyrie: `~/.eyrie/config.toml` (optional — auto-discovery works without it)
+
+## Uninstall
+
+```bash
+make uninstall          # remove the binary from ~/.local/bin/
+rm -rf ~/.eyrie         # optional: remove config and data
+```
 
 ## Contributing
 
