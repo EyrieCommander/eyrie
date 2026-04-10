@@ -50,7 +50,7 @@ export default function FrameworkCard({
   const emoji = FRAMEWORK_EMOJI[framework.id] || "";
 
   return (
-    <div className="flex flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors">
+    <div className="flex flex-1 flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors">
       {/* Header */}
       <div className="flex items-center gap-2.5">
         <span className="text-xl leading-none">{emoji}</span>
@@ -74,7 +74,7 @@ export default function FrameworkCard({
       </div>
 
       {/* Description */}
-      <p className="text-xs text-text-secondary line-clamp-2">
+      <p className="text-xs text-text-secondary line-clamp-3">
         {framework.description}
       </p>
 
@@ -105,7 +105,8 @@ export default function FrameworkCard({
         </div>
       )}
 
-      {/* Install button */}
+      {/* Install button — pushed to bottom */}
+      <div className="flex-1" />
       <button
         onClick={isStale ? onInstall : needsSetup && onSetup ? onSetup : (isAlreadyInstalled || isSuccess) && onManage ? onManage : onInstall}
         disabled={disabled}

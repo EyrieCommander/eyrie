@@ -9,8 +9,8 @@
 // They change only when a new version ships.
 
 import { useEffect, useState, useRef } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { RefreshCw, AlertCircle, Package, Settings, Terminal as TerminalIcon } from "lucide-react";
+import { useNavigate, useSearchParams } from "react-router-dom";
+import { RefreshCw, AlertCircle, ChevronDown, ChevronRight, Package, Settings, Terminal as TerminalIcon } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import { formatBytes } from "../lib/format";
@@ -41,6 +41,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
       "streaming responses": "full",
       "named sessions": "full",
       "tool execution": "full",
+      "skill/plugin ecosystem": "partial",
       "shell sandboxing": "full",
       "interrupt in-flight": "planned",
       "multi-agent delegation": "full",
@@ -55,18 +56,20 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
       "interrupt in-flight": "internal CancellationToken exists, REST endpoint pending",
       "shell sandboxing": "seatbelt (macOS) / bubblewrap (Linux)",
       "multi-agent delegation": "native delegate tool with sub-agent loops",
+      "skill/plugin ecosystem": "built-in tools only, no plugin registry",
     },
     security: {
       "shell sandbox": "full",
       "workspace isolation": "full",
       "API key encryption": "full",
       "auth token (pairing)": "full",
-      "SSRF protection": "full",
+      "SSRF protection": "partial",
       "tool output delimiters": "full",
     },
     securityNotes: {
-      "shell sandbox": "seatbelt/bubblewrap with per-tool policies",
+      "shell sandbox": "seatbelt/bubblewrap with per-tool policies (disabled by default in provisioned instances on macOS)",
       "API key encryption": "encrypted on disk with .secret_key",
+      "SSRF protection": "allowlist-based (allowed_private_hosts), not blocked by default",
     },
   },
   openclaw: {
@@ -76,6 +79,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
       "streaming responses": "full",
       "named sessions": "full",
       "tool execution": "full",
+      "skill/plugin ecosystem": "full",
       "shell sandboxing": "partial",
       "interrupt in-flight": "partial",
       "multi-agent delegation": "none",
@@ -89,6 +93,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
     notes: {
       "interrupt in-flight": "emits 'aborted' events internally, no public API yet",
       "shell sandboxing": "allowlist-based command filtering",
+      "skill/plugin ecosystem": "large community skill library with npm-based installation",
     },
     security: {
       "shell sandbox": "partial",
@@ -100,7 +105,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
     },
     securityNotes: {
       "shell sandbox": "regex allowlist, no OS-level isolation",
-      "SSRF protection": "blocks private IPs in web_fetch",
+      "SSRF protection": "blocks all private IPs by default in web_fetch — no config needed",
     },
   },
   picoclaw: {
@@ -110,6 +115,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
       "streaming responses": "full",
       "named sessions": "full",
       "tool execution": "full",
+      "skill/plugin ecosystem": "partial",
       "shell sandboxing": "partial",
       "interrupt in-flight": "none",
       "multi-agent delegation": "none",
@@ -124,6 +130,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
       "shell sandboxing": "workspace-restricted execution",
       "memory system": "basic key-value, no semantic search",
       "channels (telegram, discord)": "telegram only",
+      "skill/plugin ecosystem": "channel-based plugins",
     },
     security: {
       "shell sandbox": "partial",
@@ -142,6 +149,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
       "streaming responses": "full",
       "named sessions": "full",
       "tool execution": "full",
+      "skill/plugin ecosystem": "none",
       "shell sandboxing": "none",
       "interrupt in-flight": "full",
       "multi-agent delegation": "none",
@@ -223,7 +231,7 @@ function NoteIndicator({ note }: { note: string }) {
 // ── Feature matrix table ─────────────────────────────────────────────────
 
 function FeatureMatrix({
-  title,
+  title: _title,
   featureKeys,
   frameworks,
   getLevel,
@@ -237,9 +245,6 @@ function FeatureMatrix({
 }) {
   return (
     <div>
-      <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">
-        {title}
-      </h2>
       <div className="overflow-x-auto rounded border border-border">
         <table className="w-full text-xs">
           <thead>
@@ -278,7 +283,20 @@ function FeatureMatrix({
 
 export default function FrameworkCompare() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { agents } = useData();
+  const highlightId = searchParams.get("highlight");
+  const compareMode = searchParams.get("compare") === "true";
+  const highlightRef = useRef<HTMLDivElement>(null);
+  const compareRef = useRef<HTMLDivElement>(null);
+  // Auto-clear highlight after 3s so it doesn't stick permanently
+  useEffect(() => {
+    if (!highlightId) return;
+    const timer = setTimeout(() => {
+      setSearchParams((prev) => { const next = new URLSearchParams(prev); next.delete("highlight"); return next; }, { replace: true });
+    }, 3000);
+    return () => clearTimeout(timer);
+  }, [highlightId, setSearchParams]);
 
   // ── Install state (from InstallPage) ─────────────────────────────────
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
@@ -294,6 +312,18 @@ export default function FrameworkCompare() {
   const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { selectedFrameworkRef.current = selectedFramework; }, [selectedFramework]);
+  // Scroll to highlighted framework card when navigated from mission control
+  useEffect(() => {
+    if (highlightId && highlightRef.current && !loading) {
+      highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+  }, [highlightId, loading]);
+  // Scroll to comparison section when arriving from "I'm not sure"
+  useEffect(() => {
+    if (compareMode && compareRef.current && !loading) {
+      compareRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, [compareMode, loading]);
   useEffect(() => {
     loadFrameworks(); loadInstallStatus();
     return () => {
@@ -320,6 +350,9 @@ export default function FrameworkCompare() {
 
   const [setupCommand, setSetupCommand] = useState<string | undefined>();
   const [showApiKeyPrompt, setShowApiKeyPrompt] = useState<string | null>(null); // framework ID
+  const [featuresExpanded, setFeaturesExpanded] = useState(compareMode);
+  const [securityExpanded, setSecurityExpanded] = useState(compareMode);
+  const [archExpanded, setArchExpanded] = useState(compareMode);
 
   const handleSetup = (frameworkId: string) => {
     const fw = frameworks.find((f) => f.id === frameworkId);
@@ -372,10 +405,7 @@ export default function FrameworkCompare() {
 
   return (
     <div className="flex flex-col h-full space-y-6">
-      <div className="text-xs text-text-muted">
-        <Link to="/mission-control" className="hover:text-text transition-colors">~/mission control</Link>
-        /frameworks
-      </div>
+      <div className="text-xs text-text-muted">~/frameworks</div>
 
       <div className="flex items-center justify-between">
         <div>
@@ -424,8 +454,9 @@ export default function FrameworkCompare() {
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
           {frameworks.map((fw) => {
             const caps = CAPABILITIES[fw.id];
+            const isHighlighted = highlightId === fw.id;
             return (
-              <div key={fw.id} className="space-y-0">
+              <div key={fw.id} ref={isHighlighted ? highlightRef : undefined} className={`flex flex-col space-y-0 rounded transition-all duration-700 ${isHighlighted ? "ring-2 ring-accent ring-offset-2 ring-offset-bg" : ""}`}>
                 <FrameworkCard
                   framework={fw}
                   installProgress={installProgress[fw.id]}
@@ -466,30 +497,61 @@ export default function FrameworkCompare() {
         </div>
       )}
 
-      {/* Feature comparison matrix */}
+      {/* Feature comparison matrices (collapsed by default) */}
+      <div ref={compareRef} />
       {frameworks.length > 0 && (
         <>
-          <FeatureMatrix
-            title="features"
-            featureKeys={FEATURE_KEYS}
-            frameworks={frameworks}
-            getLevel={(id, f) => CAPABILITIES[id]?.features[f] || "none"}
-            getNote={(id, f) => CAPABILITIES[id]?.notes[f]}
-          />
-          <FeatureMatrix
-            title="security"
-            featureKeys={SECURITY_KEYS}
-            frameworks={frameworks}
-            getLevel={(id, f) => CAPABILITIES[id]?.security[f] || "none"}
-            getNote={(id, f) => CAPABILITIES[id]?.securityNotes[f]}
-          />
+          <div>
+            <button
+              onClick={() => setFeaturesExpanded((prev) => !prev)}
+              className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text transition-colors"
+            >
+              {featuresExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              feature comparison
+            </button>
+            {featuresExpanded && (
+              <div className="mt-3">
+                <FeatureMatrix
+                  title="features"
+                  featureKeys={FEATURE_KEYS}
+                  frameworks={frameworks}
+                  getLevel={(id, f) => CAPABILITIES[id]?.features[f] || "none"}
+                  getNote={(id, f) => CAPABILITIES[id]?.notes[f]}
+                />
+              </div>
+            )}
+          </div>
+          <div>
+            <button
+              onClick={() => setSecurityExpanded((prev) => !prev)}
+              className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text transition-colors"
+            >
+              {securityExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+              security comparison
+            </button>
+            {securityExpanded && (
+              <div className="mt-3">
+                <FeatureMatrix
+                  title="security"
+                  featureKeys={SECURITY_KEYS}
+                  frameworks={frameworks}
+                  getLevel={(id, f) => CAPABILITIES[id]?.security[f] || "none"}
+                  getNote={(id, f) => CAPABILITIES[id]?.securityNotes[f]}
+                />
+              </div>
+            )}
+          </div>
 
           {/* Architecture trade-offs */}
           <div>
-            <h2 className="mb-3 text-xs font-medium uppercase tracking-wider text-text-muted">
+            <button
+              onClick={() => setArchExpanded((prev) => !prev)}
+              className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text transition-colors"
+            >
+              {archExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
               architecture trade-offs
-            </h2>
-            <div className="grid grid-cols-2 gap-3">
+            </button>
+            {archExpanded && <div className="mt-3 grid grid-cols-2 gap-3">
               <div className="rounded border border-border bg-surface p-4">
                 <h3 className="text-xs font-medium text-text mb-2">persistent gateway</h3>
                 <p className="text-[10px] text-text-muted mb-2">ZeroClaw, OpenClaw, PicoClaw</p>
@@ -514,7 +576,7 @@ export default function FrameworkCompare() {
                   <li className="flex gap-1.5"><span className="text-red shrink-0">-</span> no real-time channels (no long-lived process to receive events)</li>
                 </ul>
               </div>
-            </div>
+            </div>}
           </div>
         </>
       )}
