@@ -64,6 +64,7 @@ func GetKeyVault() *KeyVault {
 		if err != nil {
 			// Non-fatal: log and return an empty vault so callers
 			// can still fall back to environment variables.
+			fmt.Fprintf(os.Stderr, "WARNING: failed to initialize KeyVault: %v\n", err)
 			v = &KeyVault{keys: make(map[string]string)}
 		}
 		vaultInstance = v
@@ -208,5 +209,10 @@ func (v *KeyVault) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(v.path, data, 0600)
+	// Atomic write: temp file + rename to avoid partial writes on crash
+	tmp := v.path + ".tmp"
+	if err := os.WriteFile(tmp, data, 0600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, v.path)
 }

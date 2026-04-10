@@ -210,7 +210,7 @@ export default function ProjectDetail() {
   for (const talon of roleAgents) {
     // Skip "starting" — the talon was just created and is booting up.
     // Only show talons that are definitively stopped or errored.
-    if (talon.status !== "running" && talon.status !== "starting" && talon.status !== "created") {
+    if (talon.status !== "running" && talon.status !== "starting" && talon.status !== "created" && talon.status !== "provisioning") {
       needsStart.push({ name: talon.display_name || talon.name, role: "talon", isInstance: true, id: talon.id });
     }
   }
@@ -494,8 +494,24 @@ export default function ProjectDetail() {
                   <button
                     disabled={!!startingAgent}
                     onClick={async () => {
-                      for (const a of needsStart) {
-                        await startAgent(a.id, a.isInstance);
+                      setStartingAgent("all");
+                      try {
+                        // Start all agents in parallel
+                        await Promise.all(needsStart.map(async (a) => {
+                          if (a.isInstance) await instanceAction(a.id, "start");
+                          else await agentAction(a.id, "start");
+                        }));
+                        // Single shared poll for all agents to come online
+                        const poll = setInterval(refresh, 2000);
+                        if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+                        pollRef.current.interval = poll;
+                        pollRef.current.timeout = setTimeout(() => {
+                          clearInterval(poll);
+                          setStartingAgent("");
+                        }, 30000);
+                      } catch (e) {
+                        setLoadError(e instanceof Error ? e.message : "failed to start agents");
+                        setStartingAgent("");
                       }
                     }}
                     className="rounded bg-accent px-4 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"

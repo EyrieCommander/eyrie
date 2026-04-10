@@ -44,7 +44,7 @@ type Server struct {
 	activeChats sync.Map // map[string]context.CancelFunc
 }
 
-func New(cfg config.Config) *Server {
+func New(cfg config.Config) (*Server, error) {
 	hidden, err := config.NewHiddenStore()
 	if err != nil {
 		slog.Warn("failed to load hidden sessions store", "error", err)
@@ -57,15 +57,15 @@ func New(cfg config.Config) *Server {
 	}
 	projStore, err := project.NewStore()
 	if err != nil {
-		slog.Error("failed to create project store", "error", err)
+		return nil, fmt.Errorf("project store: %w", err)
 	}
 	chatSt, err := project.NewChatStore()
 	if err != nil {
-		slog.Error("failed to create chat store", "error", err)
+		return nil, fmt.Errorf("chat store: %w", err)
 	}
 	instStore, err := instance.NewStore()
 	if err != nil {
-		slog.Error("failed to create instance store", "error", err)
+		return nil, fmt.Errorf("instance store: %w", err)
 	}
 	s := &Server{
 		cfg:           cfg,
@@ -84,7 +84,7 @@ func New(cfg config.Config) *Server {
 		WriteTimeout: 0, // SSE streams need unbounded writes
 		IdleTimeout:  60 * time.Second,
 	}
-	return s
+	return s, nil
 }
 
 func (s *Server) registerRoutes() {

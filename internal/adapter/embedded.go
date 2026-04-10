@@ -192,13 +192,16 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 	}
 
 	// Resolve API key from the centralized vault. Falls back to env vars
-	// automatically (vault.Get checks env first, then on-disk store).
+	// if vault is nil (e.g., SetVault wasn't called before Start).
 	var apiKey string
 	if a.vault != nil {
 		apiKey = a.vault.Get(a.provider)
+	} else {
+		// Direct env-var fallback when vault is unavailable
+		apiKey = os.Getenv(strings.ToUpper(a.provider) + "_API_KEY")
 	}
 	if apiKey == "" {
-		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q", a.provider))
+		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q (checked vault and env)", a.provider))
 	}
 
 	// Resolve base URL from provider name (using adapter's exported function
@@ -582,7 +585,9 @@ func (a *EmbeddedAdapter) Capabilities() AgentCapabilities {
 // discovery after creating the adapter singleton, avoiding import cycles
 // between adapter and config packages at construction time.
 func (a *EmbeddedAdapter) SetVault(v *config.KeyVault) {
+	a.mu.Lock()
 	a.vault = v
+	a.mu.Unlock()
 }
 
 // IsRunning returns whether the embedded agent is currently active.

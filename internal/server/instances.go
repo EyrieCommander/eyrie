@@ -457,7 +457,11 @@ func autoPairZeroClaw(name string, port int) {
 	// Check if existing token is still valid. If the daemon was restarted,
 	// the old token is stale and we need to re-pair.
 	if tok := ts.Get(name); tok != "" {
-		checkReq, _ := http.NewRequest("GET", baseURL+"/api/health", nil)
+		checkReq, reqErr := http.NewRequest("GET", baseURL+"/api/health", nil)
+		if reqErr != nil {
+			slog.Warn("auto-pair: failed to create health check request", "agent", name, "error", reqErr)
+			return
+		}
 		checkReq.Header.Set("Authorization", "Bearer "+tok)
 		checkResp, checkErr := client.Do(checkReq)
 		if checkErr == nil {

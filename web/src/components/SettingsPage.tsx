@@ -280,14 +280,19 @@ function ApiKeysSection() {
     }
   };
 
+  const [deletingProvider, setDeletingProvider] = useState<string | null>(null);
   const handleDelete = async (provider: string) => {
+    if (deletingProvider) return;
     try {
+      setDeletingProvider(provider);
       setError(null);
       await deleteKey(provider);
       setSuccessMsg(`${provider} key removed`);
       await loadKeys();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to delete key");
+    } finally {
+      setDeletingProvider(null);
     }
   };
 
@@ -342,7 +347,8 @@ function ApiKeysSection() {
                   </div>
                   <button
                     onClick={() => handleDelete(entry.provider)}
-                    className="p-1 rounded text-text-muted hover:text-red hover:bg-red/5 transition-colors"
+                    disabled={deletingProvider === entry.provider}
+                    className="p-1 rounded text-text-muted hover:text-red hover:bg-red/5 transition-colors disabled:opacity-30"
                     title="remove key"
                   >
                     <Trash2 className="h-3 w-3" />

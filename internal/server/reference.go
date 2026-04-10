@@ -53,6 +53,12 @@ Body: {"instance_id": "..."}
 ### Remove an agent from a project
 DELETE /api/projects/{id}/agents/{instanceId}
 
+### Reset a project
+POST /api/projects/{id}/reset
+Clears project chat history, resets commander and captain session state (the
+instances themselves are preserved), and stops + deletes all talon instances.
+Use when a project needs a fresh start.
+
 ## Agent Instances
 
 ### Create an agent instance
@@ -91,12 +97,6 @@ POST /api/instances/migrate
 Updates all provisioned instance configs to current defaults (autonomy level,
 sandbox settings, allowed commands, tool iteration limits). Idempotent — safe
 to call repeatedly. Returns per-instance results with applied changes.
-
-### Reset a project
-POST /api/projects/{id}/reset
-Clears project chat, resets commander/captain sessions, and destroys all talon
-instances. The captain and commander are preserved. Use after a project needs
-a fresh start.
 
 ## Hierarchy
 

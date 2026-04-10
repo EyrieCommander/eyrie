@@ -47,7 +47,10 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
-	srv := server.New(cfg)
+	srv, err := server.New(cfg)
+	if err != nil {
+		return fmt.Errorf("initializing server: %w", err)
+	}
 
 	if cfg.Dashboard.OpenBrowser && !dashboardNoOpen {
 		go openBrowser(url)

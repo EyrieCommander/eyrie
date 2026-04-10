@@ -43,6 +43,9 @@ Safe to run repeatedly. Changes are written atomically.`,
 		}
 
 		cmd.Printf("\n%d migrated, %d up to date, %d errors\n", applied, skipped, errored)
+		if errored > 0 {
+			return fmt.Errorf("%d instance(s) failed to migrate", errored)
+		}
 		return nil
 	},
 }

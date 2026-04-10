@@ -257,15 +257,15 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 		// via curl, run build commands, and operate without per-command approval.
 		// The user monitors them through the project chat, not by approving
 		// individual shell commands. ZeroClaw expects "full" (not "autonomous").
-		// WHY just level+allowlist: The previous config added block_high_risk_commands,
-		// require_approval_for_medium_risk, and auto_approve — but these broke shell
-		// access because ZeroClaw classifies curl as high-risk and the block overrides
-		// allowed_commands. The working config is simple: full autonomy with an explicit
-		// command allowlist. workspace_only provides the safety boundary.
+		// WHY auto_approve: Provisioned agents are headless — no terminal to
+		// click "approve". ZeroClaw's current tool name is "Bash" (not "shell").
+		// Without auto_approve, Bash tool calls get blocked with "requires approval".
+		// allowed_commands + workspace_only provide the safety boundary.
 		"autonomy": map[string]any{
 			"level":            "full",
 			"workspace_only":   true,
 			"allowed_commands": DefaultAllowedCommands(),
+			"auto_approve":     []string{"Bash", "Read", "Write", "http_request", "web_fetch"},
 		},
 		// WHY sandbox=none: macOS seatbelt sandbox blocks basic operations
 		// (ls, pwd, find) even within the workspace directory. Provisioned

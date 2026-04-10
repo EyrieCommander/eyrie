@@ -50,7 +50,7 @@ export function StreamingIndicator({ parts, onStop, header }: StreamingIndicator
               />
             ) : (
               <div key={i} className="text-text whitespace-pre-wrap">
-                {part.content}<StreamingCursor />
+                {part.content}{i === parts.length - 1 && <StreamingCursor />}
               </div>
             )
           )}
@@ -58,6 +58,7 @@ export function StreamingIndicator({ parts, onStop, header }: StreamingIndicator
       )}
       {onStop && (
         <button
+          type="button"
           onClick={onStop}
           className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
         >
