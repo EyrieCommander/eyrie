@@ -18,10 +18,13 @@ ensure-air:
 	@command -v air >/dev/null 2>&1 || test -x $(GOBIN)/air || \
 		(echo "Installing air..."; go install github.com/air-verse/air@latest)
 
+# Resolve air binary: prefer GOBIN, fall back to PATH
+AIR := $(shell test -x $(GOBIN)/air && echo $(GOBIN)/air || command -v air 2>/dev/null)
+
 # Run both Go (air) and Vite dev servers. Ctrl-C stops both.
 dev: ensure-air dev-static
 	@trap 'kill 0' EXIT; \
-	$(GOBIN)/air & \
+	$(AIR) & \
 	echo "Waiting for backend to be ready..."; \
 	while ! lsof -i :7200 >/dev/null 2>&1; do sleep 0.5; done; \
 	echo "Backend ready, starting Vite..."; \
@@ -30,7 +33,7 @@ dev: ensure-air dev-static
 
 # Run only the Go backend with auto-reload
 dev-go: ensure-air dev-static
-	$(GOBIN)/air
+	$(AIR)
 
 # Run only the Vite frontend dev server
 dev-web:

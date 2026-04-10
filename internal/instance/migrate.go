@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -236,10 +237,15 @@ func ensureAllowedCommands(cfg map[string]any) []string {
 		}
 	}
 
-	// Add missing ones
+	// Add missing ones — sort existing keys for deterministic output
 	var added []string
-	var result []any
+	sorted := make([]string, 0, len(existing))
 	for k := range existing {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	result := make([]any, 0, len(sorted))
+	for _, k := range sorted {
 		result = append(result, k)
 	}
 	for _, cmd := range zeroClawEnsureCommands {
