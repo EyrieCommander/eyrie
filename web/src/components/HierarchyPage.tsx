@@ -242,6 +242,7 @@ function GuideView({ hierarchy, refresh }: {
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [fwLoading, setFwLoading] = useState(true);
   const [showCommanderSetup, setShowCommanderSetup] = useState(false);
+  const [fwExpanded, setFwExpanded] = useState(false);
 
   useEffect(() => {
     fetchFrameworks().then(setFrameworks).catch(() => {}).finally(() => setFwLoading(false));
@@ -257,12 +258,22 @@ function GuideView({ hierarchy, refresh }: {
     <div className="p-5 space-y-8">
       {/* Step 1: Frameworks */}
       <div className="space-y-3">
-        <div className="flex items-center gap-2">
+        <div
+          className={`flex items-center gap-2 ${hasFrameworks ? "cursor-pointer" : ""}`}
+          onClick={() => hasFrameworks && setFwExpanded((prev) => !prev)}
+        >
           <div className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${hasFrameworks ? "bg-green/20 text-green" : "bg-accent/20 text-accent"}`}>
             {hasFrameworks ? "\u2713" : "1"}
           </div>
           <h2 className="text-xs font-bold text-text uppercase tracking-wider">install a framework</h2>
+          {hasFrameworks && (
+            <span className="text-[10px] text-text-muted ml-auto">
+              {installedFrameworks.size} installed {fwExpanded ? "\u25B4" : "\u25BE"}
+            </span>
+          )}
         </div>
+        {(!hasFrameworks || fwExpanded) && (
+        <>
         <p className="text-xs text-text-secondary ml-7">
           Frameworks are the AI agent runtimes that Eyrie manages. Pick one to get started.
         </p>
@@ -302,6 +313,8 @@ function GuideView({ hierarchy, refresh }: {
               <ChevronRight className="h-3 w-3 text-text-muted shrink-0 ml-auto" />
             </Link>
           </div>
+        )}
+        </>
         )}
       </div>
 

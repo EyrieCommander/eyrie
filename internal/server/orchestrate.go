@@ -562,10 +562,10 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 			// WHY sequential not parallel: SSE is a single stream — interleaving
 			// responses from concurrent agents would produce garbled output.
 			for _, agentMention := range agentMentions {
-				var mentionedAgent *projectParticipant
+				mentionedIdx := -1
 				for i, pp := range participants {
 					if (strings.EqualFold(agentMention, pp.name) || strings.EqualFold(agentMention, pp.role)) && pp.name != lastSpeaker {
-						mentionedAgent = &participants[i]
+						mentionedIdx = i
 						break
 					}
 				}
@@ -574,7 +574,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 				// provisioning talons during its response) aren't in the participants
 				// list, which was resolved before the conversation started. Fall back
 				// to the instance store + fresh discovery to find newly created agents.
-				if mentionedAgent == nil && o.instanceStore != nil {
+				if mentionedIdx < 0 && o.instanceStore != nil {
 					instances, _ := o.instanceStore.List()
 					for _, inst := range instances {
 						if strings.EqualFold(agentMention, inst.Name) && inst.ProjectID == projectID {
@@ -590,7 +590,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 										agent: ar.Agent,
 									}
 									participants = append(participants, newParticipant)
-									mentionedAgent = &participants[len(participants)-1]
+									mentionedIdx = len(participants) - 1
 									slog.Info("found newly created agent via fallback", "agent", inst.Name, "project", projectID)
 									break
 								}
@@ -600,19 +600,23 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 					}
 				}
 
-				if mentionedAgent == nil {
+				if mentionedIdx < 0 {
 					slog.Debug("mentioned agent not found or not alive", "mention", agentMention, "project", projectID)
 					continue // Try next mention
 				}
 
-				slog.Info("agent-to-agent mention detected", "from", lastSpeaker, "to", mentionedAgent.name, "project", projectID, "hop", hop+1)
+				// Use a local copy to avoid holding a pointer into the
+				// participants slice, which may be reallocated by append.
+				mentioned := participants[mentionedIdx]
+
+				slog.Info("agent-to-agent mention detected", "from", lastSpeaker, "to", mentioned.name, "project", projectID, "hop", hop+1)
 				sse.WriteEvent(map[string]any{
 					"type": "debug",
-					"msg":  fmt.Sprintf("agent @mention: %s → %s (hop %d)", lastSpeaker, mentionedAgent.name, hop+1),
+					"msg":  fmt.Sprintf("agent @mention: %s → %s (hop %d)", lastSpeaker, mentioned.name, hop+1),
 				})
 
 				// Build context for the mentioned agent
-				fwdAgent := discovery.NewAgent(mentionedAgent.agent)
+				fwdAgent := discovery.NewAgent(mentioned.agent)
 				var forwardMsg string
 				if len(contextLines) > 0 {
 					forwardMsg = strings.Join(contextLines, "\n")
@@ -627,10 +631,10 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 						Goal:        proj.Goal,
 						Description: proj.Description,
 						CaptainName: captainName,
-						AgentName:   mentionedAgent.name,
+						AgentName:   mentioned.name,
 					}
 					var fwdTemplate string
-					switch mentionedAgent.role {
+					switch mentioned.role {
 					case "commander":
 						fwdTemplate = "commander-project-chat.md"
 					case "captain":
@@ -646,7 +650,7 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 							ID:        uuid.New().String(),
 							Sender:    "eyrie",
 							Role:      "system",
-							Content:   fmt.Sprintf("briefing sent to %s (%s)", mentionedAgent.name, mentionedAgent.role),
+							Content:   fmt.Sprintf("briefing sent to %s (%s)", mentioned.name, mentioned.role),
 							Timestamp: time.Now(),
 							Detail:    fwdInstructions + fwdRouting,
 						}
@@ -659,12 +663,12 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 
 				ch, fwdErr := fwdAgent.StreamMessage(agentCtx, forwardMsg, sessionKey)
 				if fwdErr != nil {
-					slog.Warn("failed to forward to mentioned agent", "agent", mentionedAgent.name, "error", fwdErr)
+					slog.Warn("failed to forward to mentioned agent", "agent", mentioned.name, "error", fwdErr)
 					errMsg := project.ChatMessage{
 						ID:        uuid.New().String(),
 						Sender:    "eyrie",
 						Role:      "system",
-						Content:   fmt.Sprintf("failed to reach %s: %v", mentionedAgent.name, fwdErr),
+						Content:   fmt.Sprintf("failed to reach %s: %v", mentioned.name, fwdErr),
 						Timestamp: time.Now(),
 					}
 					if appendErr := o.chatStore.Append(projectID, errMsg); appendErr != nil {
@@ -674,9 +678,9 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 					continue // Try next mention
 				}
 
-				res := o.consumeAgentStream(ch, sse, mentionedAgent.name, mentionedAgent.role, projectID)
-				if display := o.storeAgentResponse(res, sse, mentionedAgent.name, mentionedAgent.role, projectID); display != "" {
-					contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", mentionedAgent.name, mentionedAgent.role, display))
+				res := o.consumeAgentStream(ch, sse, mentioned.name, mentioned.role, projectID)
+				if display := o.storeAgentResponse(res, sse, mentioned.name, mentioned.role, projectID); display != "" {
+					contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", mentioned.name, mentioned.role, display))
 					forwarded = true
 				}
 			} // end inner mention loop

@@ -399,7 +399,7 @@ export default function FrameworkCompare() {
   const agentCounts: Record<string, number> = {};
   const memoryByFramework: Record<string, number> = {};
   for (const a of agents) {
-    agentCounts[a.framework] = (agentCounts[a.framework] || 0) + 1;
+    if (a.alive) agentCounts[a.framework] = (agentCounts[a.framework] || 0) + 1;
     if (a.health?.ram_bytes) memoryByFramework[a.framework] = (memoryByFramework[a.framework] || 0) + a.health.ram_bytes;
   }
 
@@ -591,7 +591,10 @@ export default function FrameworkCompare() {
                   {currentProgress?.status === "success" ? `${selectedFramework} installed` : `installing ${selectedFramework}`}
                 </h3>
                 {currentProgress?.status === "running" && (
-                  <span className="text-[10px] text-text-muted">{currentProgress.phase} ({currentProgress.progress}%)</span>
+                  <span className="text-[10px] text-text-muted">
+                    {currentProgress.phase}
+                    {currentProgress.phase === "binary" && " (compiling...)"}
+                  </span>
                 )}
               </div>
               <div className="flex items-center gap-2">
