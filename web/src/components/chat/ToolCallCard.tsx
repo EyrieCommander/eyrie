@@ -43,6 +43,11 @@ function classifyOutput(output: string | undefined): OutputStatus {
     return "error";
   }
 
+  // Tool use errors (cancelled, errored, etc.)
+  if (lower.includes("tool_use_error") || (lower.includes("cancelled") && lower.includes("errored"))) {
+    return "error";
+  }
+
   return "ok";
 }
 

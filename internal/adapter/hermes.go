@@ -43,6 +43,27 @@ func NewHermesAdapter(id, name, configPath, binaryPath string) *HermesAdapter {
 	}
 }
 
+// openStateDB opens the Hermes state.db and verifies it has the sessions table.
+// Returns an error if the DB doesn't exist or is empty (instance never used).
+func (h *HermesAdapter) openStateDB() (*sql.DB, error) {
+	dbPath := filepath.Join(h.configDir, "state.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	// Check if the sessions table exists — empty DBs created by
+	// SQLite auto-open won't have it.
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'").Scan(&count); err != nil || count == 0 {
+		db.Close()
+		return nil, fmt.Errorf("no sessions table")
+	}
+	return db, nil
+}
+
 // expandHome expands ~ in paths
 func expandHome(path string) string {
 	if strings.HasPrefix(path, "~/") {
@@ -555,15 +576,12 @@ func extractErrorSummary(msg string) string {
 
 // Sessions returns conversation sessions
 func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
-	// Open Hermes SQLite database
-	dbPath := filepath.Join(h.configDir, "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := h.openStateDB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return []Session{}, nil // DB missing or empty — not an error
 	}
 	defer db.Close()
 
-	// Query sessions ordered by most recent
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, source, title, started_at, message_count
 		FROM sessions
@@ -571,7 +589,7 @@ func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
 		LIMIT 50
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions: %w", err)
+		return []Session{}, nil
 	}
 	defer rows.Close()
 
@@ -611,11 +629,9 @@ func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
 
 // ChatHistory returns chat messages for a session
 func (h *HermesAdapter) ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
-	// Open Hermes SQLite database
-	dbPath := filepath.Join(h.configDir, "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := h.openStateDB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return []ChatMessage{}, nil
 	}
 	defer db.Close()
 

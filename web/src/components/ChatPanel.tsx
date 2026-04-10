@@ -713,14 +713,15 @@ export function ChatPanel({
         await destroySession(agentName, key);
       } catch {
         try {
-          await resetSession(agentName, key);
-        } catch {
-          /* ignore */
-        }
-        try {
           await deleteSession(agentName, key);
         } catch {
-          /* ignore */
+          // Agent may be stopped — hide the session locally instead.
+          // The session still exists in the framework but won't show in Eyrie.
+          try {
+            await hideSession(agentName, key);
+          } catch {
+            /* all attempts failed */
+          }
         }
       }
     },

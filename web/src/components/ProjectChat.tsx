@@ -154,9 +154,28 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
 
-  // Helper: mark agent as streaming (sets agent + time on first call)
+  // Helper: mark agent as streaming. If a different agent was streaming,
+  // flush its parts into messages first so they don't disappear.
   const markStreaming = (sender: string, role: string) => {
     setStreamingAgent((prev) => {
+      if (prev && prev !== sender) {
+        // Previous agent's parts → convert to a stored message
+        setStreamingParts((parts) => {
+          if (parts.length > 0) {
+            const text = parts.filter((p) => p.kind === "text").map((p) => p.content || "").join("");
+            if (text) {
+              setMessages((msgs) => [...msgs, {
+                id: `stream-${prev}-${Date.now()}`,
+                sender: prev,
+                role: streamingRole || "agent",
+                content: text,
+                timestamp: streamingTime || new Date().toISOString(),
+              }]);
+            }
+          }
+          return []; // Clear for the new agent
+        });
+      }
       if (!prev) setStreamingTime(new Date().toLocaleTimeString());
       return sender;
     });
@@ -198,9 +217,15 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       switch (event.type) {
         case "message":
           if (event.message) {
+            const m = event.message;
+            // Skip agent response messages — they're already visible
+            // via streamingParts from the agent_event deltas. Adding
+            // them to messages too causes duplication. The idle poll
+            // will pick them up from the server after streaming ends.
+            if (m.role !== "user" && m.role !== "system") break;
+
             setMessages((prev) => {
               // Replace optimistic user message with server version
-              const m = event.message!;
               if (m.role === "user" && prev.some((p) => p.id.startsWith("optimistic-") && p.content === m.content)) {
                 return prev.map((p) => p.id.startsWith("optimistic-") && p.content === m.content ? m : p);
               }
@@ -248,7 +273,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               if (event.sender && (ev.input_tokens !== undefined || ev.output_tokens !== undefined || ev.cost_usd !== undefined)) {
                 recordUsage(event.sender, ev.input_tokens ?? 0, ev.output_tokens ?? 0, ev.cost_usd ?? 0);
               }
-              clearStreaming();
+              // Don't clearStreaming — streaming parts stay visible to
+              // preserve tool call expand/collapse state. Duplicate stored
+              // message is filtered out in the render. Cleared on next send().
             } else if (ev.type === "error") {
               setMessages((prev) => [...prev, {
                 id: `err-${Date.now()}`,
@@ -264,18 +291,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         case "done":
           if (timeoutRef.current) clearTimeout(timeoutRef.current);
           setSending(false);
-          clearStreaming();
-          // Merge server messages with local state rather than replacing,
-          // so messages received via SSE aren't lost if they haven't been
-          // written to disk yet (race with detached context storage).
-          fetchProjectChat(projectId).then((serverMsgs) => {
-            setMessages((prev) => {
-              const ids = new Set(serverMsgs.map((m) => m.id));
-              // Keep any local messages not yet on server (SSE-received)
-              const extras = prev.filter((m) => !ids.has(m.id) && !m.id.startsWith("optimistic-"));
-              return [...serverMsgs, ...extras];
-            });
-          }).catch(() => {});
+          // Messages were already added via SSE "message" events during
+          // streaming. No need to re-fetch — that would re-render
+          // everything and lose tool call expand/collapse state.
           break;
 
         case "debug":
@@ -374,10 +392,21 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
           <ChatError message={chatError} />
         )}
 
-        {/* Messages — hide pre-chat system messages until chat has started */}
+        {/* Messages — hide pre-chat system messages until chat has started.
+            When streamingParts is non-empty, the last message from that agent
+            is already rendered by StreamingIndicator — skip it here to avoid
+            duplication. */}
         {(() => {
           const hasNonSystem = sortedMessages.some((x) => x.role !== "system");
-          return sortedMessages.filter((m) => hasNonSystem || m.role !== "system");
+          let visible = sortedMessages.filter((m) => hasNonSystem || m.role !== "system");
+          if (streamingParts.length > 0 && streamingAgent) {
+            // Find the last message from the streaming agent and exclude it
+            const lastIdx = visible.map((m) => m.sender).lastIndexOf(streamingAgent);
+            if (lastIdx >= 0) {
+              visible = visible.filter((_, i) => i !== lastIdx);
+            }
+          }
+          return visible;
         })().map((msg) => {
           // Default: expanded. Toggle collapses.
           const expanded = !toggledSet.has(msg.id);

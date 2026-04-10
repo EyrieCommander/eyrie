@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useAutoScroll } from "../lib/useAutoScroll";
 import { useParams, Link } from "react-router-dom";
 import {
   Play,
@@ -280,6 +281,7 @@ function OverviewTab({
   onConfigChange: () => void;
   onConfigSaved: () => void;
 }) {
+  const logScrollRef = useAutoScroll([logs.length]);
   const health = agent.health;
   const status = agent.status;
   const [configEditing, setConfigEditing] = useState(false);
@@ -401,7 +403,7 @@ function OverviewTab({
           <span className="text-text-muted group-open:rotate-90 transition-transform">▶</span>
         </summary>
         <div className="px-4 pb-4">
-          <div className="max-h-48 overflow-y-auto rounded border border-border bg-bg p-3 text-xs">
+          <div ref={logScrollRef} className="max-h-48 overflow-y-auto rounded border border-border bg-bg p-3 text-xs">
             {logs.length === 0 ? (
               <p className="text-text-muted">
                 {agent.alive ? "waiting for log entries..." : "no log history available."}
@@ -658,6 +660,9 @@ function EditableInfoCard({
       } else if (config.format === "toml") {
         // TOML: targeted string replacement to preserve formatting and types
         updated = replaceTomlValue(config.content, field.key, editValue, field.type);
+      } else if (config.format === "yaml") {
+        // YAML: targeted string replacement similar to TOML
+        updated = replaceYamlValue(config.content, field.key, editValue);
       } else {
         throw new Error(`Unsupported config format: ${config.format}`);
       }
@@ -877,6 +882,50 @@ function escapeTomlString(s: string): string {
     .replace(/\n/g, "\\n")
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t");
+}
+
+/** Replace a value in YAML content. Supports nested keys like "gateway.port". */
+function replaceYamlValue(content: string, fieldKey: string, newValue: string): string {
+  const parts = fieldKey.split(".");
+  const lines = content.split("\n");
+  const key = parts[parts.length - 1];
+  const parentPath = parts.slice(0, -1);
+
+  // Find the line matching the key at the correct indentation depth.
+  // YAML nesting uses 2-space indentation per level.
+  const expectedIndent = parentPath.length * 2;
+  const re = new RegExp(`^(\\s{${expectedIndent}}${escapeRegex(key)}:\\s*)(.*)$`);
+
+  // Track which parent keys we've entered
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const indent = line.length - trimmed.length;
+
+    // Track parent key depth
+    if (depth < parentPath.length) {
+      const parentKey = parentPath[depth];
+      if (indent === depth * 2 && trimmed.startsWith(parentKey + ":")) {
+        depth++;
+        continue;
+      }
+    }
+
+    // Found our target key at the right depth
+    if (depth === parentPath.length && re.test(line)) {
+      lines[i] = line.replace(re, `$1${newValue}`);
+      return lines.join("\n");
+    }
+  }
+
+  // Key not found — append at the end
+  if (parentPath.length === 0) {
+    lines.push(`${key}: ${newValue}`);
+  } else {
+    lines.push(`${"  ".repeat(expectedIndent / 2)}${key}: ${newValue}`);
+  }
+  return lines.join("\n");
 }
 
 function escapeRegex(s: string): string {
