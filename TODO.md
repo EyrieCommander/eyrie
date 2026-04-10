@@ -115,6 +115,7 @@ The commander operates via 1:1 chat and system-level APIs, not as a participant 
 ## UI
 
 - [x] **Extract shared chat component**: ChatPanel.tsx extracted from AgentDetail. ProjectChat imports shared sub-components (PartToolCallCard, StreamingCursor).
+- [ ] **Unify streaming into messages array**: Currently ProjectChat has two rendering paths — `messages` (stored) and `streamingParts` (live). This causes duplication on done/poll, state loss on transitions, and complex filtering to avoid showing both. Refactor to build agent responses directly in the `messages` array with a temporary ID, updating in place as deltas arrive. One source of truth eliminates the dual-render problem entirely. Both ChatPanel and ProjectChat could share this approach.
 - [ ] **Background commander briefing**: Move commander briefing to a background task when assigned on the hierarchy page (no redirect to agent chat). The briefing bootstraps the commander (fetch API ref, save TOOLS.md) — the user doesn't need to watch it.
 - [ ] **Hierarchy page**: Show agent status (running/stopped) with live refresh
 - [ ] **Project detail**: Add activity timeline showing what each agent is doing

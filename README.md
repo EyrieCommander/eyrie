@@ -23,6 +23,7 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 - **Agent hierarchy**: three-tier structure (commander → captain → talons) for organizing agents into project teams
 - **Dual control**: agents and users can both create projects, assign agents, and manage lifecycle — same API, same result
 - **Real-time visibility**: SSE event streaming so the dashboard updates live whether changes come from the user or an agent
+- **Reliable connections** — SSE streaming per-request instead of persistent WebSockets. Survives sleep/wake, network drops, and browser tab restores without losing messages or state. Agent responses are persisted incrementally so nothing is lost even if the connection drops mid-stream.
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
 
 ### Project Orchestration
