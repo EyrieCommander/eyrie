@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,15 +25,19 @@ func defaultRegistryURL() string {
 	if err != nil {
 		return ""
 	}
-	// Prefer user-provided registry
-	custom := filepath.Join(home, ".eyrie", "registry.json")
-	if _, err := os.Stat(custom); err == nil {
-		return "file://" + custom
-	}
-	// Fall back to cached copy
-	cached := filepath.Join(home, ".eyrie", "cache", "registry.json")
-	if _, err := os.Stat(cached); err == nil {
-		return "file://" + cached
+	// Prefer user-provided registry, fall back to cached copy
+	for _, rel := range []string{
+		filepath.Join(".eyrie", "registry.json"),
+		filepath.Join(".eyrie", "cache", "registry.json"),
+	} {
+		p := filepath.Join(home, rel)
+		if _, err := os.Stat(p); err == nil {
+			slashed := filepath.ToSlash(p)
+			if len(slashed) > 0 && slashed[0] != '/' {
+				slashed = "/" + slashed
+			}
+			return (&url.URL{Scheme: "file", Path: slashed}).String()
+		}
 	}
 	return ""
 }
@@ -74,10 +79,19 @@ func (c *Client) Fetch(ctx context.Context, forceRefresh bool) (*Registry, error
 		}
 	}
 
-	// Handle file:// URLs for local testing
+	// Handle file:// URLs for local registries
 	if strings.HasPrefix(c.registryURL, "file://") {
-		path := strings.TrimPrefix(c.registryURL, "file://")
-		data, err := os.ReadFile(path)
+		u, parseErr := url.Parse(c.registryURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid registry URL: %w", parseErr)
+		}
+		localPath := u.Path
+		// On Windows, strip leading slash from /C:/... paths
+		if len(localPath) >= 3 && localPath[0] == '/' && localPath[2] == ':' {
+			localPath = localPath[1:]
+		}
+		localPath = filepath.FromSlash(localPath)
+		data, err := os.ReadFile(localPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read local registry: %w", err)
 		}
