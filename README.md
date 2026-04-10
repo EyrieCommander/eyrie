@@ -47,6 +47,10 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 - **Go 1.21+** — [install instructions](https://go.dev/doc/install) or `brew install go`
 - **Node.js 22+** — required for the web dashboard (`nvm install 22` or [nodejs.org](https://nodejs.org))
 
+Depending on which frameworks you install, you may also need:
+- **Rust** — for ZeroClaw (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- **Python 3.11+** — for Hermes (`brew install python` or [python.org](https://python.org))
+
 ## Install
 
 ```bash

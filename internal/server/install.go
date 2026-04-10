@@ -425,12 +425,26 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 		return fmt.Errorf("unsupported install method: %s", fw.InstallMethod)
 	}
 
+	// Enrich PATH so tools like cargo, npm, pip, go are found even
+	// when the server runs from a non-interactive shell.
+	cmd.Env = config.EnrichedEnv()
+
 	// Capture output and stream to logs
 	stdout, _ := cmd.StdoutPipe()
 	stderr, _ := cmd.StderrPipe()
 
 	if err := cmd.Start(); err != nil {
-		return err
+		// Give actionable guidance when the tool binary is missing
+		hint := ""
+		switch fw.InstallMethod {
+		case "cargo":
+			hint = "\n\nRust is required to install this framework.\nInstall it with: curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh"
+		case "npm":
+			hint = "\n\nNode.js is required to install this framework.\nInstall it with: nvm install 22  (or visit https://nodejs.org)"
+		case "pip":
+			hint = "\n\nPython is required to install this framework.\nInstall it with: brew install python  (or visit https://python.org)"
+		}
+		return fmt.Errorf("%w%s", err, hint)
 	}
 
 	// Store PID so we can detect if process dies

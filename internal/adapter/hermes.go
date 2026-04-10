@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite" // SQLite driver
 )
@@ -243,6 +244,7 @@ func (h *HermesAdapter) Config(ctx context.Context) (*AgentConfig, error) {
 // Start starts the Hermes gateway
 func (h *HermesAdapter) Start(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, h.binaryPath, "gateway", "start")
+	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -706,6 +708,7 @@ func (h *HermesAdapter) SendMessage(ctx context.Context, message, sessionKey str
 	}
 
 	cmd := exec.CommandContext(ctx, h.binaryPath, args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("hermes chat failed: %w\nOutput: %s", err, string(output))
@@ -734,6 +737,7 @@ func (h *HermesAdapter) StreamMessage(ctx context.Context, message, sessionKey s
 	}
 
 	cmd := exec.CommandContext(ctx, h.binaryPath, args...)
+	cmd.Env = config.EnrichedEnv()
 
 	// Create pipes for stdin/stdout
 	stdin, err := cmd.StdinPipe()
@@ -823,6 +827,7 @@ func (h *HermesAdapter) CreateSession(ctx context.Context, name string) (*Sessio
 // ResetSession deletes a conversation session
 func (h *HermesAdapter) ResetSession(ctx context.Context, sessionKey string) error {
 	cmd := exec.CommandContext(ctx, h.binaryPath, "sessions", "delete", sessionKey)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w (output: %s)", err, string(output))

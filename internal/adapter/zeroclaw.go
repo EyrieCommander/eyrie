@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 	"nhooyr.io/websocket"
@@ -1261,6 +1262,7 @@ func (z *ZeroClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 
 func runCLI(ctx context.Context, command string, args ...string) error {
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, string(output))

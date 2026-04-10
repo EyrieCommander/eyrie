@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Audacity88/eyrie/internal/config"
 )
 
 type LifecycleAction string
@@ -127,14 +129,14 @@ func compareNodeVersions(a, b string) int {
 	return 0
 }
 
-// node22Env returns a copy of os.Environ() with Node 22 prepended to PATH,
+// node22Env returns config.EnrichedEnv() with Node 22 prepended to PATH,
 // or nil if no v22 installation is found.
 func node22Env() []string {
 	binDir := node22BinDir()
 	if binDir == "" {
 		return nil
 	}
-	env := os.Environ()
+	env := config.EnrichedEnv()
 	for i, e := range env {
 		if strings.HasPrefix(e, "PATH=") {
 			env[i] = "PATH=" + binDir + string(os.PathListSeparator) + e[5:]
@@ -188,7 +190,9 @@ func hermesServiceInstalled(ctx context.Context) bool {
 func serviceInstalled(ctx context.Context, framework string) bool {
 	switch framework {
 	case "zeroclaw":
-		out, err := exec.CommandContext(ctx, "zeroclaw", "service", "status").CombinedOutput()
+		statusCmd := exec.CommandContext(ctx, "zeroclaw", "service", "status")
+		statusCmd.Env = config.EnrichedEnv()
+		out, err := statusCmd.CombinedOutput()
 		if err != nil {
 			return false
 		}
@@ -202,6 +206,7 @@ func serviceInstalled(ctx context.Context, framework string) bool {
 
 func run(ctx context.Context, command string, args ...string) error {
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
@@ -228,6 +233,8 @@ func runDetachedWithEnv(_ context.Context, logDir string, env []string, command 
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if env != nil {
 		cmd.Env = env
+	} else {
+		cmd.Env = config.EnrichedEnv()
 	}
 
 	var logFile *os.File
@@ -357,10 +364,10 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 	}
 }
 
-// mergeEnv starts from os.Environ() and appends extra env vars. If extraEnv
-// is nil or empty, returns os.Environ() unchanged.
+// mergeEnv starts from config.EnrichedEnv() and appends extra env vars. If extraEnv
+// is nil or empty, returns config.EnrichedEnv() unchanged.
 func mergeEnv(extraEnv []string) []string {
-	env := os.Environ()
+	env := config.EnrichedEnv()
 	if len(extraEnv) == 0 {
 		return env
 	}

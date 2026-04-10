@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -177,4 +179,59 @@ func Save(cfg Config) error {
 	}
 
 	return nil
+}
+
+// EnrichedEnv returns a copy of the current environment with common tool
+// directories prepended to PATH. This ensures exec.Command can find binaries
+// like cargo, go, npm, pip, etc. even when the Eyrie server is started from
+// a non-interactive shell (e.g., launchd, systemd) that doesn't source
+// ~/.bashrc or ~/.zshrc.
+func EnrichedEnv() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return os.Environ()
+	}
+
+	extraDirs := []string{
+		filepath.Join(home, ".cargo", "bin"),      // Rust/cargo
+		filepath.Join(home, "go", "bin"),           // Go binaries
+		filepath.Join(home, ".local", "bin"),       // pip, pipx, user installs
+		"/usr/local/bin",                           // Homebrew (Intel Mac), manual installs
+	}
+	if runtime.GOOS == "darwin" {
+		extraDirs = append(extraDirs, "/opt/homebrew/bin") // Homebrew (Apple Silicon)
+	}
+
+	// Find NVM Node.js v22 if available
+	nvmDir := filepath.Join(home, ".nvm", "versions", "node")
+	if entries, err := os.ReadDir(nvmDir); err == nil {
+		for i := len(entries) - 1; i >= 0; i-- {
+			if strings.HasPrefix(entries[i].Name(), "v22.") {
+				extraDirs = append(extraDirs, filepath.Join(nvmDir, entries[i].Name(), "bin"))
+				break
+			}
+		}
+	}
+
+	// Filter to directories that actually exist
+	var existing []string
+	for _, d := range extraDirs {
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			existing = append(existing, d)
+		}
+	}
+	if len(existing) == 0 {
+		return os.Environ()
+	}
+
+	extra := strings.Join(existing, string(os.PathListSeparator))
+	env := os.Environ()
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + extra + string(os.PathListSeparator) + e[5:]
+			return env
+		}
+	}
+	// No PATH found — add one
+	return append(env, "PATH="+extra)
 }

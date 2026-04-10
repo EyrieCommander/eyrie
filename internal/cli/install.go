@@ -195,6 +195,7 @@ func installBinary(ctx context.Context, fw *registry.Framework) error {
 
 func runInstallScript(ctx context.Context, scriptURL string) error {
 	cmd := exec.CommandContext(ctx, "bash", "-c", scriptURL)
+	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -203,6 +204,7 @@ func runInstallScript(ctx context.Context, scriptURL string) error {
 
 func runCommand(ctx context.Context, name string, args ...string) error {
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
