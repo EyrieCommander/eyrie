@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/config"
@@ -143,14 +144,13 @@ func isProcessAlive(pid int) bool {
 		return false
 	}
 
-	// Try to find the process
 	process, err := os.FindProcess(pid)
 	if err != nil {
 		return false
 	}
 
-	// Send signal 0 to check if process exists (doesn't actually signal it)
-	err = process.Signal(os.Signal(nil))
+	// Signal 0 checks process existence without actually sending a signal
+	err = process.Signal(syscall.Signal(0))
 	return err == nil
 }
 

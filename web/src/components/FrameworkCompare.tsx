@@ -28,14 +28,12 @@ interface FrameworkCapabilities {
   security: Record<string, SupportLevel>;
   securityNotes: Record<string, string>;
   architecture: string;
-  /** CLI command for interactive chat (pre-populated in shell terminal) */
-  chatCommand: string;
 }
 
 const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   zeroclaw: {
     architecture: "persistent gateway",
-    chatCommand: "zeroclaw agent",
+
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -73,7 +71,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   },
   openclaw: {
     architecture: "persistent gateway",
-    chatCommand: "openclaw tui",
+
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -109,7 +107,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   },
   picoclaw: {
     architecture: "persistent gateway",
-    chatCommand: "picoclaw agent",
+
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -143,7 +141,7 @@ const CAPABILITIES: Record<string, FrameworkCapabilities> = {
   },
   hermes: {
     architecture: "process-per-message",
-    chatCommand: "hermes",
+
     features: {
       "streaming responses": "full",
       "named sessions": "full",
@@ -230,13 +228,11 @@ function NoteIndicator({ note }: { note: string }) {
 // ── Feature matrix table ─────────────────────────────────────────────────
 
 function FeatureMatrix({
-  title: _title,
   featureKeys,
   frameworks,
   getLevel,
   getNote,
 }: {
-  title: string;
   featureKeys: string[];
   frameworks: Framework[];
   getLevel: (fwId: string, feature: string) => SupportLevel;
@@ -433,7 +429,7 @@ export default function FrameworkCompare() {
             {featuresExpanded && (
               <div className="mt-3">
                 <FeatureMatrix
-                  title="features"
+
                   featureKeys={FEATURE_KEYS}
                   frameworks={frameworks}
                   getLevel={(id, f) => CAPABILITIES[id]?.features[f] || "none"}
@@ -453,7 +449,7 @@ export default function FrameworkCompare() {
             {securityExpanded && (
               <div className="mt-3">
                 <FeatureMatrix
-                  title="security"
+
                   featureKeys={SECURITY_KEYS}
                   frameworks={frameworks}
                   getLevel={(id, f) => CAPABILITIES[id]?.security[f] || "none"}

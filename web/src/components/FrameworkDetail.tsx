@@ -59,8 +59,13 @@ export default function FrameworkDetail() {
   const frameworkRef = useRef(framework);
   frameworkRef.current = framework;
 
+  // Only poll when the framework is in a transitional state where terminal
+  // commands could change installed/configured (e.g., after running onboard
+  // or install). Skip polling when stable (ready or fully uninstalled).
+  const needsPolling = framework && (!framework.installed || !framework.configured);
+
   useEffect(() => {
-    if (!id) return;
+    if (!id || !needsPolling) return;
     const interval = setInterval(async () => {
       try {
         const updated = await getFrameworkDetail(id);
@@ -71,7 +76,7 @@ export default function FrameworkDetail() {
       } catch { /* silent */ }
     }, 5000);
     return () => clearInterval(interval);
-  }, [id]);
+  }, [id, needsPolling]);
 
   // ── Uninstall ───────────────────────────────────────────────────────
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false);

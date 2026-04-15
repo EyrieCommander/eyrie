@@ -37,8 +37,10 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
   const cleanupCountRef = useRef(0);
   const onCloseRef = useRef(onClose);
   const [status, setStatus] = useState<"connecting" | "connected" | "closed">("connecting");
+  const statusRef = useRef(status);
 
   onCloseRef.current = onClose;
+  statusRef.current = status;
 
   // Expose sendCommand / runCommand to parent via ref
   useImperativeHandle(ref, () => ({
@@ -112,7 +114,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     ws.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
         term.write(new Uint8Array(event.data));
-        if (status === "connecting") setStatus("connected");
+        if (statusRef.current === "connecting") setStatus("connected");
         if (initialCommand && !sentInitialCommand) {
           sentInitialCommand = true;
           setTimeout(() => {
@@ -130,7 +132,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
         setTimeout(() => onCloseRef.current?.(), 300);
         return;
       }
-      if (status === "connecting") {
+      if (statusRef.current === "connecting") {
         term.writeln("\r\n\x1b[1;31mFailed to connect\x1b[0m");
       } else {
         term.writeln("\r\n\x1b[1;31mConnection lost\x1b[0m");
