@@ -407,10 +407,15 @@ func (s *Server) handleFrameworkDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find framework
+	// Find framework and include install status
 	for _, fw := range reg.Frameworks {
 		if fw.ID == frameworkID {
-			writeJSON(w, http.StatusOK, fw)
+			installed, configured := frameworkStatus(fw)
+			writeJSON(w, http.StatusOK, frameworkWithStatus{
+				Framework:  fw,
+				Installed:  installed,
+				Configured: configured,
+			})
 			return
 		}
 	}
