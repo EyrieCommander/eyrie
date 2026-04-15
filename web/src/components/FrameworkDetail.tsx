@@ -1,10 +1,25 @@
-import { useEffect, useState } from "react";
-import { useParams, Link, useNavigate } from "react-router-dom";
-import { ArrowLeft, ExternalLink } from "lucide-react";
+// FrameworkDetail.tsx — Dedicated framework page centred on a persistent tmux terminal.
+//
+// All actions (install, setup, uninstall, chat) run as commands in the same
+// tmux shell session. No SSE, no log mode — one terminal for everything.
+// tmux keeps the session alive across page navigations and reloads.
+
+import { useEffect, useState, useRef, useCallback } from "react";
+import { useParams, useNavigate, Link } from "react-router-dom";
+import { ArrowLeft, ExternalLink, Download, Settings, Terminal as TerminalIcon, RefreshCw, ChevronRight, Search, Trash2 } from "lucide-react";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { Framework } from "../lib/types";
 import { getFrameworkDetail } from "../lib/api";
+import { getFrameworkStatus } from "../lib/frameworkStatus";
 import { useData } from "../lib/DataContext";
+import Terminal, { TerminalHandle } from "./Terminal";
+
+const CHAT_COMMANDS: Record<string, string> = {
+  zeroclaw: "zeroclaw agent",
+  openclaw: "openclaw tui",
+  picoclaw: "picoclaw agent",
+  hermes: "hermes",
+};
 
 function statusDotClass(alive: boolean, providerStatus?: string): string {
   if (!alive) return "bg-red";
@@ -16,26 +31,80 @@ export default function FrameworkDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { agents } = useData();
+  const termRef = useRef<TerminalHandle>(null);
+
+  // ── Framework data ──────────────────────────────────────────────────
   const [framework, setFramework] = useState<Framework | null>(null);
   const [error, setError] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    if (!id) {
-      setError("No framework ID specified");
-      return;
+  const loadFramework = useCallback(async () => {
+    if (!id) return;
+    try {
+      setFramework(await getFrameworkDetail(id));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load framework");
     }
-    getFrameworkDetail(id)
-      .then(setFramework)
-      .catch((err) => setError(err.message));
   }, [id]);
 
+  useEffect(() => { loadFramework(); }, [loadFramework]);
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    await loadFramework();
+    setRefreshing(false);
+  };
+
+  // ── Background status refresh ──────────────────────────────────────
+  const frameworkRef = useRef(framework);
+  frameworkRef.current = framework;
+
+  useEffect(() => {
+    if (!id) return;
+    const interval = setInterval(async () => {
+      try {
+        const updated = await getFrameworkDetail(id);
+        const current = frameworkRef.current;
+        if (current && (updated.installed !== current.installed || updated.configured !== current.configured)) {
+          setFramework(updated);
+        }
+      } catch { /* silent */ }
+    }, 5000);
+    return () => clearInterval(interval);
+  }, [id]);
+
+  // ── Uninstall ───────────────────────────────────────────────────────
+  const [showUninstallConfirm, setShowUninstallConfirm] = useState(false);
+  const [uninstallPurge, setUninstallPurge] = useState(false);
+
+  // ── Derived state ──────────────────────────────────────────────────
   const fwAgents = agents.filter((a) => a.framework === id);
   const emoji = FRAMEWORK_EMOJI[id || ""] || "";
+  const status = framework ? getFrameworkStatus(framework) : null;
+  const binaryName = framework?.binary_path?.split("/").pop() || id || "";
 
-  if (error) {
+  // ── Terminal command helpers ────────────────────────────────────────
+  const sendToTerminal = (cmd: string) => {
+    termRef.current?.runCommand(cmd);
+  };
+
+  const handleInstall = () => {
+    if (!framework || !id) return;
+    sendToTerminal(`eyrie install ${id} -y`);
+  };
+
+  const handleUninstall = () => {
+    if (!id) return;
+    setShowUninstallConfirm(false);
+    const purgeFlag = uninstallPurge ? " --purge" : "";
+    sendToTerminal(`eyrie uninstall ${id} -y${purgeFlag}`);
+    setUninstallPurge(false);
+  };
+
+  if (error && !framework) {
     return (
       <div className="space-y-4">
-        <Link to="/install" className="text-xs text-text-muted hover:text-text">&lt; back</Link>
+        <Link to="/frameworks" className="text-xs text-text-muted hover:text-text">&lt; back</Link>
         <p className="text-xs text-red">{error}</p>
       </div>
     );
@@ -46,85 +115,163 @@ export default function FrameworkDetail() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col h-full space-y-4">
       <div className="text-xs text-text-muted">~/frameworks/{id}</div>
 
-      <div>
-        <div className="flex items-center gap-3">
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <button
+          onClick={() => navigate("/frameworks")}
+          className="rounded p-1 text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+        >
+          <ArrowLeft className="h-4 w-4" />
+        </button>
+        <h1 className="text-xl font-bold">
+          <span className="text-accent">&gt;</span> {framework.name} {emoji}
+        </h1>
+        {status?.badge && (
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
+            status.badge.color === "green" ? "bg-green/10 text-green" :
+            status.badge.color === "red" ? "bg-red/10 text-red" :
+            "bg-yellow/10 text-yellow"
+          }`}>{status.badge.label}</span>
+        )}
+        <div className="flex-1" />
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text transition-colors disabled:opacity-50"
+        >
+          <RefreshCw className={`h-3.5 w-3.5 ${refreshing ? "animate-spin" : ""}`} />
+          refresh
+        </button>
+      </div>
+
+      <p className="text-xs text-text-secondary">{framework.description}</p>
+
+      {/* Status info */}
+      {status?.isBinaryMissing && (
+        <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-3 text-xs text-text-secondary space-y-1">
+          <p>Config exists but binary not found at <code className="font-mono text-text-muted">{framework.binary_path}</code></p>
+          <p className="text-text-muted">Use "locate binary" to check if it's installed elsewhere, or "reinstall" to install from scratch.</p>
+        </div>
+      )}
+      {status?.needsSetup && (
+        <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-3 text-xs text-text-secondary">
+          Binary installed at <code className="font-mono text-text-muted">{framework.binary_path}</code> but no config found at <code className="font-mono text-text-muted">{framework.config_path}</code>. Run setup to create it.
+        </div>
+      )}
+
+      {/* Action bar */}
+      <div className="flex flex-wrap items-center gap-2">
+        {status?.isBinaryMissing && (
+          <>
+            <button
+              onClick={() => sendToTerminal(`which ${binaryName} && ls -la $(which ${binaryName}) || echo "not found in PATH"`)}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
+            >
+              <Search className="h-3 w-3" /> locate binary
+            </button>
+            <button
+              onClick={handleInstall}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
+            >
+              <Download className="h-3 w-3" /> reinstall with defaults
+            </button>
+          </>
+        )}
+        {!status?.isInstalled && !status?.isBinaryMissing && (
+          <>
+            <button
+              onClick={handleInstall}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
+            >
+              <Download className="h-3 w-3" /> install with defaults
+            </button>
+            <button
+              onClick={() => sendToTerminal(framework.install_cmd || `eyrie install ${id}`)}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
+            >
+              <TerminalIcon className="h-3 w-3" /> install manually
+            </button>
+          </>
+        )}
+        {status?.needsSetup && (
           <button
-            onClick={() => navigate(-1)}
-            className="rounded p-1 text-text-muted transition-colors hover:bg-surface-hover hover:text-text"
+            onClick={() => sendToTerminal(`${framework.binary_path || id} onboard`)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <Settings className="h-3 w-3" /> set up
           </button>
-          <h1 className="text-xl font-bold">
-            <span className="text-accent">&gt;</span> {framework.name} {emoji}
-          </h1>
-          {framework.installed && (
-            <span className="rounded bg-green/10 px-1.5 py-0.5 text-[10px] font-medium text-green">
-              installed
-            </span>
-          )}
-        </div>
-        <p className="mt-1 text-xs text-text-muted">
-          {framework.description}
-        </p>
+        )}
+        {status?.isInstalled && (
+          <>
+            <button
+              onClick={() => {
+                const sub = CHAT_COMMANDS[id!]?.split(" ").slice(1).join(" ") || "";
+                const cmd = framework.binary_path ? `${framework.binary_path}${sub ? " " + sub : ""}` : CHAT_COMMANDS[id!];
+                if (cmd) sendToTerminal(cmd);
+              }}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
+            >
+              <TerminalIcon className="h-3 w-3" /> chat
+            </button>
+            <button
+              onClick={() => navigate(`/agents/${id}/config`)}
+              className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
+            >
+              <Settings className="h-3 w-3" /> configure
+            </button>
+          </>
+        )}
+        {/* Uninstall */}
+        {(status?.isInstalled || status?.isConfigured) && !showUninstallConfirm && (
+          <button
+            onClick={() => setShowUninstallConfirm(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-red/30 text-red/70 hover:text-red hover:border-red/50 rounded text-xs font-medium transition-colors"
+          >
+            <Trash2 className="h-3 w-3" /> uninstall
+          </button>
+        )}
+        {showUninstallConfirm && (
+          <>
+            <span className="text-xs text-text-muted">remove?</span>
+            <label className="flex items-center gap-1.5 text-[10px] text-text-secondary cursor-pointer">
+              <input
+                type="checkbox"
+                checked={uninstallPurge}
+                onChange={(e) => setUninstallPurge(e.target.checked)}
+                className="rounded border-border"
+              />
+              + config
+            </label>
+            <button
+              onClick={handleUninstall}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-red text-white rounded text-xs font-medium hover:bg-red/80 transition-colors"
+            >
+              <Trash2 className="h-3 w-3" /> confirm
+            </button>
+            <button
+              onClick={() => { setShowUninstallConfirm(false); setUninstallPurge(false); }}
+              className="text-xs text-text-muted hover:text-text transition-colors"
+            >
+              cancel
+            </button>
+          </>
+        )}
       </div>
 
-      {/* Info grid */}
-      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        <InfoItem label="language" value={framework.language} />
-        <InfoItem label="install method" value={framework.install_method} />
-        <InfoItem label="config format" value={framework.config_format} />
-        <InfoItem label="binary" value={framework.binary_path} mono />
-        <InfoItem label="config path" value={framework.config_path} mono />
-        <InfoItem label="default port" value={framework.default_port ? `:${framework.default_port}` : "-"} />
-        <InfoItem label="adapter" value={framework.adapter_type} />
-        <InfoItem label="log directory" value={framework.log_dir} mono />
-        <InfoItem label="log format" value={framework.log_format} />
+      {/* ── Terminal (always visible, persistent tmux session) ────────────── */}
+      <div className="flex-1 min-h-0">
+        <Terminal
+          key={`shell-${id}`}
+          ref={termRef}
+          agentName={id || "shell"}
+          useShell
+          inline
+          session={id ? `eyrie-${id}` : undefined}
+        />
       </div>
-
-      {/* Links */}
-      {(framework.repository || framework.website) && (
-        <div className="flex gap-3">
-          {framework.repository && (
-            <a
-              href={framework.repository}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-accent transition-colors"
-            >
-              <ExternalLink className="h-3 w-3" /> repository
-            </a>
-          )}
-          {framework.website && (
-            <a
-              href={framework.website}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-accent transition-colors"
-            >
-              <ExternalLink className="h-3 w-3" /> website
-            </a>
-          )}
-        </div>
-      )}
-
-      {/* Requirements */}
-      {framework.requirements?.length > 0 && (
-        <div>
-          <h3 className="mb-2 text-[10px] font-medium uppercase tracking-wider text-text-muted">
-            requirements
-          </h3>
-          <div className="flex flex-wrap gap-1.5">
-            {framework.requirements.map((req) => (
-              <span key={req} className="rounded border border-border bg-surface px-2 py-0.5 text-[10px] text-text-secondary">
-                {req}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Agents on this framework */}
       <div>
@@ -132,8 +279,8 @@ export default function FrameworkDetail() {
           agents ({fwAgents.length})
         </h3>
         {fwAgents.length === 0 ? (
-          <div className="rounded border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
-            no agents running on this framework
+          <div className="rounded border border-dashed border-border px-4 py-4 text-center text-xs text-text-muted">
+            no agents discovered on this framework
           </div>
         ) : (
           <div className="overflow-hidden rounded border border-border">
@@ -161,9 +308,7 @@ export default function FrameworkDetail() {
                       </span>
                     </td>
                     <td className="px-4 py-2">
-                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                        agent.alive ? "bg-green/10 text-green" : "bg-red/10 text-red"
-                      }`}>
+                      <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${agent.alive ? "bg-green/10 text-green" : "bg-red/10 text-red"}`}>
                         {agent.alive ? "running" : "stopped"}
                       </span>
                     </td>
@@ -178,15 +323,48 @@ export default function FrameworkDetail() {
         )}
       </div>
 
-      {/* Actions */}
-      <div className="flex gap-2">
-        <Link
-          to="/install"
-          className="rounded border border-border px-3 py-1.5 text-xs text-text-secondary hover:text-text hover:border-text-muted/50 transition-colors"
-        >
-          {framework.installed ? "reinstall / update" : "install"}
-        </Link>
-      </div>
+      {/* API key hint */}
+      {status?.isReady && framework.config_schema?.api_key_hint && (
+        <div className="rounded border border-border bg-surface p-3 text-xs text-text-secondary">
+          <span className="font-medium text-text-muted">api key: </span>
+          {framework.config_schema.api_key_hint}
+        </div>
+      )}
+
+      {/* ── Details (collapsible) ────────────────────────────────────────── */}
+      <details className="group">
+        <summary className="flex items-center gap-2 text-[10px] font-medium uppercase tracking-wider text-text-muted hover:text-text cursor-pointer transition-colors">
+          <ChevronRight className="h-3 w-3 group-open:rotate-90 transition-transform" />
+          framework details
+        </summary>
+        <div className="mt-3 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <InfoItem label="language" value={framework.language} />
+            <InfoItem label="install method" value={framework.install_method} />
+            <InfoItem label="config format" value={framework.config_format} />
+            <InfoItem label="binary" value={framework.binary_path} mono />
+            <InfoItem label="config path" value={framework.config_path} mono />
+            <InfoItem label="default port" value={framework.default_port ? `:${framework.default_port}` : "-"} />
+            <InfoItem label="adapter" value={framework.adapter_type} />
+            <InfoItem label="log directory" value={framework.log_dir} mono />
+            <InfoItem label="log format" value={framework.log_format} />
+          </div>
+          {(framework.repository || framework.website) && (
+            <div className="flex gap-3">
+              {framework.repository && (
+                <a href={framework.repository} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-accent transition-colors">
+                  <ExternalLink className="h-3 w-3" /> repository
+                </a>
+              )}
+              {framework.website && (
+                <a href={framework.website} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-accent transition-colors">
+                  <ExternalLink className="h-3 w-3" /> website
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      </details>
     </div>
   );
 }

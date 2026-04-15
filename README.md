@@ -45,7 +45,8 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 ## Prerequisites
 
 - **Go 1.21+** — [install instructions](https://go.dev/doc/install) or `brew install go`
-- **Node.js 22+** — required for the web dashboard (`nvm install 22` or [nodejs.org](https://nodejs.org))
+- **Node.js 22+** — required for the web UI (`nvm install 22` or [nodejs.org](https://nodejs.org))
+- **tmux** — persistent terminal sessions (`brew install tmux` or `apt install tmux`)
 
 Depending on which frameworks you install, you may also need:
 - **Rust** — for ZeroClaw (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
