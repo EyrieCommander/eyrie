@@ -1,19 +1,34 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, forwardRef, useImperativeHandle } from "react";
 import { Terminal as XTerm } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
 import "xterm/css/xterm.css";
 
-interface TerminalProps {
-  agentName: string;
-  onClose: () => void;
-  /** Command to type into the terminal once connected (not auto-executed — user hits enter). */
-  initialCommand?: string;
-  /** Use a plain shell instead of the agent's CLI. For setup/onboarding when no agent is running. */
-  useShell?: boolean;
+export interface TerminalHandle {
+  /** Send a command string into the running terminal (types it, does NOT press enter). */
+  sendCommand: (cmd: string) => void;
+  /** Send a command and press enter. */
+  runCommand: (cmd: string) => void;
 }
 
-export default function Terminal({ agentName, onClose, initialCommand, useShell }: TerminalProps) {
+interface TerminalProps {
+  agentName: string;
+  onClose?: () => void;
+  /** Command to type into the terminal once connected (not auto-executed — user hits enter). */
+  initialCommand?: string;
+  /** Use a plain shell instead of the agent's CLI. */
+  useShell?: boolean;
+  /** Render inline (fills parent container) instead of as a modal overlay. */
+  inline?: boolean;
+  /** Named session for tmux persistence. If set and tmux is available, the
+   *  session survives WebSocket disconnections (page navigations, reloads). */
+  session?: string;
+}
+
+const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
+  { agentName, onClose, initialCommand, useShell, inline, session },
+  ref,
+) {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerm | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -23,23 +38,32 @@ export default function Terminal({ agentName, onClose, initialCommand, useShell 
   const onCloseRef = useRef(onClose);
   const [status, setStatus] = useState<"connecting" | "connected" | "closed">("connecting");
 
-  // Update ref when onClose changes
   onCloseRef.current = onClose;
+
+  // Expose sendCommand / runCommand to parent via ref
+  useImperativeHandle(ref, () => ({
+    sendCommand: (cmd: string) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(cmd);
+      }
+    },
+    runCommand: (cmd: string) => {
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(cmd + "\n");
+      }
+    },
+  }));
 
   useEffect(() => {
     if (!terminalRef.current) return;
-
-    // Prevent double initialization in React Strict Mode
-    if (initializedRef.current) {
-      return;
-    }
+    if (initializedRef.current) return;
     initializedRef.current = true;
 
-    // Scale terminal font with the global zoom level
     const zoomPct = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
     const termFontSize = Math.round(13 * zoomPct);
 
-    // Create terminal instance
     const term = new XTerm({
       cursorBlink: true,
       fontSize: termFontSize,
@@ -50,91 +74,62 @@ export default function Terminal({ agentName, onClose, initialCommand, useShell 
         cursor: "#ffffff",
         selectionBackground: "rgba(255, 255, 255, 0.3)",
       },
-      rows: 24,
+      rows: inline ? 20 : 24,
       cols: 80,
     });
 
     xtermRef.current = term;
-
-    // Open terminal first
     term.open(terminalRef.current);
 
-    // Add and fit addon after terminal is opened
     const fitAddon = new FitAddon();
     fitAddonRef.current = fitAddon;
     term.loadAddon(fitAddon);
     term.loadAddon(new WebLinksAddon());
 
-    // Fit after a small delay to ensure container has dimensions
     setTimeout(() => {
-      try {
-        fitAddon.fit();
-      } catch (err) {
-        // Silently ignore fit errors
-      }
+      try { fitAddon.fit(); } catch { /* ignore */ }
     }, 50);
 
-    // Focus the terminal so user can type immediately
     term.focus();
 
     // Connect WebSocket
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const sessionParam = session ? `?session=${encodeURIComponent(session)}` : "";
     const wsUrl = useShell
-      ? `${protocol}//${window.location.host}/api/terminal/ws`
+      ? `${protocol}//${window.location.host}/api/terminal/ws${sessionParam}`
       : `${protocol}//${window.location.host}/api/agents/${agentName}/terminal/ws`;
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
-
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
-      console.log(`Terminal WebSocket connected for ${agentName}`);
-      // Send initial terminal size
-      const cols = term.cols;
-      const rows = term.rows;
-      ws.send(`resize:${rows}:${cols}`);
+      // Re-fit after connection to ensure terminal fills container
+      try { fitAddon.fit(); } catch { /* ignore */ }
+      ws.send(`resize:${term.rows}:${term.cols}`);
     };
 
     let sentInitialCommand = false;
     ws.onmessage = (event) => {
-      // Write output from backend to terminal
       if (event.data instanceof ArrayBuffer) {
-        const data = new Uint8Array(event.data);
-        term.write(data);
-        // Mark as connected on first data received
-        if (status === "connecting") {
-          setStatus("connected");
-        }
-        // Type the initial command once we see the shell prompt.
-        // WHY not auto-execute: The user should see and confirm the command
-        // before it runs (e.g., onboarding wizards ask interactive questions).
+        term.write(new Uint8Array(event.data));
+        if (status === "connecting") setStatus("connected");
         if (initialCommand && !sentInitialCommand) {
           sentInitialCommand = true;
-          // Small delay to ensure the shell prompt is rendered
           setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) {
-              ws.send(initialCommand);
-            }
+            if (ws.readyState === WebSocket.OPEN) ws.send(initialCommand);
           }, 300);
         }
       }
     };
 
-    ws.onerror = () => {
-      // Suppress error logging - onclose will handle it
-    };
+    ws.onerror = () => {};
 
     ws.onclose = (event) => {
-      console.log(`Terminal WebSocket closed: code=${event.code}, reason=${event.reason || "(no reason)"}`);
       setStatus("closed");
-
-      // Normal exit (shell exited, process completed) — auto-close the modal
-      if (event.code === 1000) {
-        setTimeout(() => onCloseRef.current(), 300);
+      if (event.code === 1000 && onCloseRef.current) {
+        setTimeout(() => onCloseRef.current?.(), 300);
         return;
       }
-
-      // Only show message if we've connected (not during initial connection failure)
       if (status === "connecting") {
         term.writeln("\r\n\x1b[1;31mFailed to connect\x1b[0m");
       } else {
@@ -142,62 +137,61 @@ export default function Terminal({ agentName, onClose, initialCommand, useShell 
       }
     };
 
-    // Send user input to backend
     term.onData((data) => {
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(data);
-      }
+      if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
-    // Handle Ctrl+Escape to close terminal (leaves Escape free for vim/TUIs)
-    term.attachCustomKeyEventHandler((event) => {
-      if (event.ctrlKey && event.key === "Escape" && event.type === "keydown") {
-        onCloseRef.current();
-        return false; // Prevent default handling
-      }
-      return true; // Allow other keys to be handled normally
-    });
+    if (onClose) {
+      term.attachCustomKeyEventHandler((event) => {
+        if (event.ctrlKey && event.key === "Escape" && event.type === "keydown") {
+          onCloseRef.current?.();
+          return false;
+        }
+        return true;
+      });
+    }
 
-    // Handle terminal resize
     const handleResize = () => {
       fitAddon.fit();
       if (ws.readyState === WebSocket.OPEN) {
-        const cols = term.cols;
-        const rows = term.rows;
-        ws.send(`resize:${rows}:${cols}`);
+        ws.send(`resize:${term.rows}:${term.cols}`);
       }
     };
-
     window.addEventListener("resize", handleResize);
 
-    // Cleanup - but skip the first cleanup (Strict Mode's double-mount)
     return () => {
       cleanupCountRef.current++;
+      if (cleanupCountRef.current === 1) return; // Skip Strict Mode first cleanup
 
-      // Skip first cleanup in Strict Mode (it will remount)
-      if (cleanupCountRef.current === 1) {
-        console.log("Skipping first cleanup (Strict Mode)");
-        return;
-      }
-
-      console.log("Running cleanup - closing terminal");
       window.removeEventListener("resize", handleResize);
       if (wsRef.current) {
-        const ws = wsRef.current;
-        // Only close if still open or connecting
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.close(1000, "user closed terminal");
-        } else if (ws.readyState === WebSocket.CONNECTING) {
-          ws.close();
-        }
-        // If already closing/closed, don't try to close again
+        const w = wsRef.current;
+        if (w.readyState === WebSocket.OPEN) w.close(1000, "user closed terminal");
+        else if (w.readyState === WebSocket.CONNECTING) w.close();
       }
-      if (xtermRef.current) {
-        xtermRef.current.dispose();
-      }
+      if (xtermRef.current) xtermRef.current.dispose();
     };
   }, [agentName]);
 
+  // ── Inline mode: render directly in parent container ────────────────
+  if (inline) {
+    return (
+      <div className="rounded border border-border bg-black overflow-hidden flex flex-col h-full">
+        <div className="flex-1 p-1 overflow-hidden relative min-h-0">
+          {status === "connecting" && (
+            <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-10">
+              <div className="text-center">
+                <div className="text-white text-xs mb-1">connecting...</div>
+              </div>
+            </div>
+          )}
+          <div ref={terminalRef} className="w-full h-full" />
+        </div>
+      </div>
+    );
+  }
+
+  // ── Overlay mode: modal covering the screen ─────────────────────────
   return (
     <div
       className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4"
@@ -207,15 +201,10 @@ export default function Terminal({ agentName, onClose, initialCommand, useShell 
         className="bg-bg border border-border rounded-lg shadow-2xl w-full max-w-6xl h-[80vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="text-sm font-semibold text-fg">
-              {agentName} terminal
-            </div>
-            <div className="text-xs text-fg-muted">
-              press ctrl+esc to close
-            </div>
+            <div className="text-sm font-semibold text-fg">{agentName} terminal</div>
+            <div className="text-xs text-fg-muted">press ctrl+esc to close</div>
           </div>
           <button
             onClick={onClose}
@@ -224,28 +213,20 @@ export default function Terminal({ agentName, onClose, initialCommand, useShell 
             close
           </button>
         </div>
-
-        {/* Terminal container */}
         <div className="flex-1 p-2 overflow-hidden relative">
           {status === "connecting" && (
             <div className="absolute inset-0 flex items-center justify-center bg-black/90 z-10">
               <div className="text-center">
-                <div className="text-fg text-sm mb-2">
-                  Starting {agentName}...
-                </div>
-                <div className="text-fg-muted text-xs">
-                  this may take a few seconds
-                </div>
+                <div className="text-fg text-sm mb-2">Starting {agentName}...</div>
+                <div className="text-fg-muted text-xs">this may take a few seconds</div>
               </div>
             </div>
           )}
-          <div
-            ref={terminalRef}
-            className="w-full h-full"
-            style={{ minHeight: '400px', minWidth: '600px' }}
-          />
+          <div ref={terminalRef} className="w-full h-full" style={{ minHeight: "400px", minWidth: "600px" }} />
         </div>
       </div>
     </div>
   );
-}
+});
+
+export default Terminal;

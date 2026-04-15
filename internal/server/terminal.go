@@ -15,9 +15,11 @@ import (
 	"nhooyr.io/websocket"
 )
 
-// handleShellTerminal spawns a plain shell (not agent-specific).
-// Used for onboarding and setup commands when no agent is running yet.
-// GET /api/terminal/ws
+// handleShellTerminal spawns a shell terminal session.
+// If tmux is available and a ?session= param is provided, the session persists
+// across WebSocket reconnections (navigate away, come back, output is still there).
+// Falls back to a plain shell if tmux is not installed.
+// GET /api/terminal/ws?session=eyrie-zeroclaw
 func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
@@ -30,23 +32,47 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/zsh"
+	sessionName := r.URL.Query().Get("session")
+	useTmux := sessionName != "" && hasTmux()
+
+	var cmd *exec.Cmd
+	if useTmux {
+		confPath := ensureTmuxConfig()
+		socketPath := tmuxSocketPath()
+		// Use a dedicated socket (-L is socket name) so Eyrie's tmux sessions
+		// are isolated from the user's personal tmux server and use our config.
+		// -A: attach if session exists, create if not
+		cmd = exec.CommandContext(ctx, "tmux", "-f", confPath, "-S", socketPath, "new-session", "-A", "-s", sessionName)
+		slog.Info("Starting tmux session", "session", sessionName, "socket", socketPath)
+	} else {
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			shell = "/bin/zsh"
+		}
+		cmd = exec.CommandContext(ctx, shell, "-l")
+		if sessionName != "" {
+			slog.Info("tmux not available, falling back to plain shell", "session", sessionName)
+		}
 	}
 
-	cmd := exec.CommandContext(ctx, shell, "-l")
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		slog.Error("Failed to start shell PTY", "error", err)
+		slog.Error("Failed to start shell PTY", "error", err, "tmux", useTmux)
 		return
 	}
 	defer func() {
 		ptmx.Close()
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			if useTmux {
+				// For tmux: closing the PTY fd detaches the client but the
+				// tmux session stays alive in the background. Send SIGHUP
+				// which tmux interprets as "client detached".
+				cmd.Process.Signal(os.Kill)
+			} else {
+				cmd.Process.Kill()
+			}
 		}
 	}()
 
