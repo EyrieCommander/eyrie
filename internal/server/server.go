@@ -114,6 +114,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/registry/frameworks/{id}", s.handleFrameworkDetail)
 	s.mux.HandleFunc("POST /api/registry/install", s.handleInstallFramework)
 	s.mux.HandleFunc("GET /api/registry/install/status", s.handleInstallStatus)
+	s.mux.HandleFunc("GET /api/registry/install/{id}/logs", s.handleInstallLogs)
+	s.mux.HandleFunc("POST /api/registry/uninstall", s.handleUninstallFramework)
 
 	// API reference (self-documenting, consumed by agents)
 	s.mux.HandleFunc("GET /api/reference", s.handleAPIReference)

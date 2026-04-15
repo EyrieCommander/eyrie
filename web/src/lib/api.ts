@@ -362,6 +362,15 @@ export async function fetchInstallStatus(): Promise<
   return res.json();
 }
 
+/** Fetch persisted install/uninstall status and log buffer for a specific framework. */
+export async function fetchInstallLogs(
+  frameworkId: string,
+): Promise<{ status: string | null; logs: string[]; phase?: string; message?: string; error?: string }> {
+  const res = await fetchWithTimeout(`${BASE}/api/registry/install/${frameworkId}/logs`);
+  if (!res.ok) throw new Error(`Failed to fetch install logs: ${res.statusText}`);
+  return res.json();
+}
+
 export function streamInstall(
   frameworkId: string,
   copyFrom: string | undefined,
@@ -414,6 +423,62 @@ export function streamInstall(
           status: "error",
           progress: 0,
           message: e instanceof Error ? e.message : "Installation failed",
+          error: e instanceof Error ? e.message : "Unknown error",
+          started_at: new Date().toISOString(),
+        });
+      }
+    }
+  })();
+
+  return controller;
+}
+
+export function streamUninstall(
+  frameworkId: string,
+  purge: boolean,
+  onProgress: (progress: InstallProgress) => void,
+  onLog: (log: string) => void,
+): AbortController {
+  const controller = new AbortController();
+
+  (async () => {
+    try {
+      const res = await fetchWithTimeout(`${BASE}/api/registry/uninstall`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ framework_id: frameworkId, purge }),
+        signal: controller.signal,
+      });
+
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onProgress({
+          framework_id: frameworkId,
+          phase: "error",
+          status: "error",
+          progress: 0,
+          message: body.error || `Uninstall failed: ${res.statusText}`,
+          error: body.error || res.statusText,
+          started_at: new Date().toISOString(),
+        });
+        return;
+      }
+
+      await readSSEStream(res.body!, (data) => {
+        if (data.type === "log") {
+          onLog((data as InstallLogEvent).message);
+        } else {
+          onProgress(data as InstallProgress);
+        }
+      });
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onProgress({
+          framework_id: frameworkId,
+          phase: "error",
+          status: "error",
+          progress: 0,
+          message: e instanceof Error ? e.message : "Uninstall failed",
           error: e instanceof Error ? e.message : "Unknown error",
           started_at: new Date().toISOString(),
         });

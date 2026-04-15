@@ -205,7 +205,6 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 	configPath := config.ExpandHome(fw.ConfigPath)
 	if _, err := os.Stat(configPath); err == nil {
 		configured = true
-		installed = true // config implies installed
 	}
 	return
 }
@@ -373,8 +372,15 @@ func (s *Server) streamInstallProgress(w http.ResponseWriter, r *http.Request, f
 			}
 			lastLogCount = len(logs)
 
-			// If completed or errored, stop streaming
+			// If completed or errored, send the final event multiple times
+			// to push through any proxy buffering, then close.
 			if progress.Status == "success" || progress.Status == "error" {
+				// Re-send the final status a few times with small delays
+				// to ensure at least one gets through the Vite proxy buffer.
+				for i := 0; i < 3; i++ {
+					time.Sleep(200 * time.Millisecond)
+					sse.WriteEvent(progress)
+				}
 				return
 			}
 		}
@@ -385,6 +391,32 @@ func (s *Server) streamInstallProgress(w http.ResponseWriter, r *http.Request, f
 func (s *Server) handleInstallStatus(w http.ResponseWriter, r *http.Request) {
 	statuses := globalInstallState.getAll()
 	writeJSON(w, http.StatusOK, statuses)
+}
+
+// handleInstallLogs returns the status and log buffer for a specific framework install.
+// Used by the detail page to restore state after navigation or reload.
+func (s *Server) handleInstallLogs(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	progress := globalInstallState.get(id)
+	if progress == nil {
+		writeJSON(w, http.StatusOK, map[string]any{
+			"status": nil,
+			"logs":   []string{},
+		})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"framework_id": progress.FrameworkID,
+		"phase":        progress.Phase,
+		"status":       progress.Status,
+		"progress":     progress.Progress,
+		"message":      progress.Message,
+		"error":        progress.Error,
+		"started_at":   progress.StartedAt,
+		"completed_at": progress.CompletedAt,
+		"logs":         progress.getLogs(),
+	})
 }
 
 // installBinary installs the framework binary
@@ -526,6 +558,228 @@ func wireDiscovery(fw *registry.Framework, progress *installProgress) error {
 
 	progress.addLog(fmt.Sprintf("Added %s to discovery paths", fw.ConfigPath))
 	return nil
+}
+
+// handleUninstallFramework removes a framework's binary and optionally its config, streaming progress via SSE
+func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		FrameworkID string `json:"framework_id"`
+		Purge       bool   `json:"purge"` // Also remove config directory
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+
+	if req.FrameworkID == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "framework_id is required"})
+		return
+	}
+
+	// Fetch framework metadata
+	ctx := r.Context()
+	client, err := registry.NewClient("")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	fw, err := client.GetFramework(ctx, req.FrameworkID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Set up SSE stream
+	sse, err := NewSSEWriter(w)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	progress := &installProgress{
+		FrameworkID: fw.ID,
+		Phase:       "starting",
+		Status:      "running",
+		Progress:    0,
+		Message:     fmt.Sprintf("Uninstalling %s...", fw.Name),
+		StartedAt:   time.Now(),
+		logBuf:      make([]string, 0),
+	}
+
+	sendUpdate := func() {
+		sse.WriteEvent(progress)
+	}
+	sendLog := func(msg string) {
+		progress.addLog(msg)
+		sse.WriteEvent(map[string]string{"type": "log", "message": msg})
+	}
+
+	sendLog(fmt.Sprintf("Starting uninstall of %s", fw.Name))
+	sendUpdate()
+
+	binaryPath := config.ExpandHome(fw.BinaryPath)
+	configDir := config.ExpandHome(fw.ConfigDir)
+
+	// Phase 1: Remove binary
+	if _, statErr := os.Stat(binaryPath); statErr == nil {
+		progress.Phase = "binary"
+		progress.Progress = 25
+		progress.Message = "Removing binary..."
+		sendUpdate()
+		sendLog(fmt.Sprintf("Removing binary at %s", fw.BinaryPath))
+
+		if err := uninstallBinary(fw, sendLog); err != nil {
+			progress.Status = "error"
+			progress.Error = err.Error()
+			progress.Message = fmt.Sprintf("Failed to remove binary: %s", err)
+			sendLog(fmt.Sprintf("ERROR: %s", err))
+			now := time.Now()
+			progress.CompletedAt = &now
+			sendUpdate()
+			return
+		}
+		sendLog("Binary removed")
+	} else {
+		sendLog("Binary not found, skipping")
+	}
+
+	// Phase 2: Remove from discovery
+	progress.Phase = "discovery"
+	progress.Progress = 50
+	progress.Message = "Removing from discovery..."
+	sendUpdate()
+
+	if err := unwireDiscovery(fw); err != nil {
+		sendLog(fmt.Sprintf("Warning: could not remove from discovery: %s", err))
+	} else {
+		sendLog("Removed from discovery paths")
+	}
+
+	// Phase 3: Purge config (optional)
+	if req.Purge {
+		progress.Phase = "config"
+		progress.Progress = 75
+		progress.Message = "Removing config..."
+		sendUpdate()
+
+		configPath := config.ExpandHome(fw.ConfigPath)
+		removed := false
+
+		// Remove config file
+		if _, statErr := os.Stat(configPath); statErr == nil {
+			sendLog(fmt.Sprintf("Removing config file %s", fw.ConfigPath))
+			if err := os.Remove(configPath); err != nil {
+				sendLog(fmt.Sprintf("Warning: could not remove config file: %s", err))
+			} else {
+				sendLog("Config file removed")
+				removed = true
+			}
+		}
+
+		// Remove config directory
+		if _, statErr := os.Stat(configDir); statErr == nil {
+			sendLog(fmt.Sprintf("Removing config directory %s", fw.ConfigDir))
+			if err := os.RemoveAll(configDir); err != nil {
+				sendLog(fmt.Sprintf("Warning: could not remove config directory: %s", err))
+			} else {
+				sendLog("Config directory removed")
+				removed = true
+			}
+		}
+
+		if !removed {
+			sendLog("Config not found, skipping")
+		}
+	}
+
+	// Phase 4: Clear install status
+	globalInstallState.set(fw.ID, nil)
+
+	// Done
+	progress.Phase = "complete"
+	progress.Status = "success"
+	progress.Progress = 100
+	progress.Message = fmt.Sprintf("%s uninstalled successfully", fw.Name)
+	now := time.Now()
+	progress.CompletedAt = &now
+	sendLog(progress.Message)
+	sendUpdate()
+
+	// Re-send final status to push through proxy buffering
+	for i := 0; i < 3; i++ {
+		time.Sleep(200 * time.Millisecond)
+		sendUpdate()
+	}
+}
+
+// uninstallBinary removes the framework binary using the appropriate package manager
+func uninstallBinary(fw *registry.Framework, log func(string)) error {
+	binaryPath := config.ExpandHome(fw.BinaryPath)
+
+	switch fw.InstallMethod {
+	case "cargo":
+		log(fmt.Sprintf("Running: cargo uninstall %s", fw.ID))
+		cmd := exec.CommandContext(context.Background(), "cargo", "uninstall", fw.ID)
+		cmd.Env = config.EnrichedEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log(fmt.Sprintf("cargo uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
+			return os.Remove(binaryPath)
+		}
+		return nil
+
+	case "npm":
+		log(fmt.Sprintf("Running: npm uninstall -g %s", fw.ID))
+		cmd := exec.CommandContext(context.Background(), "npm", "uninstall", "-g", fw.ID)
+		cmd.Env = config.EnrichedEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log(fmt.Sprintf("npm uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
+			return os.Remove(binaryPath)
+		}
+		return nil
+
+	case "pip":
+		log(fmt.Sprintf("Running: pip uninstall -y %s", fw.ID))
+		cmd := exec.CommandContext(context.Background(), "pip", "uninstall", "-y", fw.ID)
+		cmd.Env = config.EnrichedEnv()
+		if out, err := cmd.CombinedOutput(); err != nil {
+			log(fmt.Sprintf("pip uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
+			return os.Remove(binaryPath)
+		}
+		return nil
+
+	default:
+		log("Removing binary file directly")
+		return os.Remove(binaryPath)
+	}
+}
+
+// unwireDiscovery removes the framework's config path from eyrie's discovery config
+func unwireDiscovery(fw *registry.Framework) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+
+	expandedPath := config.ExpandHome(fw.ConfigPath)
+	filtered := make([]string, 0, len(cfg.Discovery.ConfigPaths))
+	found := false
+
+	for _, path := range cfg.Discovery.ConfigPaths {
+		if config.ExpandHome(path) == expandedPath {
+			found = true
+			continue
+		}
+		filtered = append(filtered, path)
+	}
+
+	if !found {
+		return nil
+	}
+
+	cfg.Discovery.ConfigPaths = filtered
+	return config.Save(cfg)
 }
 
 // setupAdapter verifies adapter support
