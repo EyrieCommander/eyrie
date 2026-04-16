@@ -746,12 +746,8 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		if display := o.storeAgentResponse(fupRes, sse, listenerAgent.name, listenerAgent.role, projectID); display != "" {
 			contextLines = append(contextLines, fmt.Sprintf("[%s (%s)]: %s", listenerAgent.name, listenerAgent.role, display))
 		}
-
-		// Reset forwarded flag for next round — the listener's response
-		// may contain @mentions that trigger another forwarding chain.
-		forwarded = false
-		// Continue outer loop → forwarding chain runs on listener's new response
-
+		// Continue outer loop → forwarding chain runs on listener's new response.
+		// forwarded is redeclared at the top of each round, so no explicit reset needed.
 	} // end round loop
 
 	// Signal completion

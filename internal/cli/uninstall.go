@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -93,7 +94,7 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	// Phase 1: Remove binary
 	if binaryExists {
 		fmt.Println("\n━━━ Removing binary ━━━")
-		if err := uninstallBinary(fw); err != nil {
+		if err := uninstallBinary(ctx, fw); err != nil {
 			return fmt.Errorf("failed to remove binary: %w", err)
 		}
 		fmt.Printf("✓ Removed %s\n", fw.BinaryPath)
@@ -150,14 +151,14 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 }
 
 // uninstallBinary removes the framework binary using the appropriate method
-func uninstallBinary(fw *registry.Framework) error {
+func uninstallBinary(ctx context.Context, fw *registry.Framework) error {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
 
 	switch fw.InstallMethod {
 	case "cargo":
 		// cargo uninstall is cleaner — removes from cargo's tracking
 		fmt.Printf("Running: cargo uninstall %s\n", fw.ID)
-		if err := runCommand(context.Background(), "cargo", "uninstall", fw.ID); err != nil {
+		if err := runCommand(ctx, "cargo", "uninstall", fw.ID); err != nil {
 			// Fall back to direct removal if cargo uninstall fails
 			fmt.Printf("cargo uninstall failed, removing binary directly\n")
 			return os.Remove(binaryPath)
@@ -166,7 +167,7 @@ func uninstallBinary(fw *registry.Framework) error {
 
 	case "npm":
 		fmt.Printf("Running: npm uninstall -g %s\n", fw.ID)
-		if err := runCommand(context.Background(), "npm", "uninstall", "-g", fw.ID); err != nil {
+		if err := runCommand(ctx, "npm", "uninstall", "-g", fw.ID); err != nil {
 			fmt.Printf("npm uninstall failed, removing binary directly\n")
 			return os.Remove(binaryPath)
 		}
@@ -174,7 +175,7 @@ func uninstallBinary(fw *registry.Framework) error {
 
 	case "pip":
 		fmt.Printf("Running: pip uninstall -y %s\n", fw.ID)
-		if err := runCommand(context.Background(), "pip", "uninstall", "-y", fw.ID); err != nil {
+		if err := runCommand(ctx, "pip", "uninstall", "-y", fw.ID); err != nil {
 			fmt.Printf("pip uninstall failed, removing binary directly\n")
 			return os.Remove(binaryPath)
 		}
@@ -216,7 +217,7 @@ func unwireDiscovery(fw *registry.Framework) error {
 // clearInstallStatus removes a framework's entry from the install status file.
 func clearInstallStatus(frameworkID string) {
 	home, _ := os.UserHomeDir()
-	statusFile := home + "/.eyrie/install_status.json"
+	statusFile := filepath.Join(home, ".eyrie", "install_status.json")
 
 	data, err := os.ReadFile(statusFile)
 	if err != nil {

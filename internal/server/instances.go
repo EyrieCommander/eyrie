@@ -466,12 +466,15 @@ func autoPairZeroClaw(name string, port int) {
 		checkResp, checkErr := client.Do(checkReq)
 		if checkErr == nil {
 			checkResp.Body.Close()
-			if checkResp.StatusCode != 401 {
+			// Only 2xx proves the token is accepted. Other statuses
+			// (401, 500, 502, 503, ...) may be transient errors, so we
+			// must re-pair rather than trust a potentially stale token.
+			if checkResp.StatusCode >= 200 && checkResp.StatusCode < 300 {
 				slog.Info("auto-pair: existing token valid, skipping", "agent", name)
 				return
 			}
 		}
-		slog.Info("auto-pair: existing token stale, re-pairing", "agent", name)
+		slog.Info("auto-pair: existing token stale or unverifiable, re-pairing", "agent", name)
 	}
 
 	// Fetch pairing code from admin endpoint

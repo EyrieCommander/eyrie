@@ -706,8 +706,11 @@ func (s *Server) ensureCaptainBriefing(proj *project.Project, force ...bool) {
 	briefing := composeCaptainBriefing(proj)
 	agentName := proj.OrchestratorID
 	if _, err := agent.SendMessage(ctx, briefing, "eyrie-captain-briefing"); err != nil {
+		// Keep the full error in logs but don't leak backend details into
+		// the project chat — users see a generic message and operators
+		// check the server logs for diagnostics.
 		slog.Warn("ensureCaptainBriefing: briefing failed", "captain", agentName, "error", err)
-		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing failed for %s: %v", agentName, err))
+		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing failed for %s (see server logs for details)", agentName))
 	} else {
 		slog.Info("ensureCaptainBriefing: captain briefed", "captain", agentName, "project", proj.ID)
 		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing sent to %s", agentName))

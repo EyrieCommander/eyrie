@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,19 +35,25 @@ func tmuxConfigPath() string {
 }
 
 // ensureTmuxConfig writes the Eyrie tmux config if it doesn't exist or has changed.
-func ensureTmuxConfig() string {
+// Returns the path and a non-nil error if the directory or file couldn't be
+// written; callers should treat an error as "tmux not usable for this session".
+func ensureTmuxConfig() (string, error) {
 	path := tmuxConfigPath()
 
 	// Check if it already has the right content
 	existing, err := os.ReadFile(path)
 	if err == nil && string(existing) == tmuxConfContent {
-		return path
+		return path, nil
 	}
 
 	// Write/overwrite
-	os.MkdirAll(filepath.Dir(path), 0755)
-	os.WriteFile(path, []byte(tmuxConfContent), 0644)
-	return path
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return path, fmt.Errorf("creating tmux config dir %s: %w", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(tmuxConfContent), 0644); err != nil {
+		return path, fmt.Errorf("writing tmux config %s: %w", path, err)
+	}
+	return path, nil
 }
 
 // tmuxSocketPath returns the path for Eyrie's dedicated tmux socket.

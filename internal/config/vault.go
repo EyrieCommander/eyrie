@@ -73,11 +73,14 @@ func GetKeyVault() *KeyVault {
 }
 
 // Get returns the API key for the given provider. Environment variable takes
-// precedence: the vault checks <PROVIDER>_API_KEY (uppercased) before falling
-// back to the on-disk store.
+// precedence: the vault checks the provider's mapped env var (from
+// providerEnvMap, consistent with EnvSlice) before falling back to
+// <PROVIDER>_API_KEY (uppercased), then the on-disk store.
 func (v *KeyVault) Get(provider string) string {
-	// Env var takes precedence
-	envKey := strings.ToUpper(provider) + "_API_KEY"
+	envKey, ok := providerEnvMap[provider]
+	if !ok {
+		envKey = strings.ToUpper(provider) + "_API_KEY"
+	}
 	if val := os.Getenv(envKey); val != "" {
 		return val
 	}
@@ -214,5 +217,11 @@ func (v *KeyVault) save() error {
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, v.path)
+	if err := os.Rename(tmp, v.path); err != nil {
+		// Best-effort cleanup so a failed rename doesn't leave an
+		// orphaned temp file behind.
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming %s to %s: %w", tmp, v.path, err)
+	}
+	return nil
 }

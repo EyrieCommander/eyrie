@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
@@ -15,12 +17,24 @@ import (
 	"nhooyr.io/websocket"
 )
 
+// validSessionName restricts tmux session names to a safe subset.
+// Rejects path separators, shell metacharacters, and anything that
+// could be misinterpreted by tmux or the shell.
+var validSessionName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
 // handleShellTerminal spawns a shell terminal session.
 // If tmux is available and a ?session= param is provided, the session persists
 // across WebSocket reconnections (navigate away, come back, output is still there).
 // Falls back to a plain shell if tmux is not installed.
 // GET /api/terminal/ws?session=eyrie-zeroclaw
 func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
+	// Validate session name BEFORE upgrading so we can return a clean 400.
+	sessionName := r.URL.Query().Get("session")
+	if sessionName != "" && !validSessionName.MatchString(sessionName) {
+		http.Error(w, fmt.Sprintf("invalid session name %q: only [a-zA-Z0-9_-]+ allowed", sessionName), http.StatusBadRequest)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -32,19 +46,24 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	sessionName := r.URL.Query().Get("session")
 	useTmux := sessionName != "" && hasTmux()
 
 	var cmd *exec.Cmd
 	if useTmux {
-		confPath := ensureTmuxConfig()
-		socketPath := tmuxSocketPath()
-		// Use a dedicated socket (-L is socket name) so Eyrie's tmux sessions
-		// are isolated from the user's personal tmux server and use our config.
-		// -A: attach if session exists, create if not
-		cmd = exec.CommandContext(ctx, "tmux", "-f", confPath, "-S", socketPath, "new-session", "-A", "-s", sessionName)
-		slog.Info("Starting tmux session", "session", sessionName, "socket", socketPath)
-	} else {
+		confPath, confErr := ensureTmuxConfig()
+		if confErr != nil {
+			slog.Warn("tmux config unavailable, falling back to plain shell", "error", confErr)
+			useTmux = false
+		} else {
+			socketPath := tmuxSocketPath()
+			// Use a dedicated socket (-L is socket name) so Eyrie's tmux sessions
+			// are isolated from the user's personal tmux server and use our config.
+			// -A: attach if session exists, create if not
+			cmd = exec.CommandContext(ctx, "tmux", "-f", confPath, "-S", socketPath, "new-session", "-A", "-s", sessionName)
+			slog.Info("Starting tmux session", "session", sessionName, "socket", socketPath)
+		}
+	}
+	if !useTmux {
 		shell := os.Getenv("SHELL")
 		if shell == "" {
 			shell = "/bin/zsh"
@@ -68,8 +87,10 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 			if useTmux {
 				// For tmux: closing the PTY fd detaches the client but the
 				// tmux session stays alive in the background. Send SIGHUP
-				// which tmux interprets as "client detached".
-				cmd.Process.Signal(os.Kill)
+				// which tmux interprets as "client detached" (SIGKILL
+				// would kill the wrapping client process harder than
+				// needed, though the session itself survives either way).
+				cmd.Process.Signal(syscall.SIGHUP)
 			} else {
 				cmd.Process.Kill()
 			}

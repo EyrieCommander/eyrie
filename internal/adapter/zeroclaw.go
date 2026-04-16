@@ -679,8 +679,13 @@ func (z *ZeroClawAdapter) sessionsFromDB() ([]Session, error) {
 		}
 		if t, err := time.Parse(time.RFC3339Nano, lastActivity); err == nil {
 			sess.LastMsg = &t
+		} else if t, err := time.Parse(time.RFC3339, lastActivity); err == nil {
+			sess.LastMsg = &t
 		}
 		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sessions rows: %w", err)
 	}
 	return sessions, nil
 }

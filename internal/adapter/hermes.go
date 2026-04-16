@@ -591,7 +591,7 @@ func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
 		LIMIT 50
 	`)
 	if err != nil {
-		return []Session{}, nil
+		return nil, fmt.Errorf("querying hermes sessions: %w", err)
 	}
 	defer rows.Close()
 

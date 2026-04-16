@@ -264,6 +264,8 @@ func ensureAllowedCommands(cfg map[string]any) []string {
 // WHY allow_private_hosts (not allowed_private_hosts): ZeroClaw's http_request
 // config struct uses "allow_private_hosts". The web_fetch struct uses
 // "allowed_private_hosts" — different field names on different structs.
+// Old configs written by earlier provisioners may have entries under the wrong
+// name; merge both into allow_private_hosts so user-added hosts aren't lost.
 func ensurePrivateHosts(cfg map[string]any) bool {
 	hr, ok := cfg["http_request"].(map[string]any)
 	if !ok {
@@ -271,15 +273,32 @@ func ensurePrivateHosts(cfg map[string]any) bool {
 		cfg["http_request"] = hr
 	}
 
-	// Check both field names — old configs may have the wrong one
-	hosts, _ := hr["allow_private_hosts"].([]any)
-	for _, h := range hosts {
-		if s, ok := h.(string); ok && s == "localhost" {
-			return false // already present
+	correct, _ := hr["allow_private_hosts"].([]any)
+	legacy, hasLegacy := hr["allowed_private_hosts"].([]any)
+
+	// Merge and dedupe hosts from both keys
+	merged := make([]any, 0, len(correct)+len(legacy))
+	seen := make(map[string]bool)
+	for _, src := range [][]any{correct, legacy} {
+		for _, h := range src {
+			s, ok := h.(string)
+			if !ok || seen[s] {
+				continue
+			}
+			seen[s] = true
+			merged = append(merged, s)
 		}
 	}
-	hr["allow_private_hosts"] = append(hosts, "localhost")
-	// Clean up the wrong field name if it was written by an older provisioner
+
+	hasLocalhost := seen["localhost"]
+	// Already correct: localhost present and no legacy key to clean up
+	if hasLocalhost && !hasLegacy {
+		return false
+	}
+	if !hasLocalhost {
+		merged = append(merged, "localhost")
+	}
+	hr["allow_private_hosts"] = merged
 	delete(hr, "allowed_private_hosts")
 	return true
 }

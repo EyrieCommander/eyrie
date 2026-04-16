@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -202,14 +203,34 @@ func EnrichedEnv() []string {
 		extraDirs = append(extraDirs, "/opt/homebrew/bin") // Homebrew (Apple Silicon)
 	}
 
-	// Find NVM Node.js v22 if available
+	// Find NVM Node.js v22 if available. Pick the highest-patched v22.*
+	// by numerically comparing minor/patch instead of relying on the
+	// directory listing's lexicographic order (which would prefer
+	// v22.9.0 over v22.10.0).
 	nvmDir := filepath.Join(home, ".nvm", "versions", "node")
 	if entries, err := os.ReadDir(nvmDir); err == nil {
-		for i := len(entries) - 1; i >= 0; i-- {
-			if strings.HasPrefix(entries[i].Name(), "v22.") {
-				extraDirs = append(extraDirs, filepath.Join(nvmDir, entries[i].Name(), "bin"))
-				break
+		bestName := ""
+		var bestMinor, bestPatch int
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, "v22.") {
+				continue
 			}
+			parts := strings.Split(strings.TrimPrefix(name, "v"), ".")
+			if len(parts) < 3 {
+				continue
+			}
+			minor, err1 := strconv.Atoi(parts[1])
+			patch, err2 := strconv.Atoi(parts[2])
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			if bestName == "" || minor > bestMinor || (minor == bestMinor && patch > bestPatch) {
+				bestName, bestMinor, bestPatch = name, minor, patch
+			}
+		}
+		if bestName != "" {
+			extraDirs = append(extraDirs, filepath.Join(nvmDir, bestName, "bin"))
 		}
 	}
 
