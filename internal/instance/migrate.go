@@ -306,6 +306,12 @@ func ensurePrivateHosts(cfg map[string]any) bool {
 // removeBlockingFlags strips autonomy flags that override the allowed_commands
 // allowlist. These were added by a previous provisioner version but break shell
 // access because ZeroClaw classifies curl as high-risk.
+//
+// WHY auto_approve is NOT in this list: the provisioner intentionally sets
+// auto_approve to a list of unblocked tools (Bash, Read, Write, http_request,
+// web_fetch) because headless agents have no terminal to click "approve".
+// Deleting it would cause Bash calls to hang waiting for approval. See
+// provisioner.go.
 func removeBlockingFlags(cfg map[string]any) bool {
 	aut, ok := cfg["autonomy"].(map[string]any)
 	if !ok {
@@ -316,7 +322,6 @@ func removeBlockingFlags(cfg map[string]any) bool {
 		"block_high_risk_commands",
 		"require_approval_for_medium_risk",
 		"require_approval_for_actions",
-		"auto_approve",
 	} {
 		if _, exists := aut[key]; exists {
 			delete(aut, key)
