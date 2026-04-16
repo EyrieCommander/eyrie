@@ -12,6 +12,26 @@ import (
 	"github.com/Audacity88/eyrie/internal/project"
 )
 
+// Risk classifies a tool's blast radius. The turn loop gates execution
+// based on this: Auto tools run immediately; Confirm tools pause for
+// out-of-band user approval before executing.
+//
+// WHY a typed enum, not a bool: leaves room for a future Dangerous tier
+// (e.g. "confirm + require typing target id") without another round of
+// API changes. For MVP only Auto and Confirm are implemented.
+type Risk int
+
+const (
+	// RiskAuto executes immediately. Use for read-only and trivially
+	// reversible tools. Every Auto tool call still goes in the audit log.
+	RiskAuto Risk = iota
+	// RiskConfirm requires out-of-band user approval before execution.
+	// The turn emits a confirm_required event, stores a pending action,
+	// and ends the turn with an unresolved tool_call. Execution happens
+	// only when /api/commander/confirm/{id} is POSTed with approved=true.
+	RiskConfirm
+)
+
 // Tool is an action the commander can invoke. Each tool is a plain Go
 // function — no HTTP, no subprocess, no sandbox. The tool executes
 // directly against Eyrie's in-process stores.
@@ -23,12 +43,20 @@ import (
 type Tool struct {
 	Name        string
 	Description string
+	// Risk controls whether the tool requires user confirmation.
+	// Zero value (RiskAuto) is safe for read-only tools.
+	Risk Risk
 	// Parameters is a JSON Schema describing the tool's arguments.
 	// Passed to the LLM as the tool's `function.parameters` field.
 	Parameters map[string]any
 	// Execute runs the tool. `args` is the parsed JSON object the LLM
 	// provided. Returns a string the LLM will see as the tool result.
 	Execute func(ctx context.Context, args map[string]any) (string, error)
+	// Summarize produces a one-line human-readable description of what
+	// this tool call would do with these args. Used in confirm_required
+	// events so the user sees a clear summary before approving. Optional
+	// — defaults to "<tool_name>(<args>)".
+	Summarize func(args map[string]any) string
 }
 
 // Definition converts the Tool to the OpenAI-format ToolDef expected by
@@ -48,13 +76,25 @@ func (t Tool) Definition() embedded.ToolDef {
 // Passed to NewRegistry so tool implementations can close over exactly
 // what they need without the registry package importing server internals.
 //
-// WHY a discovery function (not a store): discovery runs at call time
-// to get fresh liveness data. Passing a function lets the server supply
-// its own runDiscovery method without creating an import cycle.
+// WHY function fields (not pointers to server types): discovery, message
+// injection, and agent lifecycle live in the server package. Passing
+// functions lets the server supply method values without the commander
+// package importing server — avoids an import cycle.
 type RegistryDeps struct {
-	Projects  *project.Store
-	Chat      *project.ChatStore
+	// Projects is the project store for read + write tools.
+	Projects *project.Store
+	// Chat is the project chat store, used by read_project_chat.
+	Chat *project.ChatStore
+	// Discovery runs agent discovery on demand; used by list_agents.
 	Discovery func(ctx context.Context) discovery.Result
+	// SendToProject injects a commander message into a project's chat
+	// and kicks off the project orchestrator in the background (captain
+	// responds asynchronously). Returns an error only if the injection
+	// itself fails (project not found, etc.).
+	SendToProject func(ctx context.Context, projectID, message string) error
+	// RestartAgent stops then starts an agent by name. Best-effort;
+	// returns an error if either step fails.
+	RestartAgent func(ctx context.Context, name string) error
 }
 
 // Registry holds the tools available to the commander. The registry is
@@ -67,11 +107,20 @@ type Registry struct {
 // Additional tools are registered here as the commander grows.
 func NewRegistry(deps RegistryDeps) *Registry {
 	r := &Registry{tools: make(map[string]Tool)}
+	// Read-only (Auto risk)
 	r.register(listProjectsTool(deps.Projects))
 	r.register(getProjectTool(deps.Projects))
 	r.register(listPersonasTool())
 	r.register(listAgentsTool(deps.Discovery))
 	r.register(readProjectChatTool(deps.Chat))
+	// Write (Confirm risk)
+	r.register(createProjectTool(deps.Projects))
+	if deps.SendToProject != nil {
+		r.register(sendToProjectTool(deps.SendToProject, deps.Projects))
+	}
+	if deps.RestartAgent != nil {
+		r.register(restartAgentTool(deps.RestartAgent))
+	}
 	return r
 }
 
@@ -333,4 +382,173 @@ func marshalJSON(v any) (string, error) {
 		return "", fmt.Errorf("marshaling tool result: %w", err)
 	}
 	return string(data), nil
+}
+
+// --- Write tools ------------------------------------------------------
+
+// Validation limits for write tools. Reject inputs over these sizes at
+// the Go layer so a prompt injection can't use tools to flood storage.
+const (
+	maxProjectNameLen  = 200
+	maxProjectGoalLen  = 500
+	maxProjectDescLen  = 2000
+	maxSendMessageLen  = 10000
+	maxAgentNameLen    = 200
+)
+
+func createProjectTool(store *project.Store) Tool {
+	return Tool{
+		Name:        "create_project",
+		Risk:        RiskConfirm,
+		Description: "Create a new project with the given name, optional goal, and optional description. Returns the new project's id.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Short project name (required).",
+				},
+				"goal": map[string]any{
+					"type":        "string",
+					"description": "Optional project goal (one sentence).",
+				},
+				"description": map[string]any{
+					"type":        "string",
+					"description": "Optional longer description.",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Summarize: func(args map[string]any) string {
+			name, _ := args["name"].(string)
+			goal, _ := args["goal"].(string)
+			if goal != "" {
+				return fmt.Sprintf("Create project %q (goal: %s)", name, goal)
+			}
+			return fmt.Sprintf("Create project %q", name)
+		},
+		Execute: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			goal, _ := args["goal"].(string)
+			description, _ := args["description"].(string)
+			if err := validateString("name", name, 1, maxProjectNameLen); err != nil {
+				return "", err
+			}
+			if err := validateString("goal", goal, 0, maxProjectGoalLen); err != nil {
+				return "", err
+			}
+			if err := validateString("description", description, 0, maxProjectDescLen); err != nil {
+				return "", err
+			}
+			saved, err := store.Create(project.CreateRequest{
+				Name:        name,
+				Goal:        goal,
+				Description: description,
+				CreatedBy:   "commander",
+			})
+			if err != nil {
+				return "", fmt.Errorf("creating project: %w", err)
+			}
+			return fmt.Sprintf(`{"id":%q,"name":%q,"status":"active"}`, saved.ID, saved.Name), nil
+		},
+	}
+}
+
+func sendToProjectTool(send func(ctx context.Context, projectID, message string) error, store *project.Store) Tool {
+	return Tool{
+		Name:        "send_to_project",
+		Risk:        RiskConfirm,
+		Description: "Send a message into a project's chat as the commander. The project's captain will see the message and may respond. The captain's response can be read later via read_project_chat.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"project_id": map[string]any{
+					"type":        "string",
+					"description": "The project's id.",
+				},
+				"message": map[string]any{
+					"type":        "string",
+					"description": "The message to send. Will appear in the project chat with role=commander.",
+				},
+			},
+			"required": []string{"project_id", "message"},
+		},
+		Summarize: func(args map[string]any) string {
+			projectID, _ := args["project_id"].(string)
+			message, _ := args["message"].(string)
+			name := projectID
+			if p, err := store.Get(projectID); err == nil {
+				name = p.Name
+			}
+			preview := message
+			if len(preview) > 80 {
+				preview = preview[:80] + "…"
+			}
+			return fmt.Sprintf("Send to %s: %q", name, preview)
+		},
+		Execute: func(ctx context.Context, args map[string]any) (string, error) {
+			projectID, _ := args["project_id"].(string)
+			message, _ := args["message"].(string)
+			if err := validateString("project_id", projectID, 1, 200); err != nil {
+				return "", err
+			}
+			if err := validateString("message", message, 1, maxSendMessageLen); err != nil {
+				return "", err
+			}
+			if _, err := store.Get(projectID); err != nil {
+				return "", fmt.Errorf("project not found: %w", err)
+			}
+			if err := send(ctx, projectID, message); err != nil {
+				return "", fmt.Errorf("sending message: %w", err)
+			}
+			return `{"status":"sent","note":"Captain will respond asynchronously. Use read_project_chat to see the reply once it arrives."}`, nil
+		},
+	}
+}
+
+func restartAgentTool(restart func(ctx context.Context, name string) error) Tool {
+	return Tool{
+		Name:        "restart_agent",
+		Risk:        RiskConfirm,
+		Description: "Stop and restart an agent by name. Disrupts any in-flight work on that agent. Returns confirmation when the restart completes.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"name": map[string]any{
+					"type":        "string",
+					"description": "Agent name (from list_agents).",
+				},
+			},
+			"required": []string{"name"},
+		},
+		Summarize: func(args map[string]any) string {
+			name, _ := args["name"].(string)
+			return fmt.Sprintf("Restart agent %q", name)
+		},
+		Execute: func(ctx context.Context, args map[string]any) (string, error) {
+			name, _ := args["name"].(string)
+			if err := validateString("name", name, 1, maxAgentNameLen); err != nil {
+				return "", err
+			}
+			if err := restart(ctx, name); err != nil {
+				return "", fmt.Errorf("restarting agent: %w", err)
+			}
+			return fmt.Sprintf(`{"status":"restarted","name":%q}`, name), nil
+		},
+	}
+}
+
+// validateString rejects inputs that are missing (when minLen>0) or
+// exceed maxLen. Centralizes the boilerplate for write-tool arg checks.
+func validateString(field, value string, minLen, maxLen int) error {
+	if len(value) < minLen {
+		if minLen == 1 {
+			return fmt.Errorf("%s is required", field)
+		}
+		return fmt.Errorf("%s must be at least %d characters", field, minLen)
+	}
+	if len(value) > maxLen {
+		return fmt.Errorf("%s exceeds max length of %d characters", field, maxLen)
+	}
+	return nil
 }

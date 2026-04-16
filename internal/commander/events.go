@@ -30,6 +30,14 @@ const (
 	// EventError signals a terminal error in the turn.
 	// Field: {"type": "error", "error": "..."}
 	EventError = "error"
+
+	// EventConfirmRequired signals the LLM wants to call a write tool
+	// that requires user approval. The turn pauses after this event;
+	// the client must POST /api/commander/confirm/{id} with an approval
+	// decision before the tool executes. See pending.go.
+	// Field: {"type": "confirm_required", "id": "pa_xxx", "tool": "...",
+	//         "args": {...}, "summary": "human-readable description"}
+	EventConfirmRequired = "confirm_required"
 )
 
 // deltaEvent is the payload for EventDelta.
@@ -73,4 +81,13 @@ type doneEvent struct {
 type errorEvent struct {
 	Type  string `json:"type"`
 	Error string `json:"error"`
+}
+
+// confirmRequiredEvent is the payload for EventConfirmRequired.
+type confirmRequiredEvent struct {
+	Type    string         `json:"type"`
+	ID      string         `json:"id"`
+	Tool    string         `json:"tool"`
+	Args    map[string]any `json:"args"`
+	Summary string         `json:"summary"`
 }

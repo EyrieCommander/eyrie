@@ -83,13 +83,15 @@ func New(cfg config.Config) (*Server, error) {
 		instanceStore: instStore,
 	}
 	// Commander is constructed AFTER s is populated so its tools can
-	// receive a method value of s.runDiscovery. Method values close
-	// over the receiver pointer, so the discovery function will have
-	// access to the fully-initialized server when called.
+	// receive method values of server methods (runDiscovery, send, etc.).
+	// Method values close over the receiver pointer, so the callbacks
+	// will have access to the fully-initialized server when invoked.
 	cmd, err := commander.NewDefault(commander.DefaultConfig{
-		Projects:  projStore,
-		Chat:      chatSt,
-		Discovery: s.runDiscovery,
+		Projects:      projStore,
+		Chat:          chatSt,
+		Discovery:     s.runDiscovery,
+		SendToProject: s.sendCommanderMessageToProject,
+		RestartAgent:  s.restartAgentByName,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("commander: %w", err)
@@ -167,6 +169,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/commander/chat", s.handleCommanderChat)
 	s.mux.HandleFunc("GET /api/commander/history", s.handleCommanderHistory)
 	s.mux.HandleFunc("DELETE /api/commander/history", s.handleCommanderClear)
+	s.mux.HandleFunc("POST /api/commander/confirm/{id}", s.handleCommanderConfirm)
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)

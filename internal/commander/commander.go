@@ -18,11 +18,21 @@ import (
 // number of parallel tool executions within it).
 const maxTurnIterations = 10
 
+// maxResponseTokens caps each LLM response. OpenRouter (and Anthropic)
+// reserve credit up front equal to input+max_tokens regardless of what
+// the response actually uses, so leaving this at the model's 64k
+// ceiling reserves ~$0.78 per call on Sonnet 4.6 and blocks small
+// balances with 402s. Commander replies are short (state queries +
+// tool calls + a sentence or two of summary) so 4k is plenty.
+const maxResponseTokens = 4096
+
 // systemPrompt shapes the commander's personality and role. Kept minimal
 // in the skeleton — as the tool set grows we'll give it more guidance.
 const systemPrompt = `You are Eyrie, a commander that helps the user manage AI agent projects.
 
 You can see the user's projects, captains, and talons. When asked about them, call the appropriate tool to read live data rather than guessing.
+
+When the user asks you to take an action that requires a tool, call the tool directly — do NOT ask the user to confirm in chat first. The Eyrie system handles user approval for sensitive tools automatically; your job is just to decide what tool to call and with what arguments. After calling a tool, react to its result.
 
 Be concise. Summarize tool results rather than dumping raw JSON at the user.`
 
@@ -35,6 +45,8 @@ type Commander struct {
 	model    string
 	store    *Store
 	tools    *Registry
+	pending  *PendingStore
+	audit    *AuditLog
 }
 
 // Config configures a new Commander.
@@ -43,27 +55,43 @@ type Config struct {
 	Model    string
 	Store    *Store
 	Tools    *Registry
+	Pending  *PendingStore // optional; defaults to a fresh in-memory store
+	Audit    *AuditLog     // optional; nil disables audit logging
 }
 
 // New constructs a Commander. Callers supply all dependencies so this
 // package has no knowledge of how the provider is obtained (env var,
 // config file, vault) — that's the server's responsibility.
 func New(cfg Config) *Commander {
+	if cfg.Pending == nil {
+		cfg.Pending = NewPendingStore()
+	}
 	return &Commander{
 		provider: cfg.Provider,
 		model:    cfg.Model,
 		store:    cfg.Store,
 		tools:    cfg.Tools,
+		pending:  cfg.Pending,
+		audit:    cfg.Audit,
 	}
 }
 
+// Pending returns the pending-action store. Exposed so the server's
+// confirm endpoint can look up and resolve pending actions.
+func (c *Commander) Pending() *PendingStore {
+	return c.pending
+}
+
 // DefaultConfig bundles everything NewDefault needs from the caller. The
-// server populates this with its cached stores and its runDiscovery
-// method value.
+// server populates this with its cached stores and method values for
+// server-side callbacks (discovery, project message injection, agent
+// restart).
 type DefaultConfig struct {
-	Projects  *project.Store
-	Chat      *project.ChatStore
-	Discovery func(ctx context.Context) discovery.Result
+	Projects      *project.Store
+	Chat          *project.ChatStore
+	Discovery     func(ctx context.Context) discovery.Result
+	SendToProject func(ctx context.Context, projectID, message string) error
+	RestartAgent  func(ctx context.Context, name string) error
 }
 
 // NewDefault builds a Commander with the skeleton defaults: OpenRouter
@@ -89,14 +117,25 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 		return nil, fmt.Errorf("no OpenRouter API key in vault — set one via Settings or OPENROUTER_API_KEY env var")
 	}
 	provider := embedded.NewOpenAICompatProvider(apiKey, "https://openrouter.ai/api/v1")
+	audit, err := NewAuditLog()
+	if err != nil {
+		// Non-fatal: the commander still works without an audit log,
+		// just loses the observability benefit.
+		slog.Warn("commander: audit log unavailable", "error", err)
+		audit = nil
+	}
 	return New(Config{
 		Provider: provider,
 		Model:    "anthropic/claude-sonnet-4.6",
 		Store:    store,
+		Pending:  NewPendingStore(),
+		Audit:    audit,
 		Tools: NewRegistry(RegistryDeps{
-			Projects:  deps.Projects,
-			Chat:      deps.Chat,
-			Discovery: deps.Discovery,
+			Projects:      deps.Projects,
+			Chat:          deps.Chat,
+			Discovery:     deps.Discovery,
+			SendToProject: deps.SendToProject,
+			RestartAgent:  deps.RestartAgent,
 		}),
 	}), nil
 }
@@ -148,7 +187,7 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 			// Stream text deltas to the client as they arrive.
 			_ = emit.WriteEvent(deltaEvent{Type: EventDelta, Text: delta})
 		}
-		resp, err := c.provider.ChatStream(ctx, history, toolDefs, c.model, nil, onDelta)
+		resp, err := c.provider.ChatStream(ctx, history, toolDefs, c.model, map[string]any{"max_tokens": maxResponseTokens}, onDelta)
 		if err != nil {
 			c.emitError(emit, fmt.Sprintf("LLM call failed: %v", err))
 			return err
@@ -182,42 +221,17 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 			return nil
 		}
 
-		// Execute each tool call and append results to history.
-		for _, tc := range resp.ToolCalls {
-			args := parseToolArgs(tc.Function.Arguments)
-			_ = emit.WriteEvent(toolCallEvent{
-				Type: EventToolCall,
-				ID:   tc.ID,
-				Name: tc.Function.Name,
-				Args: args,
+		// Process tool calls serially via processToolCalls. It pauses at
+		// the first Confirm tool and leaves later tool_calls unresolved
+		// in the assistant message — the resume path picks them up
+		// after confirmation. See processToolCalls's doc for why.
+		if c.processToolCalls(ctx, resp.ToolCalls, &history, emit) {
+			_ = emit.WriteEvent(doneEvent{
+				Type:         EventDone,
+				InputTokens:  inputTokens,
+				OutputTokens: outputTokens,
 			})
-
-			output, toolErr := c.executeTool(ctx, tc.Function.Name, args)
-			isErr := toolErr != nil
-			if isErr {
-				output = fmt.Sprintf("error: %v", toolErr)
-			}
-
-			_ = emit.WriteEvent(toolResultEvent{
-				Type:   EventToolResult,
-				ID:     tc.ID,
-				Name:   tc.Function.Name,
-				Output: output,
-				Error:  isErr,
-			})
-
-			// Append the tool result to history so the LLM can read it
-			// on the next iteration.
-			toolResultMsg := embedded.Message{
-				Role:       "tool",
-				Content:    output,
-				ToolCallID: tc.ID,
-				Name:       tc.Function.Name,
-			}
-			history = append(history, toolResultMsg)
-			if err := c.store.Append(toolResultMsg); err != nil {
-				slog.Warn("commander: failed to save tool result", "error", err)
-			}
+			return nil
 		}
 		// Loop back: the LLM may now generate a final response with the
 		// tool results in context, or call more tools.
@@ -227,14 +241,328 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 	return fmt.Errorf("turn iteration limit reached")
 }
 
-// executeTool dispatches a tool call to the registry. Unknown tool
-// names return an error string so the LLM can recover on its next turn.
-func (c *Commander) executeTool(ctx context.Context, name string, args map[string]any) (string, error) {
-	tool := c.tools.Get(name)
-	if tool == nil {
-		return "", fmt.Errorf("unknown tool: %s", name)
+// ResumeAfterConfirm processes the result of a user approval or denial
+// and either (a) continues processing remaining unresolved tool_calls
+// from the same assistant message, or (b) runs the LLM continuation
+// once all tool_calls in that batch are resolved. Called by the
+// confirm endpoint in the server.
+//
+// The flow:
+// - If approved: execute the tool, append the result (or error) to
+//   history as the tool_result for the unresolved tool_call.
+// - If denied: append a synthetic tool_result describing the denial.
+// - Check the parent assistant message for other tool_calls that still
+//   lack tool_results (happens when the LLM batched multiple tool_calls
+//   in one reply). If any remain, process them via processToolCalls —
+//   auto tools run immediately, the next Confirm triggers another
+//   confirm_required and pauses again.
+// - Only when all tool_calls in the batch are resolved do we call
+//   runContinuation so the LLM can react to the full batch of results
+//   (e.g. "I've created all three projects").
+//
+// Both audit outcomes are logged.
+func (c *Commander) ResumeAfterConfirm(ctx context.Context, pa *PendingAction, approved bool, reason string, emit Emitter) error {
+	var (
+		output string
+		isErr  bool
+	)
+
+	if approved {
+		tool := c.tools.Get(pa.Tool)
+		if tool == nil {
+			output = fmt.Sprintf("error: tool %q no longer registered", pa.Tool)
+			isErr = true
+		} else {
+			out, err := tool.Execute(ctx, pa.Args)
+			if err != nil {
+				output = fmt.Sprintf("error: %v", err)
+				isErr = true
+			} else {
+				output = out
+			}
+		}
+		c.auditConfirmedExecution(pa, output, isErr, "")
+		_ = emit.WriteEvent(toolResultEvent{
+			Type: EventToolResult, ID: pa.ToolCallID, Name: pa.Tool, Output: output, Error: isErr,
+		})
+	} else {
+		output = fmt.Sprintf("user denied this action")
+		if reason != "" {
+			output += ": " + reason
+		}
+		c.auditConfirmedExecution(pa, output, false, reason)
+		_ = emit.WriteEvent(toolResultEvent{
+			Type: EventToolResult, ID: pa.ToolCallID, Name: pa.Tool, Output: output, Error: false,
+		})
 	}
-	return tool.Execute(ctx, args)
+
+	// Persist the tool result so the LLM sees it on the continuation turn.
+	toolResultMsg := embedded.Message{
+		Role:       "tool",
+		Content:    output,
+		ToolCallID: pa.ToolCallID,
+		Name:       pa.Tool,
+	}
+	if err := c.store.Append(toolResultMsg); err != nil {
+		slog.Warn("commander: failed to save tool result on resume", "error", err)
+	}
+
+	// Rebuild history from the store (which now includes this tool
+	// result) to see if the parent assistant message still has other
+	// unresolved tool_calls. Happens when the LLM batched multiple
+	// tool_calls in one reply — only one pending action was just
+	// resolved; the rest need their own Auto-exec or Confirm pause.
+	stored, err := c.store.All()
+	if err != nil {
+		c.emitError(emit, fmt.Sprintf("loading conversation: %v", err))
+		return err
+	}
+	history := make([]embedded.Message, 0, len(stored)+1)
+	history = append(history, embedded.Message{Role: "system", Content: systemPrompt})
+	history = append(history, stored...)
+
+	if unresolved := findUnresolvedToolCalls(history); len(unresolved) > 0 {
+		if c.processToolCalls(ctx, unresolved, &history, emit) {
+			// Another Confirm paused us — end the resume stream. The
+			// client will POST /confirm for the next pending action.
+			// Token counts reported as zero because this resume did
+			// not invoke the LLM.
+			_ = emit.WriteEvent(doneEvent{Type: EventDone})
+			return nil
+		}
+	}
+
+	// All tool_calls in the batch are resolved. Run the LLM continuation
+	// so it can react to the full set of results.
+	return c.runContinuation(ctx, emit)
+}
+
+// runContinuation runs the LLM loop without prepending a new user
+// message. Used by ResumeAfterConfirm. Shares the bounded-iteration
+// safety of RunTurn.
+func (c *Commander) runContinuation(ctx context.Context, emit Emitter) error {
+	stored, err := c.store.All()
+	if err != nil {
+		c.emitError(emit, fmt.Sprintf("loading conversation: %v", err))
+		return err
+	}
+	history := make([]embedded.Message, 0, len(stored)+1)
+	history = append(history, embedded.Message{Role: "system", Content: systemPrompt})
+	history = append(history, stored...)
+
+	toolDefs := c.tools.Definitions()
+	var inputTokens, outputTokens int
+
+	for iter := 0; iter < maxTurnIterations; iter++ {
+		if err := ctx.Err(); err != nil {
+			c.emitError(emit, fmt.Sprintf("context cancelled: %v", err))
+			return err
+		}
+
+		onDelta := func(delta string) {
+			_ = emit.WriteEvent(deltaEvent{Type: EventDelta, Text: delta})
+		}
+		resp, err := c.provider.ChatStream(ctx, history, toolDefs, c.model, map[string]any{"max_tokens": maxResponseTokens}, onDelta)
+		if err != nil {
+			c.emitError(emit, fmt.Sprintf("LLM call failed: %v", err))
+			return err
+		}
+		inputTokens += resp.InputTokens
+		outputTokens += resp.OutputTokens
+
+		assistantMsg := embedded.Message{
+			Role:      "assistant",
+			Content:   resp.Content,
+			ToolCalls: resp.ToolCalls,
+		}
+		history = append(history, assistantMsg)
+		if err := c.store.Append(assistantMsg); err != nil {
+			slog.Warn("commander: failed to save assistant message on continuation", "error", err)
+		}
+
+		if len(resp.ToolCalls) == 0 {
+			_ = emit.WriteEvent(messageEvent{
+				Type: EventMessage, Role: "assistant", Content: resp.Content,
+			})
+			_ = emit.WriteEvent(doneEvent{
+				Type: EventDone, InputTokens: inputTokens, OutputTokens: outputTokens,
+			})
+			return nil
+		}
+
+		// Process tool_calls serially; pause at the first Confirm.
+		if c.processToolCalls(ctx, resp.ToolCalls, &history, emit) {
+			_ = emit.WriteEvent(doneEvent{
+				Type: EventDone, InputTokens: inputTokens, OutputTokens: outputTokens,
+			})
+			return nil
+		}
+	}
+
+	c.emitError(emit, fmt.Sprintf("continuation exceeded %d iterations", maxTurnIterations))
+	return fmt.Errorf("continuation iteration limit reached")
+}
+
+// processToolCalls iterates a batch of tool_calls serially. Auto tools
+// execute immediately (emitting tool_result and appending to history).
+// At the first Confirm tool the helper creates a pending action, emits
+// confirm_required, and returns paused=true WITHOUT processing any
+// later tool_calls — they remain in the assistant message unresolved
+// and are re-examined on resume by findUnresolvedToolCalls.
+//
+// Why serial: the OpenAI tool-call contract requires N tool_calls be
+// followed by N matching tool_results before the next LLM turn. If we
+// emit confirm_required for multiple tool_calls in one go, the user
+// only resolves one before the LLM re-runs, and the LLM sees a
+// partially-resolved group and hallucinates success for the rest.
+// Processing serially — one confirm at a time — keeps the contract
+// intact across arbitrary interleavings of Auto and Confirm tools.
+func (c *Commander) processToolCalls(
+	ctx context.Context,
+	tcs []embedded.ToolCall,
+	history *[]embedded.Message,
+	emit Emitter,
+) (paused bool) {
+	for _, tc := range tcs {
+		args := parseToolArgs(tc.Function.Arguments)
+		_ = emit.WriteEvent(toolCallEvent{
+			Type: EventToolCall, ID: tc.ID, Name: tc.Function.Name, Args: args,
+		})
+
+		tool := c.tools.Get(tc.Function.Name)
+		if tool == nil {
+			output := fmt.Sprintf("error: unknown tool %q", tc.Function.Name)
+			_ = emit.WriteEvent(toolResultEvent{
+				Type: EventToolResult, ID: tc.ID, Name: tc.Function.Name, Output: output, Error: true,
+			})
+			c.appendToolResult(history, tc.ID, tc.Function.Name, output)
+			continue
+		}
+
+		if tool.Risk == RiskConfirm {
+			summary := summarizeTool(tool, args)
+			pa := c.pending.Add(tc.Function.Name, args, summary, tc.ID)
+			_ = emit.WriteEvent(confirmRequiredEvent{
+				Type:    EventConfirmRequired,
+				ID:      pa.ID,
+				Tool:    tc.Function.Name,
+				Args:    args,
+				Summary: summary,
+			})
+			return true
+		}
+
+		// RiskAuto: execute immediately.
+		output, toolErr := tool.Execute(ctx, args)
+		isErr := toolErr != nil
+		if isErr {
+			output = fmt.Sprintf("error: %v", toolErr)
+		}
+		c.auditAutoExecution(tc.Function.Name, args, output, toolErr)
+		_ = emit.WriteEvent(toolResultEvent{
+			Type: EventToolResult, ID: tc.ID, Name: tc.Function.Name, Output: output, Error: isErr,
+		})
+		c.appendToolResult(history, tc.ID, tc.Function.Name, output)
+	}
+	return false
+}
+
+// findUnresolvedToolCalls returns the tool_calls from the most recent
+// assistant message that still lack a matching tool_result in history.
+// Returns nil if all are resolved or there is no such message. Used on
+// resume to pick up where RunTurn/runContinuation left off when the
+// assistant message batched multiple tool_calls.
+func findUnresolvedToolCalls(history []embedded.Message) []embedded.ToolCall {
+	lastAsst := -1
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].Role == "assistant" && len(history[i].ToolCalls) > 0 {
+			lastAsst = i
+			break
+		}
+	}
+	if lastAsst == -1 {
+		return nil
+	}
+	resolved := make(map[string]bool)
+	for i := lastAsst + 1; i < len(history); i++ {
+		if history[i].Role == "tool" && history[i].ToolCallID != "" {
+			resolved[history[i].ToolCallID] = true
+		}
+	}
+	var unresolved []embedded.ToolCall
+	for _, tc := range history[lastAsst].ToolCalls {
+		if !resolved[tc.ID] {
+			unresolved = append(unresolved, tc)
+		}
+	}
+	return unresolved
+}
+
+// appendToolResult writes a tool-result message to both history and
+// the conversation store. Called after executing an Auto tool.
+func (c *Commander) appendToolResult(history *[]embedded.Message, toolCallID, toolName, output string) {
+	msg := embedded.Message{
+		Role:       "tool",
+		Content:    output,
+		ToolCallID: toolCallID,
+		Name:       toolName,
+	}
+	*history = append(*history, msg)
+	if err := c.store.Append(msg); err != nil {
+		slog.Warn("commander: failed to save tool result", "error", err)
+	}
+}
+
+// auditAutoExecution logs an auto-executed tool call. Low-cost — skipped
+// if no audit log is configured.
+func (c *Commander) auditAutoExecution(toolName string, args map[string]any, output string, execErr error) {
+	if c.audit == nil {
+		return
+	}
+	entry := AuditEntry{
+		Tool: toolName, Args: args, Risk: "auto", Decision: "auto", Outcome: "success",
+	}
+	if execErr != nil {
+		entry.Outcome = "error"
+		entry.Error = execErr.Error()
+	}
+	if err := c.audit.Append(entry); err != nil {
+		slog.Warn("commander: audit append failed", "error", err)
+	}
+}
+
+// auditConfirmedExecution logs a Confirm-tier tool call after the user
+// approves or denies it.
+func (c *Commander) auditConfirmedExecution(pa *PendingAction, output string, isErr bool, denialReason string) {
+	if c.audit == nil {
+		return
+	}
+	entry := AuditEntry{
+		PendingID: pa.ID,
+		Tool:      pa.Tool,
+		Args:      pa.Args,
+		Risk:      "confirm",
+		Decision:  string(pa.Status),
+		Outcome:   "success",
+		Reason:    denialReason,
+	}
+	if isErr {
+		entry.Outcome = "error"
+		entry.Error = output
+	}
+	if err := c.audit.Append(entry); err != nil {
+		slog.Warn("commander: audit append failed", "error", err)
+	}
+}
+
+// summarizeTool returns a short human-readable description of a tool
+// invocation. Falls back to "<name>(<args>)" if the tool has no Summarize.
+func summarizeTool(tool *Tool, args map[string]any) string {
+	if tool.Summarize != nil {
+		return tool.Summarize(args)
+	}
+	argsJSON, _ := json.Marshal(args)
+	return fmt.Sprintf("%s(%s)", tool.Name, string(argsJSON))
 }
 
 // parseToolArgs best-effort parses the LLM's JSON argument string into

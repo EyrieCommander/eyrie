@@ -54,9 +54,11 @@
 - **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
 - **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — closed (pre-microkernel paths)
 - **#5148 (http_request per-host allowlist)**: Closed (pre-microkernel paths) — needs redo on new crate layout
-- **#5696 (session reset/delete tools)**: Draft — `SessionResetTool` + `SessionDeleteTool`, not registered by default (destructive). Supersedes #5147.
-- **#5705 (session abort + incremental persistence)**: Draft — `POST /api/sessions/{id}/abort` + streaming responses saved every 500ms. Eyrie's stop button and crash resilience depend on this.
+- **#5696 (session reset/delete tools)**: Open, ready for review — `SessionResetTool` + `SessionDeleteTool`, not registered by default (destructive). Labels: `tool`, `security`. Supersedes #5147.
+- **#5705 (session abort + incremental persistence)**: Open, ready for review — `POST /api/sessions/{id}/abort` + streaming responses saved every 500ms. Auto-routed to @jordanthejet by review bot. Eyrie's stop button and crash resilience depend on this.
 - **#5701 (clear_messages issue)**: Open issue — `clear_messages` trait method for O(1) session reset. Follow-up optimization for #5696.
+- **#5791 (When to Supersede docs)**: Open, ready for review — adds guidance on when to push fixups vs supersede contributor PRs. Closes #4363.
+- **#4363 (push fixups instead of superseding)**: Closed in favor of docs PR (#5791).
 
 ---
 
@@ -149,6 +151,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - [ ] **Session management**: Test session group delete across all frameworks
 - [x] **Destroy talons on project reset**: `POST /api/projects/{id}/reset` clears chat, resets commander/captain sessions, stops+deletes talons. Auto-start chat restored.
 - [ ] **Hide project sessions from 1:1 chat**: Filter out sessions matching a project ID from the ChatPanel session list. Project conversations should only be accessed via the project chat UI — showing them in 1:1 creates split-brain confusion. Later: clicking a project session could redirect to the project detail page instead.
+- [ ] **Bulk project selection + delete in UI**: Project list page needs multi-select (checkboxes or shift-click) with a bulk delete action. Currently deleting test projects requires per-row action or filesystem cleanup. Should destroy same-UUID workspace directory alongside the `.json` metadata, matching the single-delete path.
 - [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
 - [x] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 - [x] **Rich tool output display**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content. Also HTML preview, image preview, JSON highlighting, file path links and diff display

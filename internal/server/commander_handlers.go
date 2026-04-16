@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/Audacity88/eyrie/internal/commander"
 )
 
 // handleCommanderChat streams a commander turn via SSE.
@@ -71,4 +73,61 @@ func (s *Server) handleCommanderClear(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
+}
+
+// handleCommanderConfirm approves or denies a pending Confirm-tier tool
+// call. On approve, the tool is executed; on deny, the denial is
+// recorded. Either way, the commander runs a continuation turn so the
+// LLM can react to the outcome, and that turn is streamed back as SSE.
+// POST /api/commander/confirm/{id}
+// Body: {"approved": true|false, "reason": "optional"}
+//
+// WHY a separate endpoint (not approval events over the chat stream):
+// the LLM cannot fake this HTTP request — it is purely out-of-band.
+// This is the core of the structured confirmation design: the LLM's
+// only way to get a Confirm-tier tool executed is for an external
+// client to POST approval here.
+func (s *Server) handleCommanderConfirm(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pending id is required"})
+		return
+	}
+	var body struct {
+		Approved bool   `json:"approved"`
+		Reason   string `json:"reason,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	var (
+		pa  *commander.PendingAction
+		err error
+	)
+	if body.Approved {
+		pa, err = s.commander.Pending().Approve(id)
+	} else {
+		pa, err = s.commander.Pending().Deny(id, body.Reason)
+	}
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	sse, err := NewSSEWriter(w)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	// Detached context so the continuation turn survives the client
+	// disconnecting; same 5-minute ceiling as the chat endpoint.
+	turnCtx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+
+	if err := s.commander.ResumeAfterConfirm(turnCtx, pa, body.Approved, body.Reason, sse); err != nil {
+		slog.Warn("commander resume failed", "error", err)
+	}
 }
