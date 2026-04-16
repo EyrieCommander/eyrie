@@ -4,7 +4,16 @@
 
 **Branch:** `feature/project-orchestrator`
 **Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
-**Design:** `eyrie/project-design.pen` (Pencil mockups), implementation plan at `~/.claude/plans/majestic-crunching-tiger.md`
+**Design:** `eyrie/project-design.pen` (Pencil mockups), implementation plans at `~/.claude/plans/majestic-crunching-tiger.md` and `~/.claude/plans/purrfect-sprouting-kahn.md`
+
+## Unified Onboarding Flow (in progress)
+
+Current work lives in `~/.claude/plans/purrfect-sprouting-kahn.md` (single source of truth). Mockups at `project-design.pen` y=4400 (framework drill-down) + y=6600 (unified flow overview). Three macro phases — commander (placeholder) → frameworks → projects — with agents provisioned inline inside project creation.
+
+### Deferred follow-ups from this work
+
+- [ ] **Knowledge base for the commander.** The context-aware chat panel teaches users to ask questions like "what framework should I pick?", "what's a captain vs talon?", "help me resolve this install error". Without a knowledge base backing the commander, those prompts produce generic LLM answers instead of Eyrie-specific guidance. Needs: curated docs per framework (trade-offs, install quirks, config option semantics), concept explanations (captain vs talon, API keys, provider selection, persona setups), troubleshooting guides (common install errors per framework, network issues, permission errors), and retrieval/RAG plumbing so the commander can cite relevant sections rather than hallucinate.
+- [ ] **Framework-level vs agent-level config cascade.** `registry.json`'s `config_schema.common_fields` mixes framework-level fields (default provider, default model, binary path) with agent-level fields (workspace path, channels). Every field currently lives in every agent's config file. Coordination questions to design: should editing "provider" in the framework-level form cascade to existing instances? Or should each instance override independently? Where does inheritance live — registry, a framework-level config file, or convention? Currently both the onboarding form and ConfigPage edit per-agent files; the onboarding form is scoped to the framework's default single agent.
 
 ### What's working:
 - Commander system: select/change commander, briefing on assignment, inline role instructions per project
