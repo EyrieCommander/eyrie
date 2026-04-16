@@ -672,6 +672,23 @@ func (s *Server) ensureCaptainBriefing(proj *project.Project, force ...bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
+	// Re-fetch the project after the sleep — it may have been deleted, had
+	// its captain swapped, or had its goal/description edited. Using the
+	// stale pointer would brief against the wrong context (or a captain
+	// the project no longer owns).
+	if s.projectStore != nil && proj != nil {
+		fresh, err := s.projectStore.Get(proj.ID)
+		if err != nil || fresh == nil {
+			slog.Debug("ensureCaptainBriefing: project gone after delay, skipping", "project", proj.ID, "error", err)
+			return
+		}
+		proj = fresh
+	}
+	if proj == nil || proj.OrchestratorID == "" {
+		slog.Debug("ensureCaptainBriefing: project has no captain, skipping")
+		return
+	}
+
 	disc := s.runDiscovery(ctx)
 	var found *discovery.AgentResult
 	for i := range disc.Agents {

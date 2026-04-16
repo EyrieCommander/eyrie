@@ -131,6 +131,13 @@ function InstallStep({ framework, safeId, onRun }: Props) {
   );
 }
 
+// Wrap a shell argument in single quotes so it survives spaces and special
+// characters. Single-quote escaping for POSIX sh: close-quote, backslash-quote,
+// re-open-quote around each literal `'` in the input.
+function shellQuote(s: string): string {
+  return `'${s.replace(/'/g, `'\\''`)}'`;
+}
+
 // ── step 3: configure ───────────────────────────────────────────────────
 function ConfigureStep({ framework, safeId, onRun }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;
@@ -138,11 +145,14 @@ function ConfigureStep({ framework, safeId, onRun }: Props) {
 
   const handleWizard = () => {
     const binary = framework.binary_path || safeId;
-    onRun(`${binary} onboard`);
+    // Quote the binary path so paths with spaces ("/Applications/My Claw/bin")
+    // don't parse as two argv entries.
+    onRun(`${shellQuote(binary)} onboard`);
   };
 
   const handleEdit = () => {
-    onRun(`$\{EDITOR:-vi\} ${framework.config_path}`);
+    // Quote the config path for the same reason.
+    onRun(`$\{EDITOR:-vi\} ${shellQuote(framework.config_path)}`);
   };
 
   return (
@@ -270,16 +280,20 @@ function LaunchStep({ framework, safeId, onRun }: Props) {
   const handleGateway = () => {
     if (framework.start_cmd) onRun(framework.start_cmd);
   };
-  const handleChat = () => {
+
+  // Pre-compute whether we can actually produce a chat command. If not,
+  // disable the button instead of leaving it clickable with a silent no-op.
+  const chatFallback = CHAT_COMMANDS[safeId];
+  const chatCommand: string | null = (() => {
     const binary = framework.binary_path;
-    const chatArgs = (CHAT_COMMANDS[safeId] || "")
-      .split(" ")
-      .slice(1)
-      .join(" ");
-    const cmd = binary
-      ? `${binary}${chatArgs ? " " + chatArgs : ""}`
-      : CHAT_COMMANDS[safeId];
-    if (cmd) onRun(cmd);
+    const chatArgs = (chatFallback || "").split(" ").slice(1).join(" ");
+    if (binary) return `${shellQuote(binary)}${chatArgs ? " " + chatArgs : ""}`;
+    if (chatFallback) return chatFallback;
+    return null;
+  })();
+
+  const handleChat = () => {
+    if (chatCommand) onRun(chatCommand);
   };
 
   return (
@@ -300,12 +314,20 @@ function LaunchStep({ framework, safeId, onRun }: Props) {
         )}
         <button
           onClick={handleChat}
-          className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
+          disabled={!chatCommand}
+          title={chatCommand ? undefined : "no chat command known for this framework"}
+          className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40 disabled:cursor-not-allowed"
         >
           <TerminalIcon className="h-3 w-3" />
           launch chat
         </button>
       </div>
+      {!chatCommand && (
+        <p className="text-[10px] text-text-muted">
+          No chat command is registered for {framework.name}. Install and
+          configure first, or launch the gateway and chat via your own client.
+        </p>
+      )}
 
       {framework.health_url && <HealthCheck url={framework.health_url} />}
     </div>

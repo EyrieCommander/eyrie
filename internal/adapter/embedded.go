@@ -197,8 +197,20 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 	if a.vault != nil {
 		apiKey = a.vault.Get(a.provider)
 	} else {
-		// Direct env-var fallback when vault is unavailable
-		apiKey = os.Getenv(strings.ToUpper(a.provider) + "_API_KEY")
+		// Direct env-var fallback when vault is unavailable. Sanitize the
+		// provider name so values like "azure-openai" or "anthropic.vertex"
+		// produce valid env var names (AZURE_OPENAI_API_KEY etc).
+		sanitized := strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				return r
+			case r >= 'a' && r <= 'z':
+				return r - ('a' - 'A')
+			default:
+				return '_'
+			}
+		}, a.provider)
+		apiKey = os.Getenv(sanitized + "_API_KEY")
 	}
 	if apiKey == "" {
 		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q (checked vault and env)", a.provider))

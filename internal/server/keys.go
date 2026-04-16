@@ -81,10 +81,13 @@ func (s *Server) handleSetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Valid reflects whether validation actually ran and passed. When the
+	// client asked to skip validation we haven't proved anything about the
+	// key, so don't claim Valid: true.
 	writeJSON(w, http.StatusOK, setKeyResponse{
 		Provider:  provider,
 		MaskedKey: maskKey(body.Key),
-		Valid:     true,
+		Valid:     verified,
 		Verified:  verified,
 	})
 }

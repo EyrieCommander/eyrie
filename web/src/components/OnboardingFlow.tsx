@@ -96,13 +96,10 @@ export default function OnboardingFlow() {
   );
   const projectsComplete = projects.length > 0;
 
-  // Default-land on the first-incomplete phase (frameworks until one is ready,
-  // then projects until one exists, then projects again as the home base).
-  const defaultActive: PhaseId = frameworksReady
-    ? projectsComplete
-      ? "projects"
-      : "projects"
-    : "frameworks";
+  // Default-land on frameworks until at least one is ready; otherwise stay
+  // on the projects phase (whether or not a project has been created — it
+  // doubles as the home base once frameworks are done).
+  const defaultActive: PhaseId = frameworksReady ? "projects" : "frameworks";
   const [active, setActive] = useState<PhaseId>(defaultActive);
   // Only auto-reposition the user if they haven't picked a phase manually.
   const [touched, setTouched] = useState(false);
@@ -118,12 +115,14 @@ export default function OnboardingFlow() {
       : active === "frameworks"
         ? "current"
         : "pending";
+    // Projects: complete once at least one exists. Once frameworks are
+    // ready it's the "current" focus regardless of which phase button the
+    // user happens to have clicked — that's why both branches of the
+    // previous triple-nested ternary collapsed to "current".
     const projects: PhaseState = projectsComplete
       ? "complete"
       : frameworksReady
-        ? active === "projects"
-          ? "current"
-          : "current"
+        ? "current"
         : "pending";
     return { commander, frameworks, projects };
   }, [active, frameworksReady, projectsComplete]);

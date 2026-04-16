@@ -303,12 +303,23 @@ func (s *Server) handleBriefCaptain(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if found == nil || !found.Alive {
-		// Try to auto-start if it's a provisioned instance
+		// Try to auto-start if it's a provisioned instance. instanceStore
+		// is guaranteed non-nil post-NewServer — matches handleGetHierarchy /
+		// handleGetCommander / handleSetCommander, which also skip the guard.
 		instStore := s.instanceStore
-		if instStore != nil {
+		{
 			if inst, getErr := instStore.Get(proj.OrchestratorID); getErr == nil {
 				slog.Info("auto-starting captain for briefing", "instance", inst.Name)
-				if startErr := manager.ExecuteWithConfig(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart); startErr != nil {
+				// WHY ExecuteWithConfigEnv + vault.EnvSlice: a start without
+				// vault env vars produces an agent that can't authenticate
+				// against its configured provider. Matches the pattern used
+				// by handleCreateInstance (instances.go:118) and
+				// handleInstanceAction (instances.go:359).
+				var env []string
+				if s.vault != nil {
+					env = s.vault.EnvSlice()
+				}
+				if startErr := manager.ExecuteWithConfigEnv(r.Context(), inst.Framework, inst.ConfigPath, manager.ActionStart, env); startErr != nil {
 					slog.Warn("failed to auto-start captain", "instance", inst.Name, "error", startErr)
 					writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "captain is stopped and failed to start: " + startErr.Error()})
 					return

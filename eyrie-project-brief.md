@@ -66,7 +66,7 @@ These three directions naturally compose — management is the foundation, compa
 │ 14:23:01 Task completed: "summarize inbox"              │
 │ 14:19:44 Telegram message received                      │
 │ 14:19:44 Routing to skill: email-skill                  │
-└─────────────────────────────────────────────────────────┤
+└─────────────────────────────────────────────────────────┘
  [I]nstall  [C]ompare  [M]arketplace  [Q]uit  [?]Help
 ```
 ### Local Web App

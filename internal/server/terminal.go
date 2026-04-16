@@ -51,11 +51,11 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 	var cmd *exec.Cmd
 	if useTmux {
 		confPath, confErr := ensureTmuxConfig()
-		if confErr != nil {
-			slog.Warn("tmux config unavailable, falling back to plain shell", "error", confErr)
+		socketPath, sockErr := tmuxSocketPath()
+		if confErr != nil || sockErr != nil {
+			slog.Warn("tmux config/socket unavailable, falling back to plain shell", "confErr", confErr, "sockErr", sockErr)
 			useTmux = false
 		} else {
-			socketPath := tmuxSocketPath()
 			// Use a dedicated socket (-L is socket name) so Eyrie's tmux sessions
 			// are isolated from the user's personal tmux server and use our config.
 			// -A: attach if session exists, create if not

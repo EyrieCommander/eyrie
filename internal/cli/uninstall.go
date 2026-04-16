@@ -219,8 +219,14 @@ func unwireDiscovery(fw *registry.Framework) error {
 }
 
 // clearInstallStatus removes a framework's entry from the install status file.
+// Best-effort: the file is derived state (gets rebuilt from filesystem checks),
+// so we log and skip rather than fail the uninstall if we can't touch it.
 func clearInstallStatus(frameworkID string) {
-	home, _ := os.UserHomeDir()
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		fmt.Fprintf(os.Stderr, "clearInstallStatus: cannot resolve home dir (%v); skipping\n", err)
+		return
+	}
 	statusFile := filepath.Join(home, ".eyrie", "install_status.json")
 
 	data, err := os.ReadFile(statusFile)

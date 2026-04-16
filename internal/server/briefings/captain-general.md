@@ -20,15 +20,17 @@ Always check HTTP status on mutating requests. On 4xx/5xx, surface the body and 
 
 ## Bootstrap
 
-Use `curl -fsS` (fail on HTTP error, silent, show errors) so a failed fetch
-aborts the script instead of writing error HTML/JSON into TOOLS.md.
+Download into a temp file first and only replace/append TOOLS.md on success.
+`>` truncates the destination *before* curl runs — a failed fetch would
+otherwise leave TOOLS.md empty or half-written.
 
-1. Fetch the API reference and write it to TOOLS.md (overwrite). If the
-   request fails, TOOLS.md is left untouched and the error surfaces:
-   Bash: set -e; curl -fsS http://localhost:7200/api/reference > TOOLS.md
+1. Fetch the API reference into a temp file, then atomically move it to
+   TOOLS.md (old contents only replaced on success):
+   Bash: set -e; tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; curl -fsS http://localhost:7200/api/reference > "$tmp"; mv "$tmp" TOOLS.md
 
-2. Append your project details to TOOLS.md with a separator so the sections
-   are unambiguously distinct. If either write fails, abort:
-   Bash: set -e; printf '\n\n---\n# Project Details\n\n' >> TOOLS.md && curl -fsS http://localhost:7200/api/projects/{{.ProjectID}} >> TOOLS.md
+2. Build the project-details section in a second temp file with its
+   separator header, then append the whole section to TOOLS.md only if
+   both the printf and the curl succeeded:
+   Bash: set -e; tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; printf '\n\n---\n# Project Details\n\n' > "$tmp"; curl -fsS http://localhost:7200/api/projects/{{.ProjectID}} >> "$tmp"; cat "$tmp" >> TOOLS.md
 
 Do NOT introduce yourself or start a conversation — just fetch and save. The project chat will begin separately.

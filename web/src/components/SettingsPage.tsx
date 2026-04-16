@@ -371,6 +371,7 @@ function ApiKeysSection() {
               <select
                 value={newProvider}
                 onChange={(e) => setNewProvider(e.target.value)}
+                aria-label="API provider"
                 className="rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
               >
                 <option value="">provider...</option>
@@ -385,11 +386,13 @@ function ApiKeysSection() {
                   onChange={(e) => setNewKey(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
                   placeholder="sk-..."
+                  aria-label={`API key${newProvider ? ` for ${newProvider}` : ""}`}
                   className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none"
                 />
                 <button
                   type="button"
                   onClick={() => setShowNewKey(!showNewKey)}
+                  aria-label={showNewKey ? "hide API key" : "show API key"}
                   className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
                 >
                   {showNewKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}

@@ -28,21 +28,44 @@ set -g mouse on
 set -g default-terminal "xterm-256color"
 `
 
-// tmuxConfigPath returns the path to Eyrie's tmux config file.
-func tmuxConfigPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".eyrie", "tmux.conf")
+// eyrieHomeDir returns ~/.eyrie, preferring os.UserHomeDir and falling back
+// to $HOME. Returns an error if neither is usable — callers should treat
+// that as "tmux not usable for this session" and bail to a plain shell
+// rather than silently building paths like "/.eyrie/tmux.conf".
+func eyrieHomeDir() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		if env := os.Getenv("HOME"); env != "" {
+			home = env
+		} else {
+			return "", fmt.Errorf("cannot resolve home directory: %w", err)
+		}
+	}
+	return filepath.Join(home, ".eyrie"), nil
+}
+
+// tmuxConfigPath returns the path to Eyrie's tmux config file, or an error
+// if the home directory can't be resolved.
+func tmuxConfigPath() (string, error) {
+	dir, err := eyrieHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "tmux.conf"), nil
 }
 
 // ensureTmuxConfig writes the Eyrie tmux config if it doesn't exist or has changed.
 // Returns the path and a non-nil error if the directory or file couldn't be
 // written; callers should treat an error as "tmux not usable for this session".
 func ensureTmuxConfig() (string, error) {
-	path := tmuxConfigPath()
+	path, err := tmuxConfigPath()
+	if err != nil {
+		return "", err
+	}
 
 	// Check if it already has the right content
-	existing, err := os.ReadFile(path)
-	if err == nil && string(existing) == tmuxConfContent {
+	existing, rerr := os.ReadFile(path)
+	if rerr == nil && string(existing) == tmuxConfContent {
 		return path, nil
 	}
 
@@ -56,11 +79,15 @@ func ensureTmuxConfig() (string, error) {
 	return path, nil
 }
 
-// tmuxSocketPath returns the path for Eyrie's dedicated tmux socket.
-// Using a separate socket isolates Eyrie sessions from the user's personal tmux.
-func tmuxSocketPath() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".eyrie", "tmux.sock")
+// tmuxSocketPath returns the path for Eyrie's dedicated tmux socket, or an
+// error if the home directory can't be resolved. Using a separate socket
+// isolates Eyrie sessions from the user's personal tmux server.
+func tmuxSocketPath() (string, error) {
+	dir, err := eyrieHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "tmux.sock"), nil
 }
 
 // hasTmux checks if tmux is available on the system.

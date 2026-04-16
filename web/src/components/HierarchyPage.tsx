@@ -241,12 +241,22 @@ function GuideView({ hierarchy, refresh }: {
   const { agents } = useData();
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [fwLoading, setFwLoading] = useState(true);
+  const [fwError, setFwError] = useState<string | null>(null);
   const [showCommanderSetup, setShowCommanderSetup] = useState(false);
   const [fwExpanded, setFwExpanded] = useState(false);
 
-  useEffect(() => {
-    fetchFrameworks().then(setFrameworks).catch(() => {}).finally(() => setFwLoading(false));
+  const loadFrameworks = useCallback(() => {
+    setFwLoading(true);
+    setFwError(null);
+    fetchFrameworks()
+      .then((fw) => { setFrameworks(fw); setFwError(null); })
+      .catch((e) => {
+        setFwError(e instanceof Error ? e.message : "failed to load frameworks");
+      })
+      .finally(() => setFwLoading(false));
   }, []);
+
+  useEffect(() => { loadFrameworks(); }, [loadFrameworks]);
 
   const installedFrameworks = new Set(agents.map((a) => a.framework));
   const hasFrameworks = installedFrameworks.size > 0;
@@ -290,6 +300,16 @@ function GuideView({ hierarchy, refresh }: {
         </p>
         {fwLoading ? (
           <div className="ml-7 py-4 text-xs text-text-muted">loading frameworks...</div>
+        ) : fwError ? (
+          <div className="ml-7 rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red flex items-center gap-2">
+            <span className="flex-1">failed to load frameworks: {fwError}</span>
+            <button
+              onClick={loadFrameworks}
+              className="rounded border border-red/30 px-2 py-0.5 text-[10px] text-red hover:bg-red/10 transition-colors"
+            >
+              retry
+            </button>
+          </div>
         ) : (
           <div className="ml-7 space-y-1.5">
             {frameworks.map((fw) => {

@@ -18,9 +18,26 @@ function classifyOutput(output: string | undefined): OutputStatus {
     return "error";
   }
 
-  // JSON responses with "error" key (e.g., API error responses)
-  if (lower.startsWith("{") && lower.includes('"error"')) {
-    return "error";
+  // JSON responses with a truthy "error" key (e.g., API error responses).
+  // Try to parse when it looks like JSON so `{"error": false}` or
+  // `{"error": null}` isn't miscategorised. Fall back to the cheap
+  // substring heuristic only if parsing fails.
+  if (lower.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(output!);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        Object.prototype.hasOwnProperty.call(parsed, "error") &&
+        parsed.error != null &&
+        parsed.error !== false &&
+        parsed.error !== ""
+      ) {
+        return "error";
+      }
+    } catch {
+      if (lower.includes('"error"')) return "error";
+    }
   }
 
   // HTTP error status codes in output

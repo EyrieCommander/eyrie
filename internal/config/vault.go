@@ -93,19 +93,38 @@ func (v *KeyVault) Get(provider string) string {
 }
 
 // Set stores an API key for the given provider and saves atomically.
+// On save() failure the in-memory map is rolled back so it stays consistent
+// with what actually made it to disk.
 func (v *KeyVault) Set(provider, key string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	prev, had := v.keys[provider]
 	v.keys[provider] = key
-	return v.save()
+	if err := v.save(); err != nil {
+		if had {
+			v.keys[provider] = prev
+		} else {
+			delete(v.keys, provider)
+		}
+		return err
+	}
+	return nil
 }
 
 // Delete removes an API key for the given provider and saves.
+// On save() failure the key is restored so memory doesn't diverge from disk.
 func (v *KeyVault) Delete(provider string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	prev, had := v.keys[provider]
 	delete(v.keys, provider)
-	return v.save()
+	if err := v.save(); err != nil {
+		if had {
+			v.keys[provider] = prev
+		}
+		return err
+	}
+	return nil
 }
 
 // List returns a copy of all stored keys (not env vars).

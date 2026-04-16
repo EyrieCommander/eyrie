@@ -509,29 +509,41 @@ export default function ProjectDetail() {
                     disabled={!!startingAgent}
                     onClick={async () => {
                       setStartingAgent("all");
-                      try {
-                        // Start all agents in parallel
-                        await Promise.all(needsStart.map(async (a) => {
-                          if (a.isInstance) await instanceAction(a.id, "start");
-                          else await agentAction(a.id, "start");
-                        }));
-                        // Clear any prior interval AND timeout — otherwise
-                        // an older setTimeout could fire mid-poll and
-                        // prematurely stop the new one.
-                        if (pollRef.current.interval) clearInterval(pollRef.current.interval);
-                        if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
-                        // Single shared poll for all agents to come online
-                        const poll = setInterval(refresh, 2000);
-                        pollRef.current.interval = poll;
-                        pollRef.current.timeout = setTimeout(() => {
-                          clearInterval(poll);
-                          pollRef.current.timeout = null;
-                          setStartingAgent("");
-                        }, 30000);
-                      } catch (e) {
-                        setLoadError(e instanceof Error ? e.message : "failed to start agents");
-                        setStartingAgent("");
+                      // allSettled (not all) so one failure doesn't abort the
+                      // rest — start as many as we can, then surface which
+                      // failed. Polling still runs for the agents that DID
+                      // start; refresh() will reveal their status.
+                      const results = await Promise.allSettled(
+                        needsStart.map((a) =>
+                          a.isInstance ? instanceAction(a.id, "start") : agentAction(a.id, "start"),
+                        ),
+                      );
+                      const failures = results
+                        .map((r, i) => ({ r, a: needsStart[i] }))
+                        .filter(({ r }) => r.status === "rejected");
+                      if (failures.length > 0) {
+                        const msg = failures
+                          .map(({ r, a }) => {
+                            const reason = (r as PromiseRejectedResult).reason;
+                            const txt = reason instanceof Error ? reason.message : String(reason);
+                            return `${a.name}: ${txt}`;
+                          })
+                          .join("; ");
+                        setLoadError(`failed to start ${failures.length}/${needsStart.length} agent${failures.length === 1 ? "" : "s"}: ${msg}`);
                       }
+                      // Clear any prior interval AND timeout — otherwise
+                      // an older setTimeout could fire mid-poll and
+                      // prematurely stop the new one.
+                      if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+                      if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
+                      // Single shared poll for all agents to come online
+                      const poll = setInterval(refresh, 2000);
+                      pollRef.current.interval = poll;
+                      pollRef.current.timeout = setTimeout(() => {
+                        clearInterval(poll);
+                        pollRef.current.timeout = null;
+                        setStartingAgent("");
+                      }, 30000);
                     }}
                     className="rounded bg-accent px-4 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
                   >

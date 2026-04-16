@@ -230,7 +230,18 @@ export default function FrameworkDetail() {
             <button
               onClick={() => {
                 if (!safeId) return;
-                sendToTerminal(framework.install_cmd || `eyrie install ${safeId}`);
+                // install_cmd comes from the registry (trusted but not
+                // hermetic). Only honour it if it starts with a known
+                // package-manager prefix; otherwise fall back to the
+                // safe `eyrie install` command. This prevents a compromised
+                // or mistyped registry entry from running arbitrary shell
+                // against the user's tmux.
+                const INSTALL_ALLOWLIST = /^\s*(cargo|pip|pip3|npm|pnpm|yarn|brew|apt|apt-get|dnf|choco|go|uv)\b/;
+                const raw = framework.install_cmd;
+                const cmd = raw && INSTALL_ALLOWLIST.test(raw)
+                  ? raw
+                  : `eyrie install ${safeId}`;
+                sendToTerminal(cmd);
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
             >

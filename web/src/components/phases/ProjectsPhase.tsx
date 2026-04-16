@@ -70,6 +70,19 @@ export default function ProjectsPhase() {
   const [captain, setCaptain] = useState<TeamSlot>(newSlot(defaultFramework));
   const [talons, setTalons] = useState<TeamSlot[]>([]);
 
+  // When the installed framework list loads (defaultFramework transitions from
+  // the hard-coded "zeroclaw" to the first *actually installed* framework),
+  // sync the captain's framework as long as the user hasn't customised it
+  // yet. An "uncustomised" new-kind slot is one with an empty name; once
+  // they start typing or pick an existing captain, leave it alone.
+  useEffect(() => {
+    if (!defaultFramework) return;
+    if (captain.kind !== "new") return;
+    if (captain.framework === defaultFramework) return;
+    if (captain.name.trim() !== "") return;
+    setCaptain(newSlot(defaultFramework));
+  }, [defaultFramework, captain]);
+
   // Filter pool to framework-compatible instances, and separate existing captains / talons
   const frameworkInstances = useMemo(
     () => instances.filter((i) => i.framework === framework),
