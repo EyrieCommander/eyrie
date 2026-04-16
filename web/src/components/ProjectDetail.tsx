@@ -184,11 +184,16 @@ export default function ProjectDetail() {
     try {
       if (isInstance) await instanceAction(agentId, "start");
       else await agentAction(agentId, "start");
+      // Clear any prior interval AND timeout before scheduling new ones
+      // so an older timer can't fire mid-poll and stop the new one.
+      if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+      if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
       // Poll until the agent shows as running
       const poll = setInterval(refresh, 2000);
       pollRef.current.interval = poll;
       pollRef.current.timeout = setTimeout(() => {
         clearInterval(poll);
+        pollRef.current.timeout = null;
         setStartingAgent("");
       }, 30000);
     } catch (e) {
@@ -201,7 +206,16 @@ export default function ProjectDetail() {
   const needsStart: { name: string; role: string; isInstance: boolean; id: string }[] = [];
   // WHY no commander check: Commander is a system-level agent, not required
   // for project chat. Only the captain and talons need to be running.
-  if (captainInstance && captainInstance.status !== "running") {
+  // Skip transient states ("starting", "created", "provisioning") so we
+  // don't prompt the user to start a captain that's already booting —
+  // mirrors the talon loop logic below.
+  if (
+    captainInstance &&
+    captainInstance.status !== "running" &&
+    captainInstance.status !== "starting" &&
+    captainInstance.status !== "created" &&
+    captainInstance.status !== "provisioning"
+  ) {
     needsStart.push({ name: captainInstance.display_name || captainInstance.name, role: "captain", isInstance: true, id: captainInstance.id });
   }
   if (captainAgent && !captainAgent.alive) {
@@ -501,12 +515,17 @@ export default function ProjectDetail() {
                           if (a.isInstance) await instanceAction(a.id, "start");
                           else await agentAction(a.id, "start");
                         }));
+                        // Clear any prior interval AND timeout — otherwise
+                        // an older setTimeout could fire mid-poll and
+                        // prematurely stop the new one.
+                        if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+                        if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
                         // Single shared poll for all agents to come online
                         const poll = setInterval(refresh, 2000);
-                        if (pollRef.current.interval) clearInterval(pollRef.current.interval);
                         pollRef.current.interval = poll;
                         pollRef.current.timeout = setTimeout(() => {
                           clearInterval(poll);
+                          pollRef.current.timeout = null;
                           setStartingAgent("");
                         }, 30000);
                       } catch (e) {

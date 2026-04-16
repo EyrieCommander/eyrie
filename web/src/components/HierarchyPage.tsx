@@ -283,10 +283,19 @@ function GuideView({ hierarchy, refresh }: {
           <div className="ml-7 space-y-1.5">
             {frameworks.map((fw) => {
               const installed = installedFrameworks.has(fw.id);
+              const goFw = () => navigate(`/frameworks?highlight=${fw.id}`);
               return (
                 <div
                   key={fw.id}
-                  onClick={() => navigate(`/frameworks?highlight=${fw.id}`)}
+                  onClick={goFw}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      goFw();
+                    }
+                  }}
                   className="flex items-center gap-3 rounded border border-border bg-surface px-3 py-2.5 cursor-pointer hover:border-accent/30 transition-colors"
                 >
                   <span className="text-sm shrink-0">{FRAMEWORK_EMOJI[fw.id] || ""}</span>
@@ -546,9 +555,24 @@ function ProjectsTab({
       <div className="flex items-center justify-between border-b border-border px-5 py-2">
         <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">// activity timeline</span>
         <div className="flex items-center gap-3">
-          <button className="text-text-muted hover:text-text transition-colors"><ChevronLeft className="h-3.5 w-3.5" /></button>
+          {/* TODO: wire up week-by-week navigation (goToPreviousWeek).
+              The timeline currently always shows the week ending today. */}
+          <button
+            disabled
+            aria-label="previous week (not yet implemented)"
+            className="text-text-muted transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ChevronLeft className="h-3.5 w-3.5" />
+          </button>
           <span className="text-xs font-medium text-text">{new Date().toLocaleDateString("en-US", { month: "short", day: "numeric" })}</span>
-          <button className="text-accent hover:text-accent/80 transition-colors"><ChevronRight className="h-3.5 w-3.5" /></button>
+          {/* TODO: wire up week-by-week navigation (goToNextWeek). */}
+          <button
+            disabled
+            aria-label="next week (not yet implemented)"
+            className="text-accent transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <ChevronRight className="h-3.5 w-3.5" />
+          </button>
         </div>
       </div>
 

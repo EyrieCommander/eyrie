@@ -25,6 +25,14 @@ export default function FrameworkCard({
   return (
     <div
       onClick={goToDetail}
+      role="button"
+      tabIndex={0}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          goToDetail();
+        }
+      }}
       className="flex flex-1 flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors cursor-pointer"
     >
       {/* Header */}

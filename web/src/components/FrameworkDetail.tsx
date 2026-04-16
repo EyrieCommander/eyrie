@@ -51,9 +51,20 @@ export default function FrameworkDetail() {
 
   const handleRefresh = async () => {
     setRefreshing(true);
-    await loadFramework();
-    setRefreshing(false);
+    try {
+      await loadFramework();
+    } finally {
+      // Always reset — otherwise a transient loadFramework error would
+      // leave the refresh spinner stuck forever.
+      setRefreshing(false);
+    }
   };
+
+  // Sanitize id before interpolating into shell commands. Framework ids
+  // come from the URL path and are passed to a local tmux terminal, so
+  // validate against a strict allowlist to eliminate command-injection
+  // surface even though the terminal is local.
+  const safeId = id && /^[a-zA-Z0-9_-]+$/.test(id) ? id : null;
 
   // ── Background status refresh ──────────────────────────────────────
   const frameworkRef = useRef(framework);
@@ -94,15 +105,15 @@ export default function FrameworkDetail() {
   };
 
   const handleInstall = () => {
-    if (!framework || !id) return;
-    sendToTerminal(`eyrie install ${id} -y`);
+    if (!framework || !safeId) return;
+    sendToTerminal(`eyrie install ${safeId} -y`);
   };
 
   const handleUninstall = () => {
-    if (!id) return;
+    if (!safeId) return;
     setShowUninstallConfirm(false);
     const purgeFlag = uninstallPurge ? " --purge" : "";
-    sendToTerminal(`eyrie uninstall ${id} -y${purgeFlag}`);
+    sendToTerminal(`eyrie uninstall ${safeId} -y${purgeFlag}`);
     setUninstallPurge(false);
   };
 
@@ -194,7 +205,10 @@ export default function FrameworkDetail() {
               <Download className="h-3 w-3" /> install with defaults
             </button>
             <button
-              onClick={() => sendToTerminal(framework.install_cmd || `eyrie install ${id}`)}
+              onClick={() => {
+                if (!safeId) return;
+                sendToTerminal(framework.install_cmd || `eyrie install ${safeId}`);
+              }}
               className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
             >
               <TerminalIcon className="h-3 w-3" /> install manually
@@ -203,7 +217,10 @@ export default function FrameworkDetail() {
         )}
         {status?.needsSetup && (
           <button
-            onClick={() => sendToTerminal(`${framework.binary_path || id} onboard`)}
+            onClick={() => {
+              if (!framework.binary_path && !safeId) return;
+              sendToTerminal(`${framework.binary_path || safeId} onboard`);
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
           >
             <Settings className="h-3 w-3" /> set up
@@ -213,8 +230,9 @@ export default function FrameworkDetail() {
           <>
             <button
               onClick={() => {
-                const sub = CHAT_COMMANDS[id!]?.split(" ").slice(1).join(" ") || "";
-                const cmd = framework.binary_path ? `${framework.binary_path}${sub ? " " + sub : ""}` : CHAT_COMMANDS[id!];
+                if (!safeId) return;
+                const sub = CHAT_COMMANDS[safeId]?.split(" ").slice(1).join(" ") || "";
+                const cmd = framework.binary_path ? `${framework.binary_path}${sub ? " " + sub : ""}` : CHAT_COMMANDS[safeId];
                 if (cmd) sendToTerminal(cmd);
               }}
               className="flex items-center gap-1.5 px-3 py-1.5 border border-border text-text-secondary hover:text-text rounded text-xs font-medium transition-colors"
@@ -269,12 +287,12 @@ export default function FrameworkDetail() {
       {/* ── Terminal (always visible, persistent tmux session) ────────────── */}
       <div className="flex-1 min-h-0">
         <Terminal
-          key={`shell-${id}`}
+          key={`shell-${safeId ?? "shell"}`}
           ref={termRef}
-          agentName={id || "shell"}
+          agentName={safeId || "shell"}
           useShell
           inline
-          session={id ? `eyrie-${id}` : undefined}
+          session={safeId ? `eyrie-${safeId}` : undefined}
         />
       </div>
 

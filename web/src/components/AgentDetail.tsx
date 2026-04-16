@@ -661,8 +661,10 @@ function EditableInfoCard({
         // TOML: targeted string replacement to preserve formatting and types
         updated = replaceTomlValue(config.content, field.key, editValue, field.type);
       } else if (config.format === "yaml") {
-        // YAML: targeted string replacement similar to TOML
-        updated = replaceYamlValue(config.content, field.key, editValue);
+        // YAML: targeted string replacement similar to TOML. Pass the
+        // field type so numbers/booleans stay unquoted and strings get
+        // properly escaped.
+        updated = replaceYamlValue(config.content, field.key, editValue, field.type);
       } else {
         throw new Error(`Unsupported config format: ${config.format}`);
       }
@@ -884,29 +886,71 @@ function escapeTomlString(s: string): string {
     .replace(/\t/g, "\\t");
 }
 
-/** Replace a value in YAML content. Supports nested keys like "gateway.port". */
-function replaceYamlValue(content: string, fieldKey: string, newValue: string): string {
+/** Format a value for YAML based on its field type. Strings are quoted and
+ *  escaped to avoid corruption when they contain special YAML characters
+ *  (colons, hashes, leading dashes, etc). Numbers and booleans are emitted
+ *  unquoted. Unknown types default to strings for safety. */
+function formatYamlValue(value: string, fieldType?: string): string {
+  if (fieldType === "number") {
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new Error("Invalid number");
+    return String(n);
+  }
+  if (fieldType === "boolean") {
+    return value === "true" ? "true" : "false";
+  }
+  // String: always double-quote + escape. This sidesteps every edge case
+  // with special characters like ":", "#", leading "-", "!", etc.
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+  return `"${escaped}"`;
+}
+
+/** Replace a value in YAML content. Supports nested keys like "gateway.port".
+ *  Only enters a parent block when the parent line ends with a colon and has
+ *  no inline value (i.e., it's actually a block parent, not a scalar). */
+function replaceYamlValue(content: string, fieldKey: string, newValue: string, fieldType?: string): string {
   const parts = fieldKey.split(".");
   const lines = content.split("\n");
   const key = parts[parts.length - 1];
   const parentPath = parts.slice(0, -1);
+  const formatted = formatYamlValue(newValue, fieldType);
 
   // Find the line matching the key at the correct indentation depth.
   // YAML nesting uses 2-space indentation per level.
   const expectedIndent = parentPath.length * 2;
   const re = new RegExp(`^(\\s{${expectedIndent}}${escapeRegex(key)}:\\s*)(.*)$`);
 
-  // Track which parent keys we've entered
+  // A line qualifies as a block parent only when it's "key:" or "key: # comment"
+  // (i.e., the colon is followed by nothing but whitespace and/or a comment).
+  const isBlockParent = (trimmed: string, parentKey: string): boolean => {
+    const prefix = parentKey + ":";
+    if (!trimmed.startsWith(prefix)) return false;
+    const rest = trimmed.slice(prefix.length).trim();
+    return rest === "" || rest.startsWith("#");
+  };
+
+  // Track which parent keys we've entered.
   let depth = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     const trimmed = line.trimStart();
     const indent = line.length - trimmed.length;
 
-    // Track parent key depth
+    // Exit ancestor blocks when indentation decreases so we don't keep
+    // thinking we're inside a block we've already left.
+    while (depth > 0 && trimmed !== "" && !trimmed.startsWith("#") && indent < depth * 2) {
+      depth--;
+    }
+
+    // Descend into the next parent block when we see it.
     if (depth < parentPath.length) {
       const parentKey = parentPath[depth];
-      if (indent === depth * 2 && trimmed.startsWith(parentKey + ":")) {
+      if (indent === depth * 2 && isBlockParent(trimmed, parentKey)) {
         depth++;
         continue;
       }
@@ -914,16 +958,25 @@ function replaceYamlValue(content: string, fieldKey: string, newValue: string): 
 
     // Found our target key at the right depth
     if (depth === parentPath.length && re.test(line)) {
-      lines[i] = line.replace(re, `$1${newValue}`);
+      lines[i] = line.replace(re, `$1${formatted}`);
       return lines.join("\n");
     }
   }
 
-  // Key not found — append at the end
+  // Key not found — append at the end, creating any missing ancestor blocks.
   if (parentPath.length === 0) {
-    lines.push(`${key}: ${newValue}`);
+    lines.push(`${key}: ${formatted}`);
   } else {
-    lines.push(`${"  ".repeat(expectedIndent / 2)}${key}: ${newValue}`);
+    // Build missing parent blocks in order. We can't know which parents
+    // already exist without a second pass, but appending them redundantly
+    // would break the file — so just append the leaf assuming parents
+    // exist. If none did, the earlier loop would have bailed at depth 0,
+    // meaning the user's YAML doesn't have the expected structure, so we
+    // append the full path as nested blocks.
+    for (let d = 0; d < parentPath.length; d++) {
+      lines.push(`${"  ".repeat(d)}${parentPath[d]}:`);
+    }
+    lines.push(`${"  ".repeat(parentPath.length)}${key}: ${formatted}`);
   }
   return lines.join("\n");
 }

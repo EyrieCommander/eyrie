@@ -182,7 +182,7 @@ export default function Sidebar() {
           return (
             <>
               <div className={`flex items-center rounded text-xs transition-colors ${
-                pathname.startsWith("/frameworks") || pathname === "/install"
+                pathname.startsWith("/frameworks")
                   ? "bg-surface-hover text-text"
                   : "text-text-secondary hover:bg-surface-hover/50"
               }`}>
@@ -196,6 +196,7 @@ export default function Sidebar() {
                 <button
                   onClick={() => setFrameworksExpanded((prev) => !prev)}
                   aria-expanded={frameworksExpanded}
+                  aria-controls="frameworks-list"
                   aria-label={frameworksExpanded ? "Collapse frameworks" : "Expand frameworks"}
                   className="px-3 py-1.5 hover:text-text transition-colors"
                 >
@@ -207,7 +208,7 @@ export default function Sidebar() {
                 </button>
               </div>
               {frameworksExpanded && (
-                <div className="ml-4 border-l border-border pl-2 space-y-px">
+                <div id="frameworks-list" className="ml-4 border-l border-border pl-2 space-y-px">
                   {frameworks.map((fw) => {
                     const fwAgents = agents.filter((a) => a.framework === fw);
                     return (
