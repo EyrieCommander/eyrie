@@ -20,6 +20,7 @@ export default function FrameworkCard({
     green: "bg-green/10 text-green",
     yellow: "bg-yellow/10 text-yellow",
     red: "bg-red/10 text-red",
+    blue: "bg-blue/10 text-blue",
   };
 
   return (

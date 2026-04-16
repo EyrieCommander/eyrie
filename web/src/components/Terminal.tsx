@@ -3,6 +3,7 @@ import { Terminal as XTerm } from "xterm";
 import { FitAddon } from "xterm-addon-fit";
 import { WebLinksAddon } from "xterm-addon-web-links";
 import "xterm/css/xterm.css";
+import { createLineParser } from "../lib/terminalParser";
 
 export interface TerminalHandle {
   /** Send a command string into the running terminal (types it, does NOT press enter). */
@@ -23,10 +24,14 @@ interface TerminalProps {
   /** Named session for tmux persistence. If set and tmux is available, the
    *  session survives WebSocket disconnections (page navigations, reloads). */
   session?: string;
+  /** Fired for each complete, ANSI-stripped line of terminal output. Used by
+   *  the onboarding flow to detect install / configure / launch markers and
+   *  advance sub-steps without waiting on filesystem polling. */
+  onOutput?: (line: string) => void;
 }
 
 const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
-  { agentName, onClose, initialCommand, useShell, inline, session },
+  { agentName, onClose, initialCommand, useShell, inline, session, onOutput },
   ref,
 ) {
   const terminalRef = useRef<HTMLDivElement>(null);
@@ -36,10 +41,12 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
   const initializedRef = useRef(false);
   const cleanupCountRef = useRef(0);
   const onCloseRef = useRef(onClose);
+  const onOutputRef = useRef(onOutput);
   const [status, setStatus] = useState<"connecting" | "connected" | "closed">("connecting");
   const statusRef = useRef(status);
 
   onCloseRef.current = onClose;
+  onOutputRef.current = onOutput;
   statusRef.current = status;
 
   // Expose sendCommand / runCommand to parent via ref
@@ -110,10 +117,20 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       ws.send(`resize:${term.rows}:${term.cols}`);
     };
 
+    // Line-oriented parser tees the same byte stream that goes into xterm, so
+    // FrameworksPhase can detect install / launch success markers in real time.
+    // Read onOutputRef on each line so parent re-renders with new callbacks
+    // take effect immediately (without resetting the buffer).
+    const lineParser = createLineParser((line) => {
+      onOutputRef.current?.(line);
+    });
+
     let sentInitialCommand = false;
     ws.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
-        term.write(new Uint8Array(event.data));
+        const bytes = new Uint8Array(event.data);
+        term.write(bytes);
+        lineParser(bytes);
         if (statusRef.current === "connecting") setStatus("connected");
         if (initialCommand && !sentInitialCommand) {
           sentInitialCommand = true;

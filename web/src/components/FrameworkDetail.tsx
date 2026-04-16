@@ -149,6 +149,7 @@ export default function FrameworkDetail() {
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
             status.badge.color === "green" ? "bg-green/10 text-green" :
             status.badge.color === "red" ? "bg-red/10 text-red" :
+            status.badge.color === "blue" ? "bg-blue/10 text-blue" :
             "bg-yellow/10 text-yellow"
           }`}>{status.badge.label}</span>
         )}
