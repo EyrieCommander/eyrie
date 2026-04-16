@@ -303,8 +303,10 @@ func processExistsByConfigDir(configDir string) (bool, error) {
 
 // ExecuteWithConfigEnv runs a lifecycle action for a framework using a specific
 // config path, with extra environment variables appended. Starts from
-// os.Environ() and appends extraEnv — never replaces the full environment.
-// This is the primary entry point when vault env vars need injection.
+// config.EnrichedEnv() (which itself extends os.Environ() with tool-directory
+// PATH entries for cargo/go/npm/etc) via mergeEnv, then appends extraEnv —
+// never replaces the full environment. This is the primary entry point when
+// vault env vars need injection.
 func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, action LifecycleAction, extraEnv []string) error {
 	switch framework {
 	case "zeroclaw":

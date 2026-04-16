@@ -147,11 +147,14 @@ function HtmlPreview({ html }: { html: string }) {
   );
 }
 
-/** Format args JSON with literal newlines rendered inside string values. */
+/** Format args JSON with literal newlines rendered inside string values.
+ *  Only unescape JSON-level escape sequences (\\n → newline). A preceding
+ *  backslash means the n/t is literal data, not an escape — preserve it
+ *  (so "\\\\n" in the source stays as \n in the output). */
 function formatArgs(args: Record<string, any>): string {
   return JSON.stringify(args, null, 2)
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t");
+    .replace(/(^|[^\\])\\n/g, "$1\n")
+    .replace(/(^|[^\\])\\t/g, "$1\t");
 }
 
 export function toolCallSummary(

@@ -124,9 +124,13 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Remove config directory
+		// Remove config directory — but only after a sanity check so a
+		// bad ConfigDir in a registry entry (or a symlinked "/") can't
+		// take out critical system paths.
 		if fileExists(configDir) {
-			if err := os.RemoveAll(configDir); err != nil {
+			if !isSafeToRemove(configDir) {
+				fmt.Printf("⚠️  Refusing to remove %s: path failed safety check\n", configDir)
+			} else if err := os.RemoveAll(configDir); err != nil {
 				fmt.Printf("⚠️  Could not remove config directory: %s\n", err)
 			} else {
 				fmt.Printf("✓ Removed %s\n", fw.ConfigDir)
@@ -238,4 +242,35 @@ func clearInstallStatus(frameworkID string) {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// isSafeToRemove returns false for paths we should never recursively delete:
+// empty strings, relative paths, root ("/"), the user's home directory, and
+// well-known system directories. This is a defence-in-depth check — the
+// registry is trusted, but a bad entry shouldn't be able to wipe the system.
+func isSafeToRemove(path string) bool {
+	if path == "" {
+		return false
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	cleaned := filepath.Clean(abs)
+	if cleaned == "/" || cleaned == "." || cleaned == ".." {
+		return false
+	}
+	// Block well-known danger paths (not exhaustive — just guardrails).
+	dangerous := []string{"/", "/tmp", "/var", "/etc", "/usr", "/bin", "/sbin", "/opt", "/Users", "/home", "/root"}
+	for _, d := range dangerous {
+		if cleaned == d {
+			return false
+		}
+	}
+	if home, err := os.UserHomeDir(); err == nil && home != "" {
+		if cleaned == filepath.Clean(home) {
+			return false
+		}
+	}
+	return true
 }

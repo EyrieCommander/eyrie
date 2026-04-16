@@ -261,6 +261,17 @@ function GuideView({ hierarchy, refresh }: {
         <div
           className={`flex items-center gap-2 ${hasFrameworks ? "cursor-pointer" : ""}`}
           onClick={() => hasFrameworks && setFwExpanded((prev) => !prev)}
+          role={hasFrameworks ? "button" : undefined}
+          tabIndex={hasFrameworks ? 0 : undefined}
+          aria-expanded={hasFrameworks ? fwExpanded : undefined}
+          aria-controls={hasFrameworks ? "fw-step-list" : undefined}
+          onKeyDown={(e) => {
+            if (!hasFrameworks) return;
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              setFwExpanded((prev) => !prev);
+            }
+          }}
         >
           <div className={`flex h-5 w-5 items-center justify-center rounded-full text-[10px] font-bold ${hasFrameworks ? "bg-green/20 text-green" : "bg-accent/20 text-accent"}`}>
             {hasFrameworks ? "\u2713" : "1"}
@@ -273,7 +284,7 @@ function GuideView({ hierarchy, refresh }: {
           )}
         </div>
         {(!hasFrameworks || fwExpanded) && (
-        <>
+        <div id="fw-step-list">
         <p className="text-xs text-text-secondary ml-7">
           Frameworks are the AI agent runtimes that Eyrie manages. Pick one to get started.
         </p>
@@ -323,7 +334,7 @@ function GuideView({ hierarchy, refresh }: {
             </Link>
           </div>
         )}
-        </>
+        </div>
         )}
       </div>
 

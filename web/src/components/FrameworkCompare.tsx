@@ -421,6 +421,7 @@ export default function FrameworkCompare() {
           <div>
             <button
               onClick={() => setFeaturesExpanded((prev) => !prev)}
+              aria-expanded={featuresExpanded}
               className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text transition-colors"
             >
               {featuresExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -441,6 +442,7 @@ export default function FrameworkCompare() {
           <div>
             <button
               onClick={() => setSecurityExpanded((prev) => !prev)}
+              aria-expanded={securityExpanded}
               className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text transition-colors"
             >
               {securityExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
@@ -463,6 +465,7 @@ export default function FrameworkCompare() {
           <div>
             <button
               onClick={() => setArchExpanded((prev) => !prev)}
+              aria-expanded={archExpanded}
               className="flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-text-muted hover:text-text transition-colors"
             >
               {archExpanded ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}

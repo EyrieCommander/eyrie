@@ -132,9 +132,17 @@ func migrateZeroClaw(configPath string) ([]string, error) {
 		changed = true
 	}
 
-	// Ensure allowed_private_hosts includes localhost
-	if ensurePrivateHosts(cfg) {
+	// Ensure allowed_private_hosts includes localhost and that the legacy
+	// field name gets cleaned up. Report which actually changed.
+	switch ensurePrivateHosts(cfg) {
+	case privateHostsAddedLocalhost:
 		applied = append(applied, "http_request.allow_private_hosts: added localhost")
+		changed = true
+	case privateHostsCleanedLegacy:
+		applied = append(applied, "http_request.allow_private_hosts: migrated entries from legacy allowed_private_hosts key")
+		changed = true
+	case privateHostsBothChanged:
+		applied = append(applied, "http_request.allow_private_hosts: added localhost and migrated legacy allowed_private_hosts entries")
 		changed = true
 	}
 
@@ -260,13 +268,25 @@ func ensureAllowedCommands(cfg map[string]any) []string {
 	return added
 }
 
+// privateHostsChange reports which kind of change ensurePrivateHosts made.
+type privateHostsChange int
+
+const (
+	privateHostsNoChange privateHostsChange = iota
+	privateHostsAddedLocalhost
+	privateHostsCleanedLegacy
+	privateHostsBothChanged
+)
+
 // ensurePrivateHosts makes sure http_request.allow_private_hosts includes "localhost".
 // WHY allow_private_hosts (not allowed_private_hosts): ZeroClaw's http_request
 // config struct uses "allow_private_hosts". The web_fetch struct uses
 // "allowed_private_hosts" — different field names on different structs.
 // Old configs written by earlier provisioners may have entries under the wrong
 // name; merge both into allow_private_hosts so user-added hosts aren't lost.
-func ensurePrivateHosts(cfg map[string]any) bool {
+// Returns a status enum so callers can report accurately whether localhost
+// was actually added, the legacy key was cleaned up, or both.
+func ensurePrivateHosts(cfg map[string]any) privateHostsChange {
 	hr, ok := cfg["http_request"].(map[string]any)
 	if !ok {
 		hr = make(map[string]any)
@@ -290,17 +310,26 @@ func ensurePrivateHosts(cfg map[string]any) bool {
 		}
 	}
 
-	hasLocalhost := seen["localhost"]
+	hadLocalhost := seen["localhost"]
 	// Already correct: localhost present and no legacy key to clean up
-	if hasLocalhost && !hasLegacy {
-		return false
+	if hadLocalhost && !hasLegacy {
+		return privateHostsNoChange
 	}
-	if !hasLocalhost {
+	addedLocalhost := !hadLocalhost
+	if addedLocalhost {
 		merged = append(merged, "localhost")
 	}
 	hr["allow_private_hosts"] = merged
 	delete(hr, "allowed_private_hosts")
-	return true
+
+	switch {
+	case addedLocalhost && hasLegacy:
+		return privateHostsBothChanged
+	case addedLocalhost:
+		return privateHostsAddedLocalhost
+	default:
+		return privateHostsCleanedLegacy
+	}
 }
 
 // removeBlockingFlags strips autonomy flags that override the allowed_commands

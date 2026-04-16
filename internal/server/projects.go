@@ -322,7 +322,12 @@ func (s *Server) handleProjectChatMessages(w http.ResponseWriter, r *http.Reques
 	projectID := r.PathValue("id")
 	cs := s.chatStore
 	if cs == nil {
-		writeJSON(w, http.StatusOK, []project.ChatMessage{})
+		// Misconfiguration: pretending there are zero messages would silently
+		// hide a real problem. Surface it so the operator knows to look.
+		slog.Warn("project chat requested but chatStore is nil — server misconfigured", "project", projectID)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "chat store is unavailable; see server logs",
+		})
 		return
 	}
 	messages, err := cs.Messages(projectID, 0)

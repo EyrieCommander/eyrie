@@ -576,6 +576,16 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	// Refuse to uninstall while an install is running for the same
+	// framework. They share the binary/config on disk and install_status.json,
+	// so concurrent execution would produce inconsistent state.
+	if existing := globalInstallState.get(req.FrameworkID); existing != nil && existing.Status == "running" {
+		writeJSON(w, http.StatusConflict, map[string]string{
+			"error": fmt.Sprintf("cannot uninstall %q while an install is in progress (phase: %s)", req.FrameworkID, existing.Phase),
+		})
+		return
+	}
+
 	// Fetch framework metadata
 	ctx := r.Context()
 	client, err := registry.NewClient("")
@@ -629,7 +639,13 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 		sendUpdate()
 		sendLog(fmt.Sprintf("Removing binary at %s", fw.BinaryPath))
 
-		if err := uninstallBinary(fw, sendLog); err != nil {
+		// Give the package-manager uninstall at most 30s; otherwise fall
+		// back to os.Remove. Without a bounded context an unresponsive
+		// cargo/npm/pip could hang the SSE forever.
+		uninstallCtx, cancelUninstall := context.WithTimeout(ctx, 30*time.Second)
+		err := uninstallBinary(uninstallCtx, fw, sendLog)
+		cancelUninstall()
+		if err != nil {
 			progress.Status = "error"
 			progress.Error = err.Error()
 			progress.Message = fmt.Sprintf("Failed to remove binary: %s", err)
@@ -713,14 +729,16 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 	}
 }
 
-// uninstallBinary removes the framework binary using the appropriate package manager
-func uninstallBinary(fw *registry.Framework, log func(string)) error {
+// uninstallBinary removes the framework binary using the appropriate package
+// manager. The context is used so the caller (request handler) can bound the
+// total time — without it, an unresponsive cargo/npm/pip could hang the SSE.
+func uninstallBinary(ctx context.Context, fw *registry.Framework, log func(string)) error {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
 
 	switch fw.InstallMethod {
 	case "cargo":
 		log(fmt.Sprintf("Running: cargo uninstall %s", fw.ID))
-		cmd := exec.CommandContext(context.Background(), "cargo", "uninstall", fw.ID)
+		cmd := exec.CommandContext(ctx, "cargo", "uninstall", fw.ID)
 		cmd.Env = config.EnrichedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log(fmt.Sprintf("cargo uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
@@ -730,7 +748,7 @@ func uninstallBinary(fw *registry.Framework, log func(string)) error {
 
 	case "npm":
 		log(fmt.Sprintf("Running: npm uninstall -g %s", fw.ID))
-		cmd := exec.CommandContext(context.Background(), "npm", "uninstall", "-g", fw.ID)
+		cmd := exec.CommandContext(ctx, "npm", "uninstall", "-g", fw.ID)
 		cmd.Env = config.EnrichedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log(fmt.Sprintf("npm uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
@@ -740,7 +758,7 @@ func uninstallBinary(fw *registry.Framework, log func(string)) error {
 
 	case "pip":
 		log(fmt.Sprintf("Running: pip uninstall -y %s", fw.ID))
-		cmd := exec.CommandContext(context.Background(), "pip", "uninstall", "-y", fw.ID)
+		cmd := exec.CommandContext(ctx, "pip", "uninstall", "-y", fw.ID)
 		cmd.Env = config.EnrichedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log(fmt.Sprintf("pip uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))

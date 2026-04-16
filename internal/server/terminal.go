@@ -64,13 +64,24 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !useTmux {
+		// Prefer $SHELL; otherwise probe a POSIX-portable candidate list.
+		// Hard-coding /bin/zsh is macOS-centric — many Linux systems don't
+		// ship zsh at all, so fall back to bash, then sh.
 		shell := os.Getenv("SHELL")
 		if shell == "" {
-			shell = "/bin/zsh"
+			for _, candidate := range []string{"/bin/bash", "/bin/sh", "/bin/zsh"} {
+				if _, err := os.Stat(candidate); err == nil {
+					shell = candidate
+					break
+				}
+			}
+		}
+		if shell == "" {
+			shell = "/bin/sh" // last resort; POSIX guarantees this path
 		}
 		cmd = exec.CommandContext(ctx, shell, "-l")
 		if sessionName != "" {
-			slog.Info("tmux not available, falling back to plain shell", "session", sessionName)
+			slog.Info("tmux not available, falling back to plain shell", "session", sessionName, "shell", shell)
 		}
 	}
 

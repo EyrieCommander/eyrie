@@ -18,9 +18,10 @@ import (
 // take precedence over the on-disk store (e.g. ANTHROPIC_API_KEY overrides
 // the "anthropic" key). Follows the TokenStore pattern exactly.
 type KeyVault struct {
-	path string
-	mu   sync.Mutex
-	keys map[string]string
+	path      string
+	mu        sync.Mutex
+	keys      map[string]string
+	noPersist bool // true when initialised without storage; Set/Delete stay in-memory only
 }
 
 // WHY sync.Once singleton: Both the server (for API handlers) and discovery
@@ -62,10 +63,12 @@ func GetKeyVault() *KeyVault {
 	vaultOnce.Do(func() {
 		v, err := NewKeyVault()
 		if err != nil {
-			// Non-fatal: log and return an empty vault so callers
-			// can still fall back to environment variables.
+			// Non-fatal: log and return an empty in-memory-only vault so
+			// callers can still fall back to environment variables.
+			// noPersist=true prevents Set/Delete from writing to "." in the
+			// current working directory (which would happen if path is empty).
 			fmt.Fprintf(os.Stderr, "WARNING: failed to initialize KeyVault: %v\n", err)
-			v = &KeyVault{keys: make(map[string]string)}
+			v = &KeyVault{keys: make(map[string]string), noPersist: true}
 		}
 		vaultInstance = v
 	})
@@ -205,6 +208,9 @@ func (v *KeyVault) load() error {
 }
 
 func (v *KeyVault) save() error {
+	if v.noPersist || v.path == "" {
+		return fmt.Errorf("cannot save: vault initialized without storage path")
+	}
 	if err := os.MkdirAll(filepath.Dir(v.path), 0700); err != nil {
 		return err
 	}

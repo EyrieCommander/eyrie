@@ -963,21 +963,54 @@ function replaceYamlValue(content: string, fieldKey: string, newValue: string, f
     }
   }
 
-  // Key not found — append at the end, creating any missing ancestor blocks.
+  // Key not found — find the deepest existing ancestor and insert under it.
+  // Blindly appending every parent would duplicate sections; refusing to do
+  // anything would leave the value unset. Compromise: walk existing lines to
+  // locate the deepest prefix of parentPath that's already present, then
+  // append the remaining nested blocks below that.
   if (parentPath.length === 0) {
     lines.push(`${key}: ${formatted}`);
-  } else {
-    // Build missing parent blocks in order. We can't know which parents
-    // already exist without a second pass, but appending them redundantly
-    // would break the file — so just append the leaf assuming parents
-    // exist. If none did, the earlier loop would have bailed at depth 0,
-    // meaning the user's YAML doesn't have the expected structure, so we
-    // append the full path as nested blocks.
-    for (let d = 0; d < parentPath.length; d++) {
-      lines.push(`${"  ".repeat(d)}${parentPath[d]}:`);
-    }
-    lines.push(`${"  ".repeat(parentPath.length)}${key}: ${formatted}`);
+    return lines.join("\n");
   }
+
+  let deepestMatchedDepth = 0; // how many of parentPath[] were found in order
+  let deepestMatchedLine = -1; // last line index inside the matched block
+  {
+    let d = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (d >= parentPath.length) break;
+      const line = lines[i];
+      const trimmed = line.trimStart();
+      const indent = line.length - trimmed.length;
+      if (indent !== d * 2) continue;
+      // Require "key:" with nothing else on the line (a block parent)
+      const expected = parentPath[d] + ":";
+      if (trimmed === expected || trimmed.startsWith(expected + " ") || trimmed.startsWith(expected + "\t")) {
+        const rest = trimmed.slice(expected.length).trim();
+        if (rest === "" || rest.startsWith("#")) {
+          d++;
+          deepestMatchedDepth = d;
+          deepestMatchedLine = i;
+        }
+      }
+    }
+  }
+
+  if (deepestMatchedDepth === 0) {
+    // Not even the top-level parent is present. Rather than silently
+    // fabricating the whole hierarchy (which risks corrupting the file),
+    // throw — the caller should decide whether to create the section.
+    throw new Error(`cannot locate YAML parent "${parentPath[0]}" for key "${fieldKey}"`);
+  }
+
+  // Insert after the last line of the matched block. Append any remaining
+  // parents (those we couldn't match) as nested blocks under it.
+  const insertLines: string[] = [];
+  for (let d = deepestMatchedDepth; d < parentPath.length; d++) {
+    insertLines.push(`${"  ".repeat(d)}${parentPath[d]}:`);
+  }
+  insertLines.push(`${"  ".repeat(parentPath.length)}${key}: ${formatted}`);
+  lines.splice(deepestMatchedLine + 1, 0, ...insertLines);
   return lines.join("\n");
 }
 
