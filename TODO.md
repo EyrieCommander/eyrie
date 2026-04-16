@@ -22,7 +22,7 @@
 - EyrieClaw embedded agents: in-process lightweight talons (in progress)
 
 ### Role hierarchy:
-- **Commander**: System-level strategic agent (optional). NOT in the project chat critical path — operates via 1:1 chat and system-level APIs. See "Commander Features" below for planned capabilities.
+- **Commander**: Eyrie itself — an LLM loop inside the Eyrie process with tools that directly call projectStore/instanceStore/chatStore/provisioner. The user talks to the commander; the commander dispatches captains. No separate agent process, no provisioning, no briefing, no subprocess sandboxing concerns. See "Phase 5: Eyrie as Commander" below.
 - **Captain**: project lead. First responder in project chat. Owns planning, execution, coordination. Creates and manages talons. User can also add talons via persona picker (dual control).
 - **Talon**: specialist agent (researcher, developer, writer, etc.). Created by captain or user.
 
@@ -52,8 +52,11 @@
 - **#4350 (streaming tool events)**: Closed — superseded by upstream #4175
 - **#4584 (proxy tool event parsing)**: Closed — functionality landed upstream on master
 - **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
-- **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — open, awaiting review
-- **#5148 (http_request per-host allowlist)**: Open — replaces blanket `allow_private_hosts: bool` with per-host `Vec<String>`, backward compatible via custom serde deserializer
+- **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — closed (pre-microkernel paths)
+- **#5148 (http_request per-host allowlist)**: Closed (pre-microkernel paths) — needs redo on new crate layout
+- **#5696 (session reset/delete tools)**: Draft — `SessionResetTool` + `SessionDeleteTool`, not registered by default (destructive). Supersedes #5147.
+- **#5705 (session abort + incremental persistence)**: Draft — `POST /api/sessions/{id}/abort` + streaming responses saved every 500ms. Eyrie's stop button and crash resilience depend on this.
+- **#5701 (clear_messages issue)**: Open issue — `clear_messages` trait method for O(1) session reset. Follow-up optimization for #5696.
 
 ---
 
@@ -83,15 +86,38 @@
 - [x] **Cross-agent messaging**: Retry with backoff, failures surfaced as system messages
 - [ ] **Instance provisioning for all frameworks**: ZeroClaw and PicoClaw provisioning implemented. Need OpenClaw and Hermes instance provisioning testing (config gen, port alloc, startup)
 
-### Commander Features (system-level, not project chat)
-The commander operates via 1:1 chat and system-level APIs, not as a participant in project conversations. These features are planned:
-- [ ] **Autonomous project creation**: User tells commander "build me a video editor" → commander creates project, picks captain persona, provisions captain instance, kicks off briefing
-- [ ] **Cross-project oversight**: Commander can query all projects' status, spot duplicated effort, flag misaligned goals
-- [ ] **Daily sync cron**: Captains report progress to commander daily; commander aggregates into a single user-facing summary
-- [ ] **Resource allocation**: Commander reassigns talons between projects based on priority ("move talon-research from project A to B")
-- [ ] **Strategic planning**: Commander breaks high-level goals into projects ("here are our Q2 goals → create 3 projects")
-- [ ] **ZeroClaw observe-group**: Cherry-pick or reimplement `observe_group` from closed PR #4328 so ZeroClaw agents can store group history without responding
-- [ ] **OpenClaw observe-group**: Use native `requireMention: true` in group config for project chat participants
+### Phase 5: Eyrie as Commander (primary focus)
+
+Eyrie itself becomes the commander — the user chats directly with Eyrie. No separate agent instance, no provisioning, no briefing. Eyrie's commander has its own LLM loop and tools that directly read/write the project, instance, and chat data.
+
+**Backend (do first):**
+- [ ] Build the commander's LLM loop so it can hold a conversation, call tools, and stream responses back to the UI
+- [ ] Support multiple LLM providers (Anthropic, OpenAI, and OpenAI-compatible endpoints like the Claude Max proxy, Ollama, OpenRouter) with the user choosing a default; keys come from the existing vault
+- [ ] Give the commander a persistent conversation history that survives restarts
+- [ ] Give the commander its own memory store so it can remember user preferences and project context across conversations
+- [ ] Implement an initial tool set: listing and getting project details, creating projects, listing personas and running agents, assigning captains (with full provisioning and briefing), reading a project's chat, sending messages into a project chat on the user's behalf, querying recent activity, and restarting agents
+- [ ] Autonomy policy: read-only tools run automatically; write tools (create, assign, send, restart) require user confirmation
+- [ ] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
+
+**Frontend (happens in parallel on another machine):**
+- Commander chat page as the primary user-facing surface
+- Settings for provider and model selection with a connectivity test
+- Visible context-usage indicator
+
+**Features that emerge from having tools plus memory:**
+- Autonomous project creation from a single user request
+- Cross-project oversight and status summarization
+- Daily sync that walks each project and produces one summary for the user
+- Reassigning talons between projects
+- Turning high-level goals into concrete projects
+
+**Cleanup (no backward compatibility — no existing users):**
+- [ ] Delete the old commander-agent concept everywhere: the stored pointer to a commander instance, the set/get commander endpoints, the frontend setup page, and any remaining participant/discovery paths that assumed the commander was an agent
+- [ ] When the commander sends a message into a project chat, it appears as a distinct sender (not "user") so the captain and user can see who initiated it
+
+**Deferred (project-chat observation parity):**
+- [ ] Let ZeroClaw agents observe project chats without responding (Cherry-pick or reimplement `observe_group` from closed PR #4328 so ZeroClaw agents can store group history without responding
+- [ ] Let OpenClaw agents observe project chats without responding (Use native `requireMention: true` in group config for project chat participants)
 
 ## Bugs
 

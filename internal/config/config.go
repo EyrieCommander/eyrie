@@ -93,10 +93,24 @@ func Load() (Config, error) {
 	return cfg, nil
 }
 
-// ExpandHome replaces a leading ~ with the user's home directory.
+// ClawPath returns the root directory for framework installations.
+// When CLAW_PATH is set, all framework config/binary paths (e.g.,
+// ~/.zeroclaw/config.toml) resolve under CLAW_PATH instead of ~.
+// This enables isolated testing without disturbing real installations.
+func ClawPath() string {
+	return os.Getenv("CLAW_PATH")
+}
+
+// ExpandHome replaces a leading ~ with the user's home directory,
+// or with CLAW_PATH if set. This means all framework paths like
+// ~/.zeroclaw/config.toml automatically resolve to
+// $CLAW_PATH/.zeroclaw/config.toml when the env var is present.
 func ExpandHome(path string) string {
 	if len(path) < 2 || path[:2] != "~/" {
 		return path
+	}
+	if cp := ClawPath(); cp != "" {
+		return filepath.Join(cp, path[2:])
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
