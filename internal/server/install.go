@@ -197,6 +197,11 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 
 // frameworkStatus checks whether a framework's binary and config exist.
 // installed = binary on disk, configured = config file exists (onboarding done).
+// These are independent: a framework can be configured without an installed
+// binary (e.g. binary deleted after onboarding, or a fresh checkout with
+// a pre-existing config). The frontend renders the four combinations as
+// distinct states — see frameworkStatus.ts (isBinaryMissing, needsSetup,
+// isReady, etc.) — so do NOT collapse "configured" into "installed" here.
 func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 	binaryPath := config.ExpandHome(fw.BinaryPath)
 	if _, err := os.Stat(binaryPath); err == nil {
@@ -207,12 +212,6 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 		configured = true
 	}
 	return
-}
-
-// isFrameworkInstalled checks if a framework is already installed (binary or config exists).
-func isFrameworkInstalled(fw registry.Framework) bool {
-	installed, _ := frameworkStatus(fw)
-	return installed
 }
 
 // handleInstallFramework installs a framework with SSE progress streaming
