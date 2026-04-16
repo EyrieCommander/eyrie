@@ -50,8 +50,10 @@ export interface FrameworkStatus {
   isInstalling: boolean;
   /** Currently uninstalling */
   isUninstalling: boolean;
-  /** Last install attempt failed */
+  /** Any operation ended in error (install OR uninstall). */
   isError: boolean;
+  /** Uninstall specifically failed — the binary/config is still present. */
+  isUninstallError: boolean;
   /** Badge label + color for display */
   badge: {
     label: string;
@@ -104,10 +106,23 @@ export function getFrameworkStatus(
   const isInstalled = framework.installed ?? false;
   const isConfigured = framework.configured ?? false;
   const isRunning = installProgress?.status === "running";
-  const isUninstalling =
-    isRunning && !!installProgress?.message?.toLowerCase().includes("ninstall");
+  // Prefer the structured `operation` field. Fall back to substring-matching
+  // `message` only when the backend didn't populate it (older clients / state
+  // files predating the field).
+  const op = installProgress?.operation;
+  const isUninstalling = isRunning && (
+    op === "uninstall" ||
+    (op === undefined && !!installProgress?.message?.toLowerCase().includes("ninstall"))
+  );
   const isInstalling = isRunning && !isUninstalling;
-  const isError = installProgress?.status === "error" && !isInstalled;
+  // isError now covers BOTH install and uninstall failures. Previously it
+  // required !isInstalled, so a failed uninstall (binary still present) was
+  // silently invisible to the UI.
+  const isError = installProgress?.status === "error";
+  const isUninstallError = isError && (
+    op === "uninstall" ||
+    (op === undefined && !!installProgress?.message?.toLowerCase().includes("ninstall"))
+  );
   const isBinaryMissing =
     !isInstalled && (isConfigured || installProgress?.status === "success");
   const needsSetup = isInstalled && !isConfigured && !isInstalling;
@@ -128,6 +143,8 @@ export function getFrameworkStatus(
     badge = { label: "installing", color: "blue" };
   } else if (isUninstalling) {
     badge = { label: "uninstalling", color: "blue" };
+  } else if (isUninstallError) {
+    badge = { label: "uninstall failed", color: "red" };
   } else if (isError) {
     badge = { label: "install failed", color: "red" };
   } else if (needsSetup) {
@@ -152,6 +169,7 @@ export function getFrameworkStatus(
     isInstalling,
     isUninstalling,
     isError,
+    isUninstallError,
     badge,
   };
 }

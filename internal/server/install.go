@@ -34,6 +34,9 @@ type installProgress struct {
 	StartedAt   time.Time `json:"started_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
 	PID         int       `json:"pid,omitempty"` // Process ID of install command
+	// Operation distinguishes install from uninstall without substring-matching
+	// Message. The frontend uses this for reliable state classification.
+	Operation   string    `json:"operation,omitempty"` // "install" or "uninstall"
 
 	// Log buffer for streaming
 	logBuf []string `json:"-"` // Store logs for clients that connect later
@@ -284,6 +287,7 @@ func (s *Server) runInstallation(fw *registry.Framework, copyFrom string) {
 		Progress:    0,
 		Message:     fmt.Sprintf("Installing %s...", fw.Name),
 		StartedAt:   time.Now(),
+		Operation:   "install",
 		logBuf:      make([]string, 0),
 	}
 	globalInstallState.set(fw.ID, progress)
@@ -614,6 +618,7 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 		Progress:    0,
 		Message:     fmt.Sprintf("Uninstalling %s...", fw.Name),
 		StartedAt:   time.Now(),
+		Operation:   "uninstall",
 		logBuf:      make([]string, 0),
 	}
 

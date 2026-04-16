@@ -152,6 +152,11 @@ export interface InstallProgress {
   error?: string;
   started_at: string;
   completed_at?: string;
+  /** Kind of operation this progress represents. Consumed by
+   *  frameworkStatus.ts to reliably distinguish install from uninstall
+   *  instead of substring-matching `message`. Optional for backward
+   *  compatibility; legacy consumers fall back to the message check. */
+  operation?: "install" | "uninstall";
 }
 
 export interface InstallLogEvent {
