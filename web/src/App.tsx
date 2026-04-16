@@ -7,6 +7,7 @@ import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
 import PersonasPage from "./components/PersonasPage";
 import HierarchyPage from "./components/HierarchyPage";
+import OnboardingFlow from "./components/OnboardingFlow";
 import AgentsPage from "./components/AgentsPage";
 import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
@@ -56,7 +57,7 @@ function AppContent() {
                 </div>
               )}
               <Routes>
-                <Route path="/" element={<Navigate to="/mission-control" replace />} />
+                <Route path="/" element={<OnboardingFlow />} />
                 <Route path="/hierarchy" element={<Navigate to="/mission-control" replace />} />
                 <Route path="/mission-control" element={<HierarchyPage />} />
                 <Route path="/mission-control/agents" element={<AgentsPage />} />
