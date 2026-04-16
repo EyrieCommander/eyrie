@@ -7,6 +7,7 @@ import (
 	"log/slog"
 
 	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/embedded"
 	"github.com/Audacity88/eyrie/internal/project"
 )
@@ -56,9 +57,18 @@ func New(cfg Config) *Commander {
 	}
 }
 
+// DefaultConfig bundles everything NewDefault needs from the caller. The
+// server populates this with its cached stores and its runDiscovery
+// method value.
+type DefaultConfig struct {
+	Projects  *project.Store
+	Chat      *project.ChatStore
+	Discovery func(ctx context.Context) discovery.Result
+}
+
 // NewDefault builds a Commander with the skeleton defaults: OpenRouter
 // as the LLM provider, a Claude model with tool-calling support, the
-// standard conversation store, and the project-aware tool registry.
+// standard conversation store, and the full built-in tool registry.
 //
 // WHY OpenRouter (not the Claude Max proxy): the claude-max-api proxy
 // runs Claude Code internally — it ignores custom tool definitions and
@@ -69,7 +79,7 @@ func New(cfg Config) *Commander {
 // WHY baked-in defaults in the skeleton: a proper config file and
 // provider switching are Phase 5a follow-up work. OpenRouter key
 // retrieval uses the existing vault (env var > keys.json fallback).
-func NewDefault(projectStore *project.Store) (*Commander, error) {
+func NewDefault(deps DefaultConfig) (*Commander, error) {
 	store, err := NewStore()
 	if err != nil {
 		return nil, fmt.Errorf("commander store: %w", err)
@@ -83,7 +93,11 @@ func NewDefault(projectStore *project.Store) (*Commander, error) {
 		Provider: provider,
 		Model:    "anthropic/claude-sonnet-4.6",
 		Store:    store,
-		Tools:    NewRegistry(projectStore),
+		Tools: NewRegistry(RegistryDeps{
+			Projects:  deps.Projects,
+			Chat:      deps.Chat,
+			Discovery: deps.Discovery,
+		}),
 	}), nil
 }
 

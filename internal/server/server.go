@@ -73,10 +73,6 @@ func New(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("instance store: %w", err)
 	}
-	cmd, err := commander.NewDefault(projStore)
-	if err != nil {
-		return nil, fmt.Errorf("commander: %w", err)
-	}
 	s := &Server{
 		cfg:           cfg,
 		hidden:        hidden,
@@ -85,8 +81,20 @@ func New(cfg config.Config) (*Server, error) {
 		projectStore:  projStore,
 		chatStore:     chatSt,
 		instanceStore: instStore,
-		commander:     cmd,
 	}
+	// Commander is constructed AFTER s is populated so its tools can
+	// receive a method value of s.runDiscovery. Method values close
+	// over the receiver pointer, so the discovery function will have
+	// access to the fully-initialized server when called.
+	cmd, err := commander.NewDefault(commander.DefaultConfig{
+		Projects:  projStore,
+		Chat:      chatSt,
+		Discovery: s.runDiscovery,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("commander: %w", err)
+	}
+	s.commander = cmd
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
