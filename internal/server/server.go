@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/commander"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
@@ -37,6 +38,11 @@ type Server struct {
 	projectStore  *project.Store
 	chatStore     *project.ChatStore
 	instanceStore *instance.Store
+
+	// commander is the built-in LLM-driven orchestrator. The user chats
+	// with it directly via /api/commander/chat. It has direct access to
+	// the project store via its tool registry.
+	commander *commander.Commander
 
 	// activeChats stores cancel functions for in-flight project chat
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
@@ -67,6 +73,10 @@ func New(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("instance store: %w", err)
 	}
+	cmd, err := commander.NewDefault(projStore)
+	if err != nil {
+		return nil, fmt.Errorf("commander: %w", err)
+	}
 	s := &Server{
 		cfg:           cfg,
 		hidden:        hidden,
@@ -75,6 +85,7 @@ func New(cfg config.Config) (*Server, error) {
 		projectStore:  projStore,
 		chatStore:     chatSt,
 		instanceStore: instStore,
+		commander:     cmd,
 	}
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
@@ -143,6 +154,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/projects/{id}/reset", s.handleProjectReset)
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
 	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)
+
+	// Commander (built-in LLM orchestrator — the user's chat surface)
+	s.mux.HandleFunc("POST /api/commander/chat", s.handleCommanderChat)
+	s.mux.HandleFunc("GET /api/commander/history", s.handleCommanderHistory)
+	s.mux.HandleFunc("DELETE /api/commander/history", s.handleCommanderClear)
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)
