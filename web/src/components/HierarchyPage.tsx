@@ -4,7 +4,6 @@ import { BarChart3, Plus, RefreshCw, Crown, ChevronRight, MessageSquare, Chevron
 import type { HierarchyTree, ProjectTree } from "../lib/types";
 import { fetchHierarchy } from "../lib/api";
 import { useData } from "../lib/DataContext";
-import { CommanderSetup } from "./CommanderSetup";
 
 interface DashboardMetrics {
   active_projects: number;
@@ -233,7 +232,6 @@ export default function HierarchyPage() {
   const [loading, setLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [changingCommander, setChangingCommander] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -295,9 +293,8 @@ export default function HierarchyPage() {
     );
   }
 
-  // No commander set up yet — show setup wizard
-  if (!hierarchy?.commander) {
-    return <CommanderSetup onCreated={refresh} />;
+  if (!hierarchy) {
+    return <div className="py-20 text-center text-xs text-text-muted">no data available</div>;
   }
 
   // ─── Derived stats ───
@@ -318,14 +315,8 @@ export default function HierarchyPage() {
             </h1>
             <div className="flex items-center gap-2">
               <p className="text-[10px] text-text-muted">
-                commander: {hierarchy.commander.display_name || hierarchy.commander.name}
+                commander: {hierarchy?.commander?.display_name || "Eyrie"} (built-in)
               </p>
-              <button
-                onClick={() => setChangingCommander(true)}
-                className="text-[9px] text-purple-400 hover:text-purple-300 transition-colors"
-              >
-                change
-              </button>
             </div>
           </div>
         </div>
@@ -387,24 +378,6 @@ export default function HierarchyPage() {
           sub={metrics?.stopped_agents && metrics.stopped_agents > 0 ? "needs attention" : undefined}
         />
       </div>
-
-      {/* Commander change overlay */}
-      {changingCommander && (
-        <div className="border-b border-border px-5 py-3">
-          <div className="rounded border border-purple-400/30 bg-purple-400/5 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-medium text-text">change commander</span>
-              <button
-                onClick={() => setChangingCommander(false)}
-                className="text-[10px] text-text-muted hover:text-text"
-              >
-                cancel
-              </button>
-            </div>
-            <CommanderSetup onCreated={() => { setChangingCommander(false); refresh(); }} />
-          </div>
-        </div>
-      )}
 
       {/* Agent summary bar with links */}
       <div className="flex items-center justify-between border-b border-border px-5 py-2">

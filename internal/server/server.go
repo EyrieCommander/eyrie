@@ -178,8 +178,6 @@ func (s *Server) registerRoutes() {
 	// Hierarchy endpoints
 	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
 	s.mux.HandleFunc("GET /api/hierarchy/commander", s.handleGetCommander)
-	s.mux.HandleFunc("POST /api/hierarchy/commander", s.handleSetCommander)
-	s.mux.HandleFunc("POST /api/hierarchy/commander/brief", s.handleBriefCommander)
 	s.mux.HandleFunc("POST /api/projects/{id}/captain/brief", s.handleBriefCaptain)
 
 	// Key vault endpoints

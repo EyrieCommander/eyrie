@@ -4,7 +4,6 @@ import { ArrowLeft, Crown, User, Bot, RefreshCw } from "lucide-react";
 import type { HierarchyTree } from "../lib/types";
 import { fetchHierarchy } from "../lib/api";
 import { useData } from "../lib/DataContext";
-import { CommanderSetup } from "./CommanderSetup";
 
 // ─── Agent Card ───
 
@@ -55,7 +54,6 @@ export default function AgentsPage() {
   const [hierarchy, setHierarchy] = useState<HierarchyTree | null>(null);
   const hierarchyRef = useRef<HierarchyTree | null>(null);
   const [loading, setLoading] = useState(true);
-  const [changingCommander, setChangingCommander] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -81,17 +79,8 @@ export default function AgentsPage() {
     return <div className="py-20 text-center text-xs text-text-muted">loading agents...</div>;
   }
 
-  if (!hierarchy?.commander) {
-    return (
-      <div className="space-y-6">
-        <button onClick={() => navigate("/mission-control")} className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text">
-          <ArrowLeft className="h-3 w-3" /> mission control
-        </button>
-        <h2 className="text-lg font-bold text-text"><span className="text-accent">&gt;</span> setup commander</h2>
-        <p className="text-xs text-text-muted">the commander is your master agent — it manages all your projects and helps you grow your agent team</p>
-        <CommanderSetup onCreated={refresh} />
-      </div>
-    );
+  if (!hierarchy) {
+    return <div className="py-20 text-center text-xs text-text-muted">no data available</div>;
   }
 
   return (
@@ -113,30 +102,16 @@ export default function AgentsPage() {
 
       {/* Commander section */}
       <div className="space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">// commander</span>
-          <button onClick={() => setChangingCommander(!changingCommander)}
-            className="text-[10px] text-purple-400 hover:text-purple-300 transition-colors">
-            {changingCommander ? "cancel" : "change commander"}
-          </button>
-        </div>
-
-        {changingCommander ? (
-          <div className="rounded border border-purple-400/30 bg-purple-400/5 p-4">
-            <CommanderSetup onCreated={() => { setChangingCommander(false); refresh(); }} />
-          </div>
-        ) : (
-          <AgentCard
-
-            displayName={hierarchy.commander.display_name || hierarchy.commander.name}
-            role="commander"
-            roleBadgeColor="bg-purple-400/10 text-purple-400"
-            roleIcon={Crown}
-            status={hierarchy.commander.status}
-            framework={hierarchy.commander.framework}
-            onClick={() => navigate(`/agents/${hierarchy.commander!.name}`)}
-          />
-        )}
+        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">// commander</span>
+        <AgentCard
+          displayName={hierarchy.commander?.display_name || "Eyrie"}
+          role="commander"
+          roleBadgeColor="bg-purple-400/10 text-purple-400"
+          roleIcon={Crown}
+          status="running"
+          framework=""
+          onClick={() => {}}
+        />
       </div>
 
       {/* Captains + Talons grouped by project */}

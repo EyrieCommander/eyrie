@@ -592,43 +592,6 @@ export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
   return data.commander ?? null;
 }
 
-export function streamCommanderBriefing(
-  onEvent: (event: ChatEvent & { session_key?: string }) => void,
-): { controller: AbortController; sessionReady: Promise<string> } {
-  const controller = new AbortController();
-  let resolveSession: (key: string) => void;
-  let sessionResolved = false;
-  const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
-  (async () => {
-    try {
-      const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander/brief`, {
-        method: "POST",
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText, code: body.code });
-        resolveSession!("");
-        return;
-      }
-      await readSSEStream(res.body!, (ev) => {
-        if (ev.type === "session" && ev.session_key) {
-          resolveSession!(ev.session_key); sessionResolved = true;
-        }
-        onEvent(ev);
-      });
-      // Ensure promise settles even if no session event was received
-      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        onEvent({ type: "error", error: e instanceof Error ? e.message : "Briefing failed" });
-      }
-      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
-    }
-  })();
-  return { controller, sessionReady };
-}
-
 export function streamCaptainBriefing(
   projectId: string,
   onEvent: (event: ChatEvent & { session_key?: string }) => void,
@@ -730,18 +693,6 @@ export async function stopProjectChat(projectId: string): Promise<void> {
   if (!res.ok) {
     const body = await res.text().catch(() => res.statusText);
     throw new Error(`Failed to stop chat: ${res.status} ${body}`);
-  }
-}
-
-export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {
-  const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ instance_id: opts.instanceId, agent_name: opts.agentName }),
-  });
-  if (!res.ok) {
-    const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to set commander: ${res.statusText}`);
   }
 }
 
