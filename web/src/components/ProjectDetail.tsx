@@ -502,8 +502,9 @@ export default function ProjectDetail() {
                           else await agentAction(a.id, "start");
                         }));
                         // Single shared poll for all agents to come online
-                        const poll = setInterval(refresh, 2000);
                         if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+                        if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
+                        const poll = setInterval(refresh, 2000);
                         pollRef.current.interval = poll;
                         pollRef.current.timeout = setTimeout(() => {
                           clearInterval(poll);

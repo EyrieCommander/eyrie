@@ -80,20 +80,20 @@ type anthropicMessage struct {
 // strictly and rejects extra fields (even null ones) on block types
 // that don't use them.
 type anthropicBlock struct {
-	Type string // "text" | "tool_use" | "tool_result"
+	Type string `json:"type"` // "text" | "tool_use" | "tool_result"
 
 	// text
-	Text string
+	Text string `json:"text,omitempty"`
 
 	// tool_use (assistant-produced)
-	ID    string
-	Name  string
-	Input map[string]any
+	ID    string         `json:"id,omitempty"`
+	Name  string         `json:"name,omitempty"`
+	Input map[string]any `json:"input,omitempty"`
 
 	// tool_result (user-produced, feeds back into the next turn)
-	ToolUseID  string
-	ContentStr string
-	IsError    bool
+	ToolUseID  string `json:"tool_use_id,omitempty"`
+	ContentStr string `json:"content,omitempty"`
+	IsError    bool   `json:"is_error,omitempty"`
 }
 
 // MarshalJSON emits only the fields relevant to each block type.
@@ -177,9 +177,11 @@ type anthropicRequest struct {
 //     tool result arrives between assistant messages with no interleaved
 //     user text, we still wrap it as a fresh user message.
 func translateMessages(msgs []Message) (system string, out []anthropicMessage) {
-	// Track the pending user message so we can append additional
+	// Track the pending user message index so we can append additional
 	// tool_result blocks to it when tool results come in a batch.
-	var pendingUser *anthropicMessage
+	// WHY index instead of pointer: append(out, ...) may reallocate the
+	// backing array, which would make a pointer into the old array stale.
+	pendingUserIdx := -1
 
 	for _, m := range msgs {
 		switch m.Role {
@@ -197,14 +199,14 @@ func translateMessages(msgs []Message) (system string, out []anthropicMessage) {
 			}
 
 		case "user":
-			pendingUser = nil
+			pendingUserIdx = -1
 			out = append(out, anthropicMessage{
 				Role:    "user",
 				Content: []anthropicBlock{{Type: "text", Text: m.Content}},
 			})
 
 		case "assistant":
-			pendingUser = nil
+			pendingUserIdx = -1
 			blocks := make([]anthropicBlock, 0, 1+len(m.ToolCalls))
 			if m.Content != "" {
 				blocks = append(blocks, anthropicBlock{Type: "text", Text: m.Content})
@@ -243,15 +245,15 @@ func translateMessages(msgs []Message) (system string, out []anthropicMessage) {
 			// Merge into the prior pending user message if the last
 			// message we emitted was a user message carrying tool results.
 			// This keeps batched tool results in a single user turn.
-			if pendingUser != nil {
-				pendingUser.Content = append(pendingUser.Content, block)
+			if pendingUserIdx >= 0 {
+				out[pendingUserIdx].Content = append(out[pendingUserIdx].Content, block)
 				continue
 			}
 			out = append(out, anthropicMessage{
 				Role:    "user",
 				Content: []anthropicBlock{block},
 			})
-			pendingUser = &out[len(out)-1]
+			pendingUserIdx = len(out) - 1
 		}
 	}
 	return system, out

@@ -681,6 +681,9 @@ func (z *ZeroClawAdapter) sessionsFromDB() ([]Session, error) {
 		}
 		sessions = append(sessions, sess)
 	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
 	return sessions, nil
 }
 

@@ -202,6 +202,9 @@ func (v *KeyVault) load() error {
 }
 
 func (v *KeyVault) save() error {
+	if v.path == "" {
+		return fmt.Errorf("key vault has no storage path (initialization failed)")
+	}
 	if err := os.MkdirAll(filepath.Dir(v.path), 0700); err != nil {
 		return err
 	}

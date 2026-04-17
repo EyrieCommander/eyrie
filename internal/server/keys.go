@@ -132,9 +132,10 @@ func (s *Server) handleValidateKey(w http.ResponseWriter, r *http.Request) {
 }
 
 // maskKey returns first 4 + *** + last 4 characters. For short keys,
-// returns all asterisks.
+// returns all asterisks. Threshold is 12 so that at least 4 characters
+// remain hidden (12 - 4 prefix - 4 suffix = 4 masked).
 func maskKey(key string) string {
-	if len(key) <= 8 {
+	if len(key) <= 12 {
 		return "***"
 	}
 	return key[:4] + "***" + key[len(key)-4:]

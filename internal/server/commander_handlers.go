@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -87,7 +88,11 @@ func (s *Server) handleCommanderMemory(w http.ResponseWriter, r *http.Request) {
 	if key := r.URL.Query().Get("key"); key != "" {
 		entry, err := mem.Recall(key)
 		if err != nil {
-			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			if errors.Is(err, commander.ErrMemoryNotFound) {
+				writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			} else {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
 			return
 		}
 		writeJSON(w, http.StatusOK, entry)

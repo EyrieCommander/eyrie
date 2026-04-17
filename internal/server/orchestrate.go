@@ -461,6 +461,13 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		return nil
 	}
 
+	// If the stream ended without a "done" event (connection drop, agent
+	// crash), use whatever was accumulated via deltas so later code has
+	// content to persist and parse for [LISTENING].
+	if responseContent == "" && streamedBuilder.Len() > 0 {
+		responseContent = streamedBuilder.String()
+	}
+
 	// WHY directive parsing: [LISTENING] is parsed from the END of the response.
 	// Agents include it as the last token so it's easy to strip from display
 	// content. [LISTENING] means "I want the next message" — whether from a

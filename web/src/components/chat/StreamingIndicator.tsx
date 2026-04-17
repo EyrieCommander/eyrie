@@ -4,6 +4,7 @@
 // that appears while an agent is responding. Used by both ChatPanel (1:1)
 // and ProjectChat (multi-agent).
 
+import type { ReactNode } from "react";
 import { PartToolCallCard } from "./ToolCallCard";
 import { StreamingCursor } from "./StreamingCursor";
 
@@ -24,7 +25,7 @@ export interface StreamingIndicatorProps {
   /** Called when the user clicks stop */
   onStop?: () => void;
   /** Extra content above the streaming parts (e.g., message header) */
-  header?: React.ReactNode;
+  header?: ReactNode;
 }
 
 export function StreamingIndicator({ parts, onStop, header }: StreamingIndicatorProps) {

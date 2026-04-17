@@ -91,7 +91,8 @@ func (s *PendingStore) Add(tool string, args map[string]any, summary, toolCallID
 		ToolCallID: toolCallID,
 	}
 	s.actions[id] = pa
-	return pa
+	copy := *pa
+	return &copy
 }
 
 // Get returns the pending action with the given id, or an error if
@@ -105,7 +106,8 @@ func (s *PendingStore) Get(id string) (*PendingAction, error) {
 	if !ok {
 		return nil, fmt.Errorf("pending action %q not found or expired", id)
 	}
-	return pa, nil
+	copy := *pa
+	return &copy, nil
 }
 
 // Approve marks a pending action as approved and returns a copy for the

@@ -350,6 +350,7 @@ function ApiKeysSection() {
                     disabled={deletingProvider === entry.provider}
                     className="p-1 rounded text-text-muted hover:text-red hover:bg-red/5 transition-colors disabled:opacity-30"
                     title="remove key"
+                    aria-label={`Remove ${entry.provider} key`}
                   >
                     <Trash2 className="h-3 w-3" />
                   </button>
@@ -391,6 +392,7 @@ function ApiKeysSection() {
                   type="button"
                   onClick={() => setShowNewKey(!showNewKey)}
                   className="absolute right-1.5 top-1/2 -translate-y-1/2 text-text-muted hover:text-text"
+                  aria-label={showNewKey ? "Hide secret key" : "Show secret key"}
                 >
                   {showNewKey ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
                 </button>

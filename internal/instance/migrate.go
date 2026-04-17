@@ -265,15 +265,27 @@ func ensurePrivateHosts(cfg map[string]any) bool {
 		cfg["http_request"] = hr
 	}
 
-	// Check both field names — old configs may have the wrong one
-	hosts, _ := hr["allow_private_hosts"].([]any)
-	for _, h := range hosts {
-		if s, ok := h.(string); ok && s == "localhost" {
-			return false // already present
+	// Merge both field names — old configs may use the wrong one.
+	// Collect all unique hosts from both keys before overwriting.
+	seen := make(map[string]bool)
+	for _, key := range []string{"allow_private_hosts", "allowed_private_hosts"} {
+		if arr, ok := hr[key].([]any); ok {
+			for _, h := range arr {
+				if s, ok := h.(string); ok {
+					seen[s] = true
+				}
+			}
 		}
 	}
-	hr["allow_private_hosts"] = append(hosts, "localhost")
-	// Clean up the wrong field name if it was written by an older provisioner
+	if seen["localhost"] {
+		return false // already present
+	}
+	seen["localhost"] = true
+	merged := make([]any, 0, len(seen))
+	for h := range seen {
+		merged = append(merged, h)
+	}
+	hr["allow_private_hosts"] = merged
 	delete(hr, "allowed_private_hosts")
 	return true
 }

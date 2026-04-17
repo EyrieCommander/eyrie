@@ -19,9 +19,9 @@ Example — create a talon:
 ## Bootstrap
 
 1. Fetch the API reference and save it to TOOLS.md:
-   Bash: curl -s http://localhost:7200/api/reference
+   Bash: curl -s http://localhost:7200/api/reference > TOOLS.md
 
-2. Fetch your project details:
-   Bash: curl -s http://localhost:7200/api/projects/{{.ProjectID}}
+2. Fetch your project details and append:
+   Bash: curl -s http://localhost:7200/api/projects/{{.ProjectID}} >> TOOLS.md
 
-Save both to your TOOLS.md. Do NOT introduce yourself or start a conversation — just fetch and save. The project chat will begin separately.
+Do NOT introduce yourself or start a conversation — just fetch and save. The project chat will begin separately.

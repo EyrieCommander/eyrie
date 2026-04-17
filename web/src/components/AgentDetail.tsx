@@ -662,7 +662,7 @@ function EditableInfoCard({
         updated = replaceTomlValue(config.content, field.key, editValue, field.type);
       } else if (config.format === "yaml") {
         // YAML: targeted string replacement similar to TOML
-        updated = replaceYamlValue(config.content, field.key, editValue);
+        updated = replaceYamlValue(config.content, field.key, editValue, field.type);
       } else {
         throw new Error(`Unsupported config format: ${config.format}`);
       }
@@ -885,11 +885,16 @@ function escapeTomlString(s: string): string {
 }
 
 /** Replace a value in YAML content. Supports nested keys like "gateway.port". */
-function replaceYamlValue(content: string, fieldKey: string, newValue: string): string {
+function replaceYamlValue(content: string, fieldKey: string, newValue: string, fieldType?: string): string {
   const parts = fieldKey.split(".");
   const lines = content.split("\n");
   const key = parts[parts.length - 1];
   const parentPath = parts.slice(0, -1);
+
+  const formatted = fieldType === "number" ? newValue
+    : fieldType === "boolean" ? (newValue === "true" ? "true" : "false")
+    : /[:#{}[\],&*?|>!%@`'"]/.test(newValue) || newValue !== newValue.trim()
+      ? `"${newValue.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"` : newValue;
 
   // Find the line matching the key at the correct indentation depth.
   // YAML nesting uses 2-space indentation per level.
@@ -914,16 +919,16 @@ function replaceYamlValue(content: string, fieldKey: string, newValue: string): 
 
     // Found our target key at the right depth
     if (depth === parentPath.length && re.test(line)) {
-      lines[i] = line.replace(re, `$1${newValue}`);
+      lines[i] = line.replace(re, `$1${formatted}`);
       return lines.join("\n");
     }
   }
 
   // Key not found — append at the end
   if (parentPath.length === 0) {
-    lines.push(`${key}: ${newValue}`);
+    lines.push(`${key}: ${formatted}`);
   } else {
-    lines.push(`${"  ".repeat(expectedIndent / 2)}${key}: ${newValue}`);
+    lines.push(`${"  ".repeat(expectedIndent / 2)}${key}: ${formatted}`);
   }
   return lines.join("\n");
 }
