@@ -170,6 +170,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/commander/history", s.handleCommanderHistory)
 	s.mux.HandleFunc("DELETE /api/commander/history", s.handleCommanderClear)
 	s.mux.HandleFunc("POST /api/commander/confirm/{id}", s.handleCommanderConfirm)
+	s.mux.HandleFunc("GET /api/commander/memory", s.handleCommanderMemory)
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)

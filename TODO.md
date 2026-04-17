@@ -97,6 +97,13 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - [ ] Support multiple LLM providers (Anthropic, OpenAI, and OpenAI-compatible endpoints like the Claude Max proxy, Ollama, OpenRouter) with the user choosing a default; keys come from the existing vault
 - [ ] Give the commander a persistent conversation history that survives restarts
 - [ ] Give the commander its own memory store so it can remember user preferences and project context across conversations
+  - **Later — recall strategy beyond flat JSON**: MVP injects all entries into the system prompt each turn. Options when that breaks down (too many entries, token cost, or need for semantic lookup):
+    - SQLite with FTS5 for keyword/prefix search — mirrors ZeroClaw's session storage (`claws/zeroclaw/`) and gives fast `recall(query)` without loading everything
+    - Vector embeddings (local model, e.g. via `text-embedding-3-small` through OpenAI-compat endpoint, or a Go-native embedder) for semantic recall — LLM says "what did I say about mobile releases?" and we search by meaning, not exact key
+    - Tag/namespace support (`project:X/*`, `user-pref/*`) for scoped recall and bulk forget
+    - TTL-based pruning and "last-accessed" ordering so stale notes fall out naturally
+    - Cross-reference how EyrieClaw, OpenClaw, and PicoClaw structure their agent memory (`claws/*/`) — pick conventions rather than invent new ones
+  - **Later — UI surface for memory**: list/view/edit/delete via Settings page (backend beyond skeleton needs PUT/DELETE endpoints)
 - [ ] Implement an initial tool set: listing and getting project details, creating projects, listing personas and running agents, assigning captains (with full provisioning and briefing), reading a project's chat, sending messages into a project chat on the user's behalf, querying recent activity, and restarting agents
 - [ ] Autonomy policy: read-only tools run automatically; write tools (create, assign, send, restart) require user confirmation
 - [ ] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)

@@ -95,6 +95,9 @@ type RegistryDeps struct {
 	// RestartAgent stops then starts an agent by name. Best-effort;
 	// returns an error if either step fails.
 	RestartAgent func(ctx context.Context, name string) error
+	// Memory is the commander's persistent key-value note store, exposed
+	// through the remember/recall/forget tools.
+	Memory *MemoryStore
 }
 
 // Registry holds the tools available to the commander. The registry is
@@ -120,6 +123,13 @@ func NewRegistry(deps RegistryDeps) *Registry {
 	}
 	if deps.RestartAgent != nil {
 		r.register(restartAgentTool(deps.RestartAgent))
+	}
+	// Memory tools — Auto risk. These update the commander's own notes,
+	// not user data of record, so they don't require out-of-band approval.
+	if deps.Memory != nil {
+		r.register(rememberTool(deps.Memory))
+		r.register(recallTool(deps.Memory))
+		r.register(forgetTool(deps.Memory))
 	}
 	return r
 }
@@ -534,6 +544,109 @@ func restartAgentTool(restart func(ctx context.Context, name string) error) Tool
 				return "", fmt.Errorf("restarting agent: %w", err)
 			}
 			return fmt.Sprintf(`{"status":"restarted","name":%q}`, name), nil
+		},
+	}
+}
+
+// --- Memory tools -----------------------------------------------------
+
+const (
+	maxMemoryKeyLen   = 200
+	maxMemoryValueLen = 4000
+)
+
+func rememberTool(mem *MemoryStore) Tool {
+	return Tool{
+		Name:        "remember",
+		Description: "Store or update a note in the commander's long-term memory. Use for user preferences, project context, or anything that should survive across conversations. Keys are normalized (lowercase, trimmed); re-using a key overwrites the previous value. Prefer stable, descriptive keys (e.g. 'user-prefers-evening-syncs', 'project-x-stakeholder').",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Short descriptive key. Normalized to lowercase.",
+				},
+				"value": map[string]any{
+					"type":        "string",
+					"description": "The note contents. Free-form text.",
+				},
+			},
+			"required": []string{"key", "value"},
+		},
+		Execute: func(ctx context.Context, args map[string]any) (string, error) {
+			key, _ := args["key"].(string)
+			value, _ := args["value"].(string)
+			if err := validateString("key", key, 1, maxMemoryKeyLen); err != nil {
+				return "", err
+			}
+			if err := validateString("value", value, 1, maxMemoryValueLen); err != nil {
+				return "", err
+			}
+			entry, err := mem.Remember(key, value)
+			if err != nil {
+				return "", fmt.Errorf("storing memory: %w", err)
+			}
+			return marshalJSON(entry)
+		},
+	}
+}
+
+func recallTool(mem *MemoryStore) Tool {
+	return Tool{
+		Name:        "recall",
+		Description: "Look up a stored memory entry by key, or list all entries when no key is given. The LLM sees a compact snapshot of all memories in its system prompt every turn, so prefer recalling a specific key only when you need full detail or timestamps.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Optional key to look up. If omitted, returns all stored entries.",
+				},
+			},
+		},
+		Execute: func(ctx context.Context, args map[string]any) (string, error) {
+			key, _ := args["key"].(string)
+			if key == "" {
+				return marshalJSON(mem.List())
+			}
+			entry, err := mem.Recall(key)
+			if err != nil {
+				if errors.Is(err, ErrMemoryNotFound) {
+					return "", fmt.Errorf("no memory stored for key %q", NormalizeKey(key))
+				}
+				return "", fmt.Errorf("recalling memory: %w", err)
+			}
+			return marshalJSON(entry)
+		},
+	}
+}
+
+func forgetTool(mem *MemoryStore) Tool {
+	return Tool{
+		Name:        "forget",
+		Description: "Delete a stored memory entry by key. Use when the user asks you to forget something or when a note is no longer accurate.",
+		Parameters: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"key": map[string]any{
+					"type":        "string",
+					"description": "Key to forget (normalized to lowercase).",
+				},
+			},
+			"required": []string{"key"},
+		},
+		Execute: func(ctx context.Context, args map[string]any) (string, error) {
+			key, _ := args["key"].(string)
+			if err := validateString("key", key, 1, maxMemoryKeyLen); err != nil {
+				return "", err
+			}
+			if err := mem.Forget(key); err != nil {
+				if errors.Is(err, ErrMemoryNotFound) {
+					return "", fmt.Errorf("no memory stored for key %q", NormalizeKey(key))
+				}
+				return "", fmt.Errorf("forgetting memory: %w", err)
+			}
+			return fmt.Sprintf(`{"status":"forgotten","key":%q}`, NormalizeKey(key)), nil
 		},
 	}
 }

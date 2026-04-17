@@ -75,6 +75,30 @@ func (s *Server) handleCommanderClear(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "cleared"})
 }
 
+// handleCommanderMemory returns the commander's stored memory entries.
+// With ?key=<k>, returns that one entry (404 if missing). Otherwise
+// returns the full list. Read-only for now — writes happen through the
+// remember/forget tools during a chat turn.
+// GET /api/commander/memory
+// GET /api/commander/memory?key=<k>
+func (s *Server) handleCommanderMemory(w http.ResponseWriter, r *http.Request) {
+	mem := s.commander.Memory()
+	if mem == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "memory store unavailable"})
+		return
+	}
+	if key := r.URL.Query().Get("key"); key != "" {
+		entry, err := mem.Recall(key)
+		if err != nil {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, entry)
+		return
+	}
+	writeJSON(w, http.StatusOK, mem.List())
+}
+
 // handleCommanderConfirm approves or denies a pending Confirm-tier tool
 // call. On approve, the tool is executed; on deny, the denial is
 // recorded. Either way, the commander runs a continuation turn so the

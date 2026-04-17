@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
@@ -26,15 +27,47 @@ const maxTurnIterations = 10
 // tool calls + a sentence or two of summary) so 4k is plenty.
 const maxResponseTokens = 4096
 
-// systemPrompt shapes the commander's personality and role. Kept minimal
-// in the skeleton — as the tool set grows we'll give it more guidance.
-const systemPrompt = `You are Eyrie, a commander that helps the user manage AI agent projects.
+// baseSystemPrompt shapes the commander's personality and role. The
+// effective system prompt is built per turn via buildSystemPrompt so
+// the current memory snapshot can be injected. Kept minimal in the
+// skeleton — as the tool set grows we'll give it more guidance.
+const baseSystemPrompt = `You are Eyrie, a commander that helps the user manage AI agent projects.
 
 You can see the user's projects, captains, and talons. When asked about them, call the appropriate tool to read live data rather than guessing.
 
 When the user asks you to take an action that requires a tool, call the tool directly — do NOT ask the user to confirm in chat first. The Eyrie system handles user approval for sensitive tools automatically; your job is just to decide what tool to call and with what arguments. After calling a tool, react to its result.
 
+You have a persistent memory (the remember/recall/forget tools) that survives across conversations. Actively use it: store user preferences, stakeholders, deadlines, and anything that would help on a later conversation. A snapshot of your current memory appears below — consult it before asking the user to re-state something you should already know.
+
 Be concise. Summarize tool results rather than dumping raw JSON at the user.`
+
+// buildSystemPrompt composes the base prompt with the current memory
+// snapshot. If memory is empty the base prompt is returned unchanged so
+// we don't advertise an empty section. The snapshot is plain-text so the
+// LLM can quote and reason about it without having to parse JSON.
+//
+// WHY inject every turn (not rely on the recall tool): the commander's
+// memories are small in the MVP (expected tens of entries) and recalling
+// them costs a whole extra round trip of LLM + tool + LLM. Inlining them
+// into the system message is cheaper and, more importantly, makes the
+// LLM *aware* that memories exist — without the inline snapshot an LLM
+// rarely calls `recall` unprompted.
+func buildSystemPrompt(memories []MemoryEntry) string {
+	if len(memories) == 0 {
+		return baseSystemPrompt
+	}
+	var sb strings.Builder
+	sb.WriteString(baseSystemPrompt)
+	sb.WriteString("\n\nStored memories:\n")
+	for _, e := range memories {
+		sb.WriteString("- ")
+		sb.WriteString(e.Key)
+		sb.WriteString(": ")
+		sb.WriteString(e.Value)
+		sb.WriteByte('\n')
+	}
+	return sb.String()
+}
 
 // Commander is the orchestrator: it holds the LLM provider, the
 // conversation store, and the tool registry. One Commander instance
@@ -47,6 +80,7 @@ type Commander struct {
 	tools    *Registry
 	pending  *PendingStore
 	audit    *AuditLog
+	memory   *MemoryStore
 }
 
 // Config configures a new Commander.
@@ -57,6 +91,7 @@ type Config struct {
 	Tools    *Registry
 	Pending  *PendingStore // optional; defaults to a fresh in-memory store
 	Audit    *AuditLog     // optional; nil disables audit logging
+	Memory   *MemoryStore  // optional; nil omits memory injection + tools
 }
 
 // New constructs a Commander. Callers supply all dependencies so this
@@ -73,6 +108,7 @@ func New(cfg Config) *Commander {
 		tools:    cfg.Tools,
 		pending:  cfg.Pending,
 		audit:    cfg.Audit,
+		memory:   cfg.Memory,
 	}
 }
 
@@ -80,6 +116,22 @@ func New(cfg Config) *Commander {
 // confirm endpoint can look up and resolve pending actions.
 func (c *Commander) Pending() *PendingStore {
 	return c.pending
+}
+
+// Memory returns the memory store, or nil if memory is disabled.
+// Exposed for the HTTP read endpoint.
+func (c *Commander) Memory() *MemoryStore {
+	return c.memory
+}
+
+// currentSystemPrompt returns the system prompt for this turn with the
+// current memory snapshot baked in. Falls back to the base prompt when
+// memory is disabled.
+func (c *Commander) currentSystemPrompt() string {
+	if c.memory == nil {
+		return baseSystemPrompt
+	}
+	return buildSystemPrompt(c.memory.List())
 }
 
 // DefaultConfig bundles everything NewDefault needs from the caller. The
@@ -124,18 +176,27 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 		slog.Warn("commander: audit log unavailable", "error", err)
 		audit = nil
 	}
+	memory, err := NewMemoryStore()
+	if err != nil {
+		// Non-fatal: the commander works without memory, it just can't
+		// persist notes across conversations. Surface the reason.
+		slog.Warn("commander: memory store unavailable", "error", err)
+		memory = nil
+	}
 	return New(Config{
 		Provider: provider,
 		Model:    "anthropic/claude-sonnet-4.6",
 		Store:    store,
 		Pending:  NewPendingStore(),
 		Audit:    audit,
+		Memory:   memory,
 		Tools: NewRegistry(RegistryDeps{
 			Projects:      deps.Projects,
 			Chat:          deps.Chat,
 			Discovery:     deps.Discovery,
 			SendToProject: deps.SendToProject,
 			RestartAgent:  deps.RestartAgent,
+			Memory:        memory,
 		}),
 	}), nil
 }
@@ -163,7 +224,7 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 		return err
 	}
 	history := make([]embedded.Message, 0, len(stored)+2)
-	history = append(history, embedded.Message{Role: "system", Content: systemPrompt})
+	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
 	history = append(history, stored...)
 	userMsg := embedded.Message{Role: "user", Content: userMessage}
 	history = append(history, userMsg)
@@ -318,7 +379,7 @@ func (c *Commander) ResumeAfterConfirm(ctx context.Context, pa *PendingAction, a
 		return err
 	}
 	history := make([]embedded.Message, 0, len(stored)+1)
-	history = append(history, embedded.Message{Role: "system", Content: systemPrompt})
+	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
 	history = append(history, stored...)
 
 	if unresolved := findUnresolvedToolCalls(history); len(unresolved) > 0 {
@@ -347,7 +408,7 @@ func (c *Commander) runContinuation(ctx context.Context, emit Emitter) error {
 		return err
 	}
 	history := make([]embedded.Message, 0, len(stored)+1)
-	history = append(history, embedded.Message{Role: "system", Content: systemPrompt})
+	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
 	history = append(history, stored...)
 
 	toolDefs := c.tools.Definitions()
