@@ -117,6 +117,12 @@ func streamEvents(r io.Reader, baseURL string) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 
 	inDelta := false // track whether we're mid-delta-paragraph for spacing
+	endDelta := func() {
+		if inDelta {
+			fmt.Println()
+			inDelta = false
+		}
+	}
 	for scanner.Scan() {
 		line := scanner.Text()
 		if !strings.HasPrefix(line, "data: ") {
@@ -141,10 +147,7 @@ func streamEvents(r io.Reader, baseURL string) {
 			fmt.Print(text)
 
 		case "tool_call":
-			if inDelta {
-				fmt.Println()
-				inDelta = false
-			}
+			endDelta()
 			name, _ := ev["name"].(string)
 			args, _ := ev["args"].(map[string]any)
 			argsStr := ""
@@ -155,10 +158,7 @@ func streamEvents(r io.Reader, baseURL string) {
 			fmt.Printf("%s%s→ %s(%s)%s\n", bold, cyan, name, argsStr, reset)
 
 		case "tool_result":
-			if inDelta {
-				fmt.Println()
-				inDelta = false
-			}
+			endDelta()
 			name, _ := ev["name"].(string)
 			output, _ := ev["output"].(string)
 			isErr, _ := ev["error"].(bool)
@@ -177,10 +177,7 @@ func streamEvents(r io.Reader, baseURL string) {
 			// We've already shown the content via deltas; skip.
 
 		case "confirm_required":
-			if inDelta {
-				fmt.Println()
-				inDelta = false
-			}
+			endDelta()
 			id, _ := ev["id"].(string)
 			summary, _ := ev["summary"].(string)
 			tool, _ := ev["tool"].(string)
@@ -200,10 +197,7 @@ func streamEvents(r io.Reader, baseURL string) {
 			return
 
 		case "done":
-			if inDelta {
-				fmt.Println()
-				inDelta = false
-			}
+			endDelta()
 			in, _ := ev["input_tokens"].(float64)
 			out, _ := ev["output_tokens"].(float64)
 			ctxTokens, _ := ev["context_tokens"].(float64)
@@ -221,10 +215,7 @@ func streamEvents(r io.Reader, baseURL string) {
 			}
 
 		case "error":
-			if inDelta {
-				fmt.Println()
-				inDelta = false
-			}
+			endDelta()
 			msg, _ := ev["error"].(string)
 			fmt.Printf("%s%s✗ error: %s%s\n", bold, red, msg, reset)
 
@@ -233,10 +224,7 @@ func streamEvents(r io.Reader, baseURL string) {
 			// version mismatch doesn't silently swallow events (the
 			// bug we hit when confirm_required shipped before the CLI
 			// knew how to render it).
-			if inDelta {
-				fmt.Println()
-				inDelta = false
-			}
+			endDelta()
 			t, _ := ev["type"].(string)
 			fmt.Printf("%s%s? unknown event type %q: %s%s\n", dim, yellow, t, payload, reset)
 		}

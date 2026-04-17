@@ -19,16 +19,26 @@ import (
 // used elsewhere in Eyrie. A real security boundary would need signed
 // entries; this level is "integrity through obviousness", appropriate
 // for a single-user local tool.
+// Audit outcome constants. Kept here (not in tools.go or pending.go)
+// because they describe audit-specific semantics.
+const (
+	auditRiskAuto    = "auto"
+	auditRiskConfirm = "confirm"
+	auditDecisionAuto = "auto"
+	auditOutcomeSuccess = "success"
+	auditOutcomeError   = "error"
+)
+
 type AuditEntry struct {
 	Timestamp time.Time      `json:"timestamp"`
 	PendingID string         `json:"pending_id,omitempty"`
 	Tool      string         `json:"tool"`
 	Args      map[string]any `json:"args"`
-	Risk      string         `json:"risk"`     // "auto" or "confirm"
-	Decision  string         `json:"decision"` // "auto", "approved", "denied", "expired"
-	Outcome   string         `json:"outcome"`  // "success", "error"
+	Risk      string         `json:"risk"`
+	Decision  string         `json:"decision"`
+	Outcome   string         `json:"outcome"`
 	Error     string         `json:"error,omitempty"`
-	Reason    string         `json:"reason,omitempty"` // denial reason
+	Reason    string         `json:"reason,omitempty"`
 }
 
 // AuditLog writes audit entries to disk. Thread-safe via a mutex — the

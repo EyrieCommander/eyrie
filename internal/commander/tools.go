@@ -104,6 +104,7 @@ type RegistryDeps struct {
 // built once at Commander construction time and is read-only thereafter.
 type Registry struct {
 	tools map[string]Tool
+	defs  []embedded.ToolDef // cached; built once after all tools registered
 }
 
 // NewRegistry builds a registry populated with the built-in tool set.
@@ -131,11 +132,22 @@ func NewRegistry(deps RegistryDeps) *Registry {
 		r.register(recallTool(deps.Memory))
 		r.register(forgetTool(deps.Memory))
 	}
+	r.buildDefs()
 	return r
 }
 
 func (r *Registry) register(t Tool) {
 	r.tools[t.Name] = t
+}
+
+// buildDefs caches the tool definitions slice. Called once after all
+// tools are registered. The registry is immutable after construction
+// so this never needs invalidation.
+func (r *Registry) buildDefs() {
+	r.defs = make([]embedded.ToolDef, 0, len(r.tools))
+	for _, t := range r.tools {
+		r.defs = append(r.defs, t.Definition())
+	}
 }
 
 // Get returns the tool with the given name, or nil if not registered.
@@ -148,12 +160,9 @@ func (r *Registry) Get(name string) *Tool {
 }
 
 // Definitions returns all registered tools as LLM-ready ToolDefs.
+// Returns the cached slice built at construction time.
 func (r *Registry) Definitions() []embedded.ToolDef {
-	defs := make([]embedded.ToolDef, 0, len(r.tools))
-	for _, t := range r.tools {
-		defs = append(defs, t.Definition())
-	}
-	return defs
+	return r.defs
 }
 
 // --- Shared shapes ----------------------------------------------------
@@ -504,9 +513,6 @@ func sendToProjectTool(send func(ctx context.Context, projectID, message string)
 			}
 			if err := validateString("message", message, 1, maxSendMessageLen); err != nil {
 				return "", err
-			}
-			if _, err := store.Get(projectID); err != nil {
-				return "", fmt.Errorf("project not found: %w", err)
 			}
 			if err := send(ctx, projectID, message); err != nil {
 				return "", fmt.Errorf("sending message: %w", err)

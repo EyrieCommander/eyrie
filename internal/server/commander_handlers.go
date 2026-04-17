@@ -58,9 +58,6 @@ func (s *Server) handleCommanderHistory(w http.ResponseWriter, r *http.Request) 
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
 	}
-	if messages == nil {
-		messages = nil // Explicit empty response for new conversation
-	}
 	writeJSON(w, http.StatusOK, messages)
 }
 

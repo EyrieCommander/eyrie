@@ -143,7 +143,7 @@ func (al *AgentLoop) Run(ctx context.Context, systemPrompt string, history []Mes
 
 			// Execute each tool call and append results
 			for _, tc := range resp.ToolCalls {
-				args := parseToolArgs(tc.Function.Arguments)
+				args := ParseToolArgs(tc.Function.Arguments)
 
 				// Emit tool_start event
 				select {

@@ -262,21 +262,30 @@ type Emitter interface {
 	WriteEvent(v any) error
 }
 
+// loadHistory reads the full conversation from the store and prepends
+// the current system prompt (with memory snapshot). DRYs the three call
+// sites that need a fresh history slice.
+func (c *Commander) loadHistory() ([]embedded.Message, error) {
+	stored, err := c.store.All()
+	if err != nil {
+		return nil, err
+	}
+	history := make([]embedded.Message, 0, len(stored)+2)
+	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
+	history = append(history, stored...)
+	return history, nil
+}
+
 // RunTurn handles one user message: loads history, appends the user
 // message, calls the LLM + tools in a bounded loop, and streams events
 // to the emitter. Returns nil on success; on error, an error event
 // has already been emitted via the emitter.
 func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitter) error {
-	// Load prior conversation (system prompt is NOT persisted; it's a
-	// code-level configuration prepended in memory every turn).
-	stored, err := c.store.All()
+	history, err := c.loadHistory()
 	if err != nil {
 		c.emitError(emit, fmt.Sprintf("loading conversation: %v", err))
 		return err
 	}
-	history := make([]embedded.Message, 0, len(stored)+2)
-	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
-	history = append(history, stored...)
 	userMsg := embedded.Message{Role: "user", Content: userMessage}
 	history = append(history, userMsg)
 	if err := c.store.Append(userMsg); err != nil {
@@ -421,43 +430,38 @@ func (c *Commander) ResumeAfterConfirm(ctx context.Context, pa *PendingAction, a
 	// unresolved tool_calls. Happens when the LLM batched multiple
 	// tool_calls in one reply — only one pending action was just
 	// resolved; the rest need their own Auto-exec or Confirm pause.
-	stored, err := c.store.All()
+	history, err := c.loadHistory()
 	if err != nil {
 		c.emitError(emit, fmt.Sprintf("loading conversation: %v", err))
 		return err
 	}
-	history := make([]embedded.Message, 0, len(stored)+1)
-	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
-	history = append(history, stored...)
 
 	if unresolved := findUnresolvedToolCalls(history); len(unresolved) > 0 {
 		if c.processToolCalls(ctx, unresolved, &history, emit) {
-			// Another Confirm paused us — end the resume stream. The
-			// client will POST /confirm for the next pending action.
-			// Token counts reported as zero because this resume did
-			// not invoke the LLM.
 			_ = emit.WriteEvent(doneEvent{Type: EventDone})
 			return nil
 		}
 	}
 
-	// All tool_calls in the batch are resolved. Run the LLM continuation
-	// so it can react to the full set of results.
-	return c.runContinuation(ctx, emit)
+	// All tool_calls in the batch are resolved. Pass the already-loaded
+	// history to avoid a redundant disk read.
+	return c.runContinuation(ctx, history, emit)
 }
 
 // runContinuation runs the LLM loop without prepending a new user
-// message. Used by ResumeAfterConfirm. Shares the bounded-iteration
-// safety of RunTurn.
-func (c *Commander) runContinuation(ctx context.Context, emit Emitter) error {
-	stored, err := c.store.All()
-	if err != nil {
-		c.emitError(emit, fmt.Sprintf("loading conversation: %v", err))
-		return err
+// message. Used by ResumeAfterConfirm. Accepts pre-built history to
+// avoid a redundant store.All() disk read when the caller already has
+// it. Pass nil to load from disk (convenience for callers without
+// pre-built history).
+func (c *Commander) runContinuation(ctx context.Context, history []embedded.Message, emit Emitter) error {
+	if history == nil {
+		var err error
+		history, err = c.loadHistory()
+		if err != nil {
+			c.emitError(emit, fmt.Sprintf("loading conversation: %v", err))
+			return err
+		}
 	}
-	history := make([]embedded.Message, 0, len(stored)+1)
-	history = append(history, embedded.Message{Role: "system", Content: c.currentSystemPrompt()})
-	history = append(history, stored...)
 
 	toolDefs := c.tools.Definitions()
 	var inputTokens, outputTokens, contextTokens int
@@ -530,7 +534,7 @@ func (c *Commander) processToolCalls(
 	emit Emitter,
 ) (paused bool) {
 	for _, tc := range tcs {
-		args := parseToolArgs(tc.Function.Arguments)
+		args := embedded.ParseToolArgs(tc.Function.Arguments)
 		_ = emit.WriteEvent(toolCallEvent{
 			Type: EventToolCall, ID: tc.ID, Name: tc.Function.Name, Args: args,
 		})
@@ -626,10 +630,10 @@ func (c *Commander) auditAutoExecution(toolName string, args map[string]any, out
 		return
 	}
 	entry := AuditEntry{
-		Tool: toolName, Args: args, Risk: "auto", Decision: "auto", Outcome: "success",
+		Tool: toolName, Args: args, Risk: auditRiskAuto, Decision: auditDecisionAuto, Outcome: auditOutcomeSuccess,
 	}
 	if execErr != nil {
-		entry.Outcome = "error"
+		entry.Outcome = auditOutcomeError
 		entry.Error = execErr.Error()
 	}
 	if err := c.audit.Append(entry); err != nil {
@@ -647,13 +651,13 @@ func (c *Commander) auditConfirmedExecution(pa *PendingAction, output string, is
 		PendingID: pa.ID,
 		Tool:      pa.Tool,
 		Args:      pa.Args,
-		Risk:      "confirm",
+		Risk:      auditRiskConfirm,
 		Decision:  string(pa.Status),
-		Outcome:   "success",
+		Outcome:   auditOutcomeSuccess,
 		Reason:    denialReason,
 	}
 	if isErr {
-		entry.Outcome = "error"
+		entry.Outcome = auditOutcomeError
 		entry.Error = output
 	}
 	if err := c.audit.Append(entry); err != nil {
@@ -669,20 +673,6 @@ func summarizeTool(tool *Tool, args map[string]any) string {
 	}
 	argsJSON, _ := json.Marshal(args)
 	return fmt.Sprintf("%s(%s)", tool.Name, string(argsJSON))
-}
-
-// parseToolArgs best-effort parses the LLM's JSON argument string into
-// a map. Returns an empty map on malformed JSON — the tool will get an
-// empty args and either error or work with defaults.
-func parseToolArgs(raw string) map[string]any {
-	if raw == "" {
-		return map[string]any{}
-	}
-	var args map[string]any
-	if err := json.Unmarshal([]byte(raw), &args); err != nil {
-		return map[string]any{}
-	}
-	return args
 }
 
 // makeDoneEvent constructs a done event with context usage info.

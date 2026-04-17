@@ -404,9 +404,10 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// parseToolArgs unmarshals the raw JSON arguments string from a tool call
-// into a map. Returns an empty map on parse failure.
-func parseToolArgs(raw string) map[string]any {
+// ParseToolArgs unmarshals the raw JSON arguments string from a tool call
+// into a map. Returns an empty map on parse failure. Exported because the
+// commander package also needs to parse tool args from stored history.
+func ParseToolArgs(raw string) map[string]any {
 	args := make(map[string]any)
 	if raw != "" {
 		_ = json.Unmarshal([]byte(raw), &args)

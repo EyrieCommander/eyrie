@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"sort"
@@ -78,9 +79,7 @@ func (m *MemoryStore) load() error {
 	defer f.Close()
 	var entries map[string]MemoryEntry
 	if err := json.NewDecoder(f).Decode(&entries); err != nil {
-		// Malformed file: start empty. The next write will atomic-overwrite
-		// and recover. Losing memory to a parse error is worse than
-		// silently resetting it.
+		slog.Warn("commander: malformed memory.json, starting empty", "error", err)
 		m.data = make(map[string]MemoryEntry)
 		return nil
 	}
