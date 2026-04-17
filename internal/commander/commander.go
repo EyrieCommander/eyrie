@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
 	"strings"
 
 	"github.com/Audacity88/eyrie/internal/config"
@@ -164,11 +165,10 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 	if err != nil {
 		return nil, fmt.Errorf("commander store: %w", err)
 	}
-	apiKey := config.GetKeyVault().Get("openrouter")
-	if apiKey == "" {
-		return nil, fmt.Errorf("no OpenRouter API key in vault — set one via Settings or OPENROUTER_API_KEY env var")
+	provider, model, err := selectProvider()
+	if err != nil {
+		return nil, err
 	}
-	provider := embedded.NewOpenAICompatProvider(apiKey, "https://openrouter.ai/api/v1")
 	audit, err := NewAuditLog()
 	if err != nil {
 		// Non-fatal: the commander still works without an audit log,
@@ -185,7 +185,7 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 	}
 	return New(Config{
 		Provider: provider,
-		Model:    "anthropic/claude-sonnet-4.6",
+		Model:    model,
 		Store:    store,
 		Pending:  NewPendingStore(),
 		Audit:    audit,
@@ -199,6 +199,45 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 			Memory:        memory,
 		}),
 	}), nil
+}
+
+// selectProvider chooses between OpenRouter (default) and Anthropic
+// native based on the EYRIE_COMMANDER_PROVIDER env var. Returns the
+// provider, the default model for that provider, and any error.
+//
+// WHY env var rather than config file: the commander's config story is
+// still evolving (model picker in UI is Phase 5b). An env var is a
+// stable, easy-to-flip knob that the UI can eventually replace. Default
+// preserves existing behavior so upgrading the branch doesn't break
+// anyone.
+//
+// EYRIE_COMMANDER_PROVIDER values:
+//   - "" or "openrouter" — OpenAI-compat provider against OpenRouter
+//   - "anthropic" — Anthropic native /v1/messages provider
+func selectProvider() (embedded.LLMProvider, string, error) {
+	choice := strings.ToLower(strings.TrimSpace(os.Getenv("EYRIE_COMMANDER_PROVIDER")))
+	vault := config.GetKeyVault()
+
+	switch choice {
+	case "anthropic":
+		key := vault.Get("anthropic")
+		if key == "" {
+			return nil, "", fmt.Errorf("EYRIE_COMMANDER_PROVIDER=anthropic but no anthropic key in vault — add one via Settings or ANTHROPIC_API_KEY env var")
+		}
+		slog.Info("commander: using Anthropic native provider")
+		return embedded.NewAnthropicProvider(key, ""), "claude-sonnet-4-6", nil
+
+	case "", "openrouter":
+		key := vault.Get("openrouter")
+		if key == "" {
+			return nil, "", fmt.Errorf("no OpenRouter API key in vault — set one via Settings or OPENROUTER_API_KEY env var")
+		}
+		slog.Info("commander: using OpenRouter provider")
+		return embedded.NewOpenAICompatProvider(key, "https://openrouter.ai/api/v1"), "anthropic/claude-sonnet-4.6", nil
+
+	default:
+		return nil, "", fmt.Errorf("unknown EYRIE_COMMANDER_PROVIDER=%q (expected: openrouter, anthropic)", choice)
+	}
 }
 
 // Emitter is the minimal interface the turn loop needs to push events

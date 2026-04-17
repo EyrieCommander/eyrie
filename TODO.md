@@ -54,11 +54,16 @@
 - **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
 - **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — closed (pre-microkernel paths)
 - **#5148 (http_request per-host allowlist)**: Closed (pre-microkernel paths) — needs redo on new crate layout
-- **#5696 (session reset/delete tools)**: Open, ready for review — `SessionResetTool` + `SessionDeleteTool`, not registered by default (destructive). Labels: `tool`, `security`. Supersedes #5147.
-- **#5705 (session abort + incremental persistence)**: Open, ready for review — `POST /api/sessions/{id}/abort` + streaming responses saved every 500ms. Auto-routed to @jordanthejet by review bot. Eyrie's stop button and crash resilience depend on this.
-- **#5701 (clear_messages issue)**: Open issue — `clear_messages` trait method for O(1) session reset. Follow-up optimization for #5696.
-- **#5791 (When to Supersede docs)**: Open, ready for review — adds guidance on when to push fixups vs supersede contributor PRs. Closes #4363.
-- **#4363 (push fixups instead of superseding)**: Closed in favor of docs PR (#5791).
+- **#5696 (session reset/delete tools)**: Changes requested → addressed (delete no-op guard, TOCTOU comment, risk label fix, follow-up issues filed). Awaiting re-review from @JordanTheJet.
+- **#5705 (session abort + incremental persistence)**: Changes requested → addressed (risk label fix, breaking changes documented, 4 follow-up issues filed). No code changes needed. Awaiting re-review from @JordanTheJet. Eyrie's stop button depends on this — once merged, wire `ZeroClawAdapter.Interrupt` to call `POST /api/sessions/{id}/abort`.
+- **#5701 (clear_messages issue)**: Open issue — we claimed ownership. Will submit follow-up PR after #5696 merges.
+- **#5791 (When to Supersede docs)**: Merged ✅ — shipped in v0.7.0.
+- **#4363 (push fixups instead of superseding)**: Closed in favor of #5791.
+- **#5833 (session ownership model)**: Open issue — scoping destructive operations per-agent. Follow-up from #5696.
+- **#5834 (FTS UPDATE trigger)**: Open issue — `sessions_fts` goes stale on `update_last`. Follow-up from #5705.
+- **#5835 (cancel_tokens eviction)**: Open issue — leaked map entries for abandoned sessions. Follow-up from #5705.
+- **#5836 (execute_tools cancellation)**: Open issue — thread CancellationToken into tool execution. Follow-up from #5705.
+- **#5837 (ACP cancellation)**: Open issue — ACP sessions have no abort support. Follow-up from #5705.
 
 ---
 
