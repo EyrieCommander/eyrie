@@ -206,8 +206,16 @@ func streamEvents(r io.Reader, baseURL string) {
 			}
 			in, _ := ev["input_tokens"].(float64)
 			out, _ := ev["output_tokens"].(float64)
+			ctxTokens, _ := ev["context_tokens"].(float64)
+			ctxWindow, _ := ev["context_window"].(float64)
 			if in > 0 || out > 0 {
-				fmt.Printf("%s%s✓ done (in=%d out=%d)%s\n", dim, green, int(in), int(out), reset)
+				usage := ""
+				if ctxWindow > 0 && ctxTokens > 0 {
+					pct := ctxTokens / ctxWindow * 100
+					usage = fmt.Sprintf(" | ctx %dk/%dk %.0f%%",
+						int(ctxTokens)/1000, int(ctxWindow)/1000, pct)
+				}
+				fmt.Printf("%s%s✓ done (in=%d out=%d%s)%s\n", dim, green, int(in), int(out), usage, reset)
 			} else {
 				fmt.Printf("%s%s✓ done%s\n", dim, green, reset)
 			}

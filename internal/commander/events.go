@@ -75,6 +75,15 @@ type doneEvent struct {
 	Type         string `json:"type"`
 	InputTokens  int    `json:"input_tokens,omitempty"`
 	OutputTokens int    `json:"output_tokens,omitempty"`
+	// ContextTokens is the input_tokens from the last LLM call in the
+	// turn — i.e. how many tokens the full conversation currently
+	// consumes. Differs from InputTokens (which sums across all LLM
+	// calls within the turn and represents cost, not size).
+	ContextTokens int `json:"context_tokens,omitempty"`
+	// ContextWindow is the model's maximum context size in tokens.
+	// Together with ContextTokens, the client can compute a usage
+	// percentage to show the user how close to the limit they are.
+	ContextWindow int `json:"context_window,omitempty"`
 }
 
 // errorEvent is the payload for EventError.

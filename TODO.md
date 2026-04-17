@@ -111,7 +111,8 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
   - **Later — UI surface for memory**: list/view/edit/delete via Settings page (backend beyond skeleton needs PUT/DELETE endpoints)
 - [ ] Implement an initial tool set: listing and getting project details, creating projects, listing personas and running agents, assigning captains (with full provisioning and briefing), reading a project's chat, sending messages into a project chat on the user's behalf, querying recent activity, and restarting agents
 - [ ] Autonomy policy: read-only tools run automatically; write tools (create, assign, send, restart) require user confirmation
-- [ ] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
+- [x] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
+  - **Later — conversation compaction**: When `context_tokens` regularly exceeds 50% of `context_window`, add LLM-powered summarization of older turns. Must preserve tool_call/tool_result pairs as atomic units (can't summarize half a pair). The memory store already persists cross-conversation context, so compaction only needs to handle intra-conversation history. Trigger: daily syncs or `read_project_chat` returning large results will be the forcing function.
 
 **Frontend (happens in parallel on another machine):**
 - Commander chat page as the primary user-facing surface

@@ -75,24 +75,26 @@ func buildSystemPrompt(memories []MemoryEntry) string {
 // serves the whole process — there is a single persistent conversation
 // with the user.
 type Commander struct {
-	provider embedded.LLMProvider
-	model    string
-	store    *Store
-	tools    *Registry
-	pending  *PendingStore
-	audit    *AuditLog
-	memory   *MemoryStore
+	provider      embedded.LLMProvider
+	model         string
+	contextWindow int // model's max context in tokens
+	store         *Store
+	tools         *Registry
+	pending       *PendingStore
+	audit         *AuditLog
+	memory        *MemoryStore
 }
 
 // Config configures a new Commander.
 type Config struct {
-	Provider embedded.LLMProvider
-	Model    string
-	Store    *Store
-	Tools    *Registry
-	Pending  *PendingStore // optional; defaults to a fresh in-memory store
-	Audit    *AuditLog     // optional; nil disables audit logging
-	Memory   *MemoryStore  // optional; nil omits memory injection + tools
+	Provider      embedded.LLMProvider
+	Model         string
+	ContextWindow int        // model's max context in tokens; 0 omits from done events
+	Store         *Store
+	Tools         *Registry
+	Pending       *PendingStore // optional; defaults to a fresh in-memory store
+	Audit         *AuditLog     // optional; nil disables audit logging
+	Memory        *MemoryStore  // optional; nil omits memory injection + tools
 }
 
 // New constructs a Commander. Callers supply all dependencies so this
@@ -103,13 +105,14 @@ func New(cfg Config) *Commander {
 		cfg.Pending = NewPendingStore()
 	}
 	return &Commander{
-		provider: cfg.Provider,
-		model:    cfg.Model,
-		store:    cfg.Store,
-		tools:    cfg.Tools,
-		pending:  cfg.Pending,
-		audit:    cfg.Audit,
-		memory:   cfg.Memory,
+		provider:      cfg.Provider,
+		model:         cfg.Model,
+		contextWindow: cfg.ContextWindow,
+		store:         cfg.Store,
+		tools:         cfg.Tools,
+		pending:       cfg.Pending,
+		audit:         cfg.Audit,
+		memory:        cfg.Memory,
 	}
 }
 
@@ -165,7 +168,7 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 	if err != nil {
 		return nil, fmt.Errorf("commander store: %w", err)
 	}
-	provider, model, err := selectProvider()
+	pc, err := selectProvider()
 	if err != nil {
 		return nil, err
 	}
@@ -184,9 +187,10 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 		memory = nil
 	}
 	return New(Config{
-		Provider: provider,
-		Model:    model,
-		Store:    store,
+		Provider:      pc.provider,
+		Model:         pc.model,
+		ContextWindow: pc.contextWindow,
+		Store:         store,
 		Pending:  NewPendingStore(),
 		Audit:    audit,
 		Memory:   memory,
@@ -214,7 +218,14 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 // EYRIE_COMMANDER_PROVIDER values:
 //   - "" or "openrouter" — OpenAI-compat provider against OpenRouter
 //   - "anthropic" — Anthropic native /v1/messages provider
-func selectProvider() (embedded.LLMProvider, string, error) {
+// providerChoice bundles the results of selectProvider.
+type providerChoice struct {
+	provider      embedded.LLMProvider
+	model         string
+	contextWindow int
+}
+
+func selectProvider() (providerChoice, error) {
 	choice := strings.ToLower(strings.TrimSpace(os.Getenv("EYRIE_COMMANDER_PROVIDER")))
 	vault := config.GetKeyVault()
 
@@ -222,21 +233,22 @@ func selectProvider() (embedded.LLMProvider, string, error) {
 	case "anthropic":
 		key := vault.Get("anthropic")
 		if key == "" {
-			return nil, "", fmt.Errorf("EYRIE_COMMANDER_PROVIDER=anthropic but no anthropic key in vault — add one via Settings or ANTHROPIC_API_KEY env var")
+			return providerChoice{}, fmt.Errorf("EYRIE_COMMANDER_PROVIDER=anthropic but no anthropic key in vault — add one via Settings or ANTHROPIC_API_KEY env var")
 		}
 		slog.Info("commander: using Anthropic native provider")
-		return embedded.NewAnthropicProvider(key, ""), "claude-sonnet-4-6", nil
+		// Sonnet 4.6 has a 200k context window.
+		return providerChoice{embedded.NewAnthropicProvider(key, ""), "claude-sonnet-4-6", 200_000}, nil
 
 	case "", "openrouter":
 		key := vault.Get("openrouter")
 		if key == "" {
-			return nil, "", fmt.Errorf("no OpenRouter API key in vault — set one via Settings or OPENROUTER_API_KEY env var")
+			return providerChoice{}, fmt.Errorf("no OpenRouter API key in vault — set one via Settings or OPENROUTER_API_KEY env var")
 		}
 		slog.Info("commander: using OpenRouter provider")
-		return embedded.NewOpenAICompatProvider(key, "https://openrouter.ai/api/v1"), "anthropic/claude-sonnet-4.6", nil
+		return providerChoice{embedded.NewOpenAICompatProvider(key, "https://openrouter.ai/api/v1"), "anthropic/claude-sonnet-4.6", 200_000}, nil
 
 	default:
-		return nil, "", fmt.Errorf("unknown EYRIE_COMMANDER_PROVIDER=%q (expected: openrouter, anthropic)", choice)
+		return providerChoice{}, fmt.Errorf("unknown EYRIE_COMMANDER_PROVIDER=%q (expected: openrouter, anthropic)", choice)
 	}
 }
 
@@ -274,6 +286,10 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 
 	toolDefs := c.tools.Definitions()
 	var inputTokens, outputTokens int
+	// contextTokens tracks the last LLM call's input size — i.e. how
+	// much of the context window the full conversation currently uses.
+	// Differs from inputTokens (sum across all calls = cost).
+	var contextTokens int
 
 	// Turn loop: keep going as long as the LLM wants to call tools.
 	for iter := 0; iter < maxTurnIterations; iter++ {
@@ -294,6 +310,7 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 		}
 		inputTokens += resp.InputTokens
 		outputTokens += resp.OutputTokens
+		contextTokens = resp.InputTokens
 
 		// Append the assistant message (text + any tool calls) to history.
 		assistantMsg := embedded.Message{
@@ -313,11 +330,7 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 				Role:    "assistant",
 				Content: resp.Content,
 			})
-			_ = emit.WriteEvent(doneEvent{
-				Type:         EventDone,
-				InputTokens:  inputTokens,
-				OutputTokens: outputTokens,
-			})
+			_ = emit.WriteEvent(c.makeDoneEvent(inputTokens, outputTokens, contextTokens))
 			return nil
 		}
 
@@ -326,11 +339,7 @@ func (c *Commander) RunTurn(ctx context.Context, userMessage string, emit Emitte
 		// in the assistant message — the resume path picks them up
 		// after confirmation. See processToolCalls's doc for why.
 		if c.processToolCalls(ctx, resp.ToolCalls, &history, emit) {
-			_ = emit.WriteEvent(doneEvent{
-				Type:         EventDone,
-				InputTokens:  inputTokens,
-				OutputTokens: outputTokens,
-			})
+			_ = emit.WriteEvent(c.makeDoneEvent(inputTokens, outputTokens, contextTokens))
 			return nil
 		}
 		// Loop back: the LLM may now generate a final response with the
@@ -451,7 +460,7 @@ func (c *Commander) runContinuation(ctx context.Context, emit Emitter) error {
 	history = append(history, stored...)
 
 	toolDefs := c.tools.Definitions()
-	var inputTokens, outputTokens int
+	var inputTokens, outputTokens, contextTokens int
 
 	for iter := 0; iter < maxTurnIterations; iter++ {
 		if err := ctx.Err(); err != nil {
@@ -469,6 +478,7 @@ func (c *Commander) runContinuation(ctx context.Context, emit Emitter) error {
 		}
 		inputTokens += resp.InputTokens
 		outputTokens += resp.OutputTokens
+		contextTokens = resp.InputTokens
 
 		assistantMsg := embedded.Message{
 			Role:      "assistant",
@@ -484,17 +494,13 @@ func (c *Commander) runContinuation(ctx context.Context, emit Emitter) error {
 			_ = emit.WriteEvent(messageEvent{
 				Type: EventMessage, Role: "assistant", Content: resp.Content,
 			})
-			_ = emit.WriteEvent(doneEvent{
-				Type: EventDone, InputTokens: inputTokens, OutputTokens: outputTokens,
-			})
+			_ = emit.WriteEvent(c.makeDoneEvent(inputTokens, outputTokens, contextTokens))
 			return nil
 		}
 
 		// Process tool_calls serially; pause at the first Confirm.
 		if c.processToolCalls(ctx, resp.ToolCalls, &history, emit) {
-			_ = emit.WriteEvent(doneEvent{
-				Type: EventDone, InputTokens: inputTokens, OutputTokens: outputTokens,
-			})
+			_ = emit.WriteEvent(c.makeDoneEvent(inputTokens, outputTokens, contextTokens))
 			return nil
 		}
 	}
@@ -677,6 +683,19 @@ func parseToolArgs(raw string) map[string]any {
 		return map[string]any{}
 	}
 	return args
+}
+
+// makeDoneEvent constructs a done event with context usage info.
+// contextTokens is the last LLM call's input size (= how full the
+// window is). contextWindow comes from the model's known limit.
+func (c *Commander) makeDoneEvent(inputTokens, outputTokens, contextTokens int) doneEvent {
+	return doneEvent{
+		Type:          EventDone,
+		InputTokens:   inputTokens,
+		OutputTokens:  outputTokens,
+		ContextTokens: contextTokens,
+		ContextWindow: c.contextWindow,
+	}
 }
 
 // Store returns the underlying conversation store. Exposed for history
