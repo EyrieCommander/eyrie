@@ -187,6 +187,26 @@ make build
 make install
 ```
 
+### Testing the commander from the terminal
+
+The commander is the built-in LLM-driven orchestrator you chat with to manage projects and agents. It exposes a streaming SSE endpoint at `POST /api/commander/chat`. For quick terminal testing without the UI, use the `commander-test` CLI:
+
+```bash
+# Install to a directory on your PATH
+go build -o ~/.local/bin/commander-test ./cmd/commander-test
+
+# Send a prompt and stream the reply
+commander-test "what projects do I have?"
+
+# Print the saved conversation
+commander-test -history
+
+# Start a fresh conversation
+commander-test -clear
+```
+
+Requires an `openrouter` key in the Eyrie vault (`~/.eyrie/keys.json`) or the `OPENROUTER_API_KEY` environment variable. The default model is `anthropic/claude-sonnet-4.6`.
+
 <img width="1334" height="772" alt="Screen Shot 2026-03-29 at 2 19 12 PM" src="https://github.com/user-attachments/assets/0cde0fdf-a030-434f-828a-0fa9dd03fa9a" />
 
 ## Troubleshooting

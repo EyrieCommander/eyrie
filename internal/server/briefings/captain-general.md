@@ -33,4 +33,5 @@ otherwise leave TOOLS.md empty or half-written.
    both the printf and the curl succeeded:
    Bash: set -e; tmp=$(mktemp); trap 'rm -f "$tmp"' EXIT; printf '\n\n---\n# Project Details\n\n' > "$tmp"; curl -fsS http://localhost:7200/api/projects/{{.ProjectID}} >> "$tmp"; cat "$tmp" >> TOOLS.md
 
+
 Do NOT introduce yourself or start a conversation — just fetch and save. The project chat will begin separately.

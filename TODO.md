@@ -63,9 +63,16 @@ Current work lives in `~/.claude/plans/purrfect-sprouting-kahn.md` (single sourc
 - **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
 - **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — closed (pre-microkernel paths)
 - **#5148 (http_request per-host allowlist)**: Closed (pre-microkernel paths) — needs redo on new crate layout
-- **#5696 (session reset/delete tools)**: Draft — `SessionResetTool` + `SessionDeleteTool`, not registered by default (destructive). Supersedes #5147.
-- **#5705 (session abort + incremental persistence)**: Draft — `POST /api/sessions/{id}/abort` + streaming responses saved every 500ms. Eyrie's stop button and crash resilience depend on this.
-- **#5701 (clear_messages issue)**: Open issue — `clear_messages` trait method for O(1) session reset. Follow-up optimization for #5696.
+- **#5696 (session reset/delete tools)**: Changes requested → addressed (delete no-op guard, TOCTOU comment, risk label fix, follow-up issues filed). Awaiting re-review from @JordanTheJet.
+- **#5705 (session abort + incremental persistence)**: Changes requested → addressed (risk label fix, breaking changes documented, 4 follow-up issues filed). No code changes needed. Awaiting re-review from @JordanTheJet. Eyrie's stop button depends on this — once merged, wire `ZeroClawAdapter.Interrupt` to call `POST /api/sessions/{id}/abort`.
+- **#5701 (clear_messages issue)**: Open issue — we claimed ownership. Will submit follow-up PR after #5696 merges.
+- **#5791 (When to Supersede docs)**: Merged ✅ — shipped in v0.7.0.
+- **#4363 (push fixups instead of superseding)**: Closed in favor of #5791.
+- **#5833 (session ownership model)**: Open issue — scoping destructive operations per-agent. Follow-up from #5696.
+- **#5834 (FTS UPDATE trigger)**: Open issue — `sessions_fts` goes stale on `update_last`. Follow-up from #5705.
+- **#5835 (cancel_tokens eviction)**: Open issue — leaked map entries for abandoned sessions. Follow-up from #5705.
+- **#5836 (execute_tools cancellation)**: Open issue — thread CancellationToken into tool execution. Follow-up from #5705.
+- **#5837 (ACP cancellation)**: Open issue — ACP sessions have no abort support. Follow-up from #5705.
 
 ---
 
@@ -80,7 +87,7 @@ Current work lives in `~/.claude/plans/purrfect-sprouting-kahn.md` (single sourc
 - [x] **Auto-pairing for provisioned instances**: Implemented — `autoPairZeroClaw()` runs on instance start, fetches paircode from `/admin/paircode`, pairs, and stores token in `tokens.json`. Pairing now enabled by default (`require_pairing = true`).
   - **Secure token storage**: Use restrictive file permissions (0o600) at minimum, prefer OS keyring integration. Tokens should support rotation/refresh under `~/.eyrie/tokens/`.
 - [ ] **Stale daemon cleanup**: `runDetached` spawns background processes but doesn't kill existing ones on the same port. Before starting a new daemon, check for and kill any existing process on the target port.
-- [x] **Centralized key vault**: `config/vault.go` — flat JSON store at `~/.eyrie/keys.json` (0600 permissions) with singleton accessor. REST API (`GET/PUT/DELETE /api/keys`, `POST /api/keys/{provider}/validate`). Keys injected into framework processes via env vars (`EnvSlice()`) through `ExecuteWithConfigEnv`. Settings page UI for add/edit/delete with provider validation. Embedded agents use vault directly via `SetVault()`. Pending improvements:
+- [x] **Centralized key vault** (encryption at rest pending): `config/vault.go` — flat JSON store at `~/.eyrie/keys.json` (0600 permissions) with singleton accessor. REST API (`GET/PUT/DELETE /api/keys`, `POST /api/keys/{provider}/validate`). Keys injected into framework processes via env vars (`EnvSlice()`) through `ExecuteWithConfigEnv`. Settings page UI for add/edit/delete with provider validation. Embedded agents use vault directly via `SetVault()`. Pending improvements:
   - [ ] **Encryption at rest**: Keys stored as plain JSON. Add ChaCha20-Poly1305 encryption (like ZeroClaw's SecretStore) with a master key in `~/.eyrie/.vault_key` (0600).
   - [ ] **Per-instance key overrides**: Currently one key per provider globally. Add optional per-instance overrides for multi-tenant setups (e.g., different OpenRouter keys for different projects).
   - [ ] **Custom env var names**: Provider-to-env-var mapping is hardcoded. Add optional `env_var` field per key for frameworks with non-standard env var names (e.g., `PICOCLAW_CHANNELS_*`).
@@ -104,9 +111,17 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - [ ] Support multiple LLM providers (Anthropic, OpenAI, and OpenAI-compatible endpoints like the Claude Max proxy, Ollama, OpenRouter) with the user choosing a default; keys come from the existing vault
 - [ ] Give the commander a persistent conversation history that survives restarts
 - [ ] Give the commander its own memory store so it can remember user preferences and project context across conversations
+  - **Later — recall strategy beyond flat JSON**: MVP injects all entries into the system prompt each turn. Options when that breaks down (too many entries, token cost, or need for semantic lookup):
+    - SQLite with FTS5 for keyword/prefix search — mirrors ZeroClaw's session storage (`claws/zeroclaw/`) and gives fast `recall(query)` without loading everything
+    - Vector embeddings (local model, e.g. via `text-embedding-3-small` through OpenAI-compat endpoint, or a Go-native embedder) for semantic recall — LLM says "what did I say about mobile releases?" and we search by meaning, not exact key
+    - Tag/namespace support (`project:X/*`, `user-pref/*`) for scoped recall and bulk forget
+    - TTL-based pruning and "last-accessed" ordering so stale notes fall out naturally
+    - Cross-reference how EyrieClaw, OpenClaw, and PicoClaw structure their agent memory (`claws/*/`) — pick conventions rather than invent new ones
+  - **Later — UI surface for memory**: list/view/edit/delete via Settings page (backend beyond skeleton needs PUT/DELETE endpoints)
 - [ ] Implement an initial tool set: listing and getting project details, creating projects, listing personas and running agents, assigning captains (with full provisioning and briefing), reading a project's chat, sending messages into a project chat on the user's behalf, querying recent activity, and restarting agents
 - [ ] Autonomy policy: read-only tools run automatically; write tools (create, assign, send, restart) require user confirmation
-- [ ] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
+- [x] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
+  - **Later — conversation compaction**: When `context_tokens` regularly exceeds 50% of `context_window`, add LLM-powered summarization of older turns. Must preserve tool_call/tool_result pairs as atomic units (can't summarize half a pair). The memory store already persists cross-conversation context, so compaction only needs to handle intra-conversation history. Trigger: daily syncs or `read_project_chat` returning large results will be the forcing function.
 
 **Frontend (happens in parallel on another machine):**
 - Commander chat page as the primary user-facing surface
@@ -158,6 +173,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - [ ] **Session management**: Test session group delete across all frameworks
 - [x] **Destroy talons on project reset**: `POST /api/projects/{id}/reset` clears chat, resets commander/captain sessions, stops+deletes talons. Auto-start chat restored.
 - [ ] **Hide project sessions from 1:1 chat**: Filter out sessions matching a project ID from the ChatPanel session list. Project conversations should only be accessed via the project chat UI — showing them in 1:1 creates split-brain confusion. Later: clicking a project session could redirect to the project detail page instead.
+- [ ] **Bulk project selection + delete in UI**: Project list page needs multi-select (checkboxes or shift-click) with a bulk delete action. Currently deleting test projects requires per-row action or filesystem cleanup. Should destroy same-UUID workspace directory alongside the `.json` metadata, matching the single-delete path.
 - [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
 - [x] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
 - [x] **Rich tool output display**: Detect "Rendered html content to canvas" in tool output, extract frame ID, show inline preview or "view frame" link that navigates to the rendered content. Also HTML preview, image preview, JSON highlighting, file path links and diff display

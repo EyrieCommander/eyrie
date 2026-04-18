@@ -6,15 +6,20 @@ import { getFrameworkStatus } from "../lib/frameworkStatus";
 
 interface FrameworkCardProps {
   framework: Framework;
+  /** When provided, clicking the card calls this instead of navigating to the detail page. */
+  onSelect?: (id: string) => void;
 }
 
 export default function FrameworkCard({
   framework,
+  onSelect,
 }: FrameworkCardProps) {
   const navigate = useNavigate();
   const status = getFrameworkStatus(framework);
   const emoji = FRAMEWORK_EMOJI[framework.id] || "";
-  const goToDetail = () => navigate(`/frameworks/${framework.id}`);
+  const handleClick = onSelect
+    ? () => onSelect(framework.id)
+    : () => navigate(`/frameworks/${framework.id}`);
 
   const badgeColors: Record<string, string> = {
     green: "bg-green/10 text-green",
@@ -25,13 +30,13 @@ export default function FrameworkCard({
 
   return (
     <div
-      onClick={goToDetail}
+      onClick={handleClick}
       role="button"
       tabIndex={0}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          goToDetail();
+          handleClick();
         }
       }}
       className="flex flex-1 flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors cursor-pointer"

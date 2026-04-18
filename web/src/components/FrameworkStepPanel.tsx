@@ -58,20 +58,7 @@ function ChooseStep({ frameworks, onChooseFramework }: Props) {
       </p>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {frameworks.map((fw) => (
-          <div
-            key={fw.id}
-            onClick={() => onChooseFramework(fw.id)}
-            role="button"
-            tabIndex={0}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                onChooseFramework(fw.id);
-              }
-            }}
-          >
-            <FrameworkCard framework={fw} />
-          </div>
+          <FrameworkCard key={fw.id} framework={fw} onSelect={onChooseFramework} />
         ))}
       </div>
     </div>

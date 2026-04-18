@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/commander"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
@@ -37,6 +38,11 @@ type Server struct {
 	projectStore  *project.Store
 	chatStore     *project.ChatStore
 	instanceStore *instance.Store
+
+	// commander is the built-in LLM-driven orchestrator. The user chats
+	// with it directly via /api/commander/chat. It has direct access to
+	// the project store via its tool registry.
+	commander *commander.Commander
 
 	// activeChats stores cancel functions for in-flight project chat
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
@@ -76,6 +82,21 @@ func New(cfg config.Config) (*Server, error) {
 		chatStore:     chatSt,
 		instanceStore: instStore,
 	}
+	// Commander is constructed AFTER s is populated so its tools can
+	// receive method values of server methods (runDiscovery, send, etc.).
+	// Method values close over the receiver pointer, so the callbacks
+	// will have access to the fully-initialized server when invoked.
+	cmd, err := commander.NewDefault(commander.DefaultConfig{
+		Projects:      projStore,
+		Chat:          chatSt,
+		Discovery:     s.runDiscovery,
+		SendToProject: s.sendCommanderMessageToProject,
+		RestartAgent:  s.restartAgentByName,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("commander: %w", err)
+	}
+	s.commander = cmd
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
@@ -146,14 +167,19 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
 	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)
 
+	// Commander (built-in LLM orchestrator — the user's chat surface)
+	s.mux.HandleFunc("POST /api/commander/chat", s.handleCommanderChat)
+	s.mux.HandleFunc("GET /api/commander/history", s.handleCommanderHistory)
+	s.mux.HandleFunc("DELETE /api/commander/history", s.handleCommanderClear)
+	s.mux.HandleFunc("POST /api/commander/confirm/{id}", s.handleCommanderConfirm)
+	s.mux.HandleFunc("GET /api/commander/memory", s.handleCommanderMemory)
+
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)
 
 	// Hierarchy endpoints
 	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
 	s.mux.HandleFunc("GET /api/hierarchy/commander", s.handleGetCommander)
-	s.mux.HandleFunc("POST /api/hierarchy/commander", s.handleSetCommander)
-	s.mux.HandleFunc("POST /api/hierarchy/commander/brief", s.handleBriefCommander)
 	s.mux.HandleFunc("POST /api/projects/{id}/captain/brief", s.handleBriefCaptain)
 
 	// Key vault endpoints

@@ -237,14 +237,17 @@ func dedupMessages(messages []ChatMessage) []ChatMessage {
 	}
 	seen := make(map[string]int, len(messages))
 	for i, m := range messages {
+		if m.ID == "" {
+			continue // skip empty IDs — they aren't duplicates
+		}
 		seen[m.ID] = i
 	}
 	if len(seen) == len(messages) {
 		return messages // No duplicates
 	}
-	deduped := make([]ChatMessage, 0, len(seen))
+	deduped := make([]ChatMessage, 0, len(messages))
 	for i, m := range messages {
-		if seen[m.ID] == i {
+		if m.ID == "" || seen[m.ID] == i {
 			deduped = append(deduped, m)
 		}
 	}

@@ -78,6 +78,12 @@ type ChatOrchestrator struct {
 	chatStore     *project.ChatStore
 	instanceStore *instance.Store
 	activeChats   *sync.Map // map[projectID]context.CancelFunc — for stop endpoint
+	// triggerSender/triggerRole override the default "user"/"user" attribution
+	// of the trigger message. Set by callers that inject messages from a
+	// non-user source (e.g. the commander's send_to_project tool). Empty
+	// string falls back to "user".
+	triggerSender string
+	triggerRole   string
 }
 
 // RunProjectChat executes the core project-chat loop: stores the user
@@ -154,11 +160,21 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		sse.WriteEvent(map[string]any{"type": "message", "message": initMsg})
 	}
 
-	// Store and emit user message
+	// Store and emit the trigger message. Sender/role default to "user"
+	// but can be overridden (e.g. by the commander's send_to_project tool
+	// to attribute the message to "eyrie" with role "commander").
+	triggerSender := o.triggerSender
+	if triggerSender == "" {
+		triggerSender = "user"
+	}
+	triggerRole := o.triggerRole
+	if triggerRole == "" {
+		triggerRole = "user"
+	}
 	userMsg := project.ChatMessage{
 		ID:        uuid.New().String(),
-		Sender:    "user",
-		Role:      "user",
+		Sender:    triggerSender,
+		Role:      triggerRole,
 		Content:   message,
 		Timestamp: time.Now(),
 		Mention:   mention,
@@ -443,6 +459,13 @@ func (o *ChatOrchestrator) RunProjectChat(ctx context.Context, proj *project.Pro
 		sse.WriteEvent(map[string]any{"type": "message", "message": stopMsg})
 		sse.WriteDone()
 		return nil
+	}
+
+	// If the stream ended without a "done" event (connection drop, agent
+	// crash), use whatever was accumulated via deltas so later code has
+	// content to persist and parse for [LISTENING].
+	if responseContent == "" && streamedBuilder.Len() > 0 {
+		responseContent = streamedBuilder.String()
 	}
 
 	// WHY directive parsing: [LISTENING] is parsed from the END of the response.

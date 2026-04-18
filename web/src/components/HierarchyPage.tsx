@@ -5,7 +5,6 @@ import type { HierarchyTree, ProjectTree, Framework } from "../lib/types";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import { fetchHierarchy, fetchFrameworks } from "../lib/api";
 import { useData } from "../lib/DataContext";
-import { CommanderSetup } from "./CommanderSetup";
 
 interface DashboardMetrics {
   active_projects: number;
@@ -233,16 +232,14 @@ const FRAMEWORK_PITCHES: Record<string, string> = {
 
 // ─── Guide view (shown when no commander / pre-project state) ───
 
-function GuideView({ hierarchy, refresh }: {
+function GuideView({ hierarchy }: {
   hierarchy: HierarchyTree | null;
-  refresh: () => Promise<void>;
 }) {
   const navigate = useNavigate();
   const { agents } = useData();
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [fwLoading, setFwLoading] = useState(true);
   const [fwError, setFwError] = useState<string | null>(null);
-  const [showCommanderSetup, setShowCommanderSetup] = useState(false);
   const [fwExpanded, setFwExpanded] = useState(false);
 
   const loadFrameworks = useCallback(() => {
@@ -401,24 +398,9 @@ function GuideView({ hierarchy, refresh }: {
               view projects &rarr;
             </Link>
           ) : (
-            <>
-              <button
-                onClick={() => setShowCommanderSetup((prev) => !prev)}
-                disabled={!hasAgents}
-                className="inline-flex items-center gap-1.5 rounded bg-purple-400 px-3 py-1.5 text-[10px] font-medium text-white hover:bg-purple-500 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                <Crown className="h-3 w-3" />
-                set up commander
-              </button>
-              {!hasAgents && (
-                <p className="mt-1 text-[10px] text-text-muted">install a framework and start an agent first</p>
-              )}
-              {showCommanderSetup && (
-                <div className="mt-3 rounded border border-border p-4">
-                  <CommanderSetup onCreated={() => { setShowCommanderSetup(false); refresh(); }} />
-                </div>
-              )}
-            </>
+            <Link to="/" className="text-[10px] text-accent hover:text-accent/80 transition-colors">
+              set up a project &rarr;
+            </Link>
           )}
         </div>
       </div>
@@ -442,8 +424,6 @@ function ProjectsTab({
   refresh: () => Promise<void>;
 }) {
   const navigate = useNavigate();
-  const [changingCommander, setChangingCommander] = useState(false);
-
   if (loading && !hierarchy) {
     return <div className="py-12 text-center text-xs text-text-muted">loading projects...</div>;
   }
@@ -463,33 +443,8 @@ function ProjectsTab({
     );
   }
 
-  // No commander set up yet — show setup invitation
-  if (!hierarchy?.commander) {
-    return (
-      <div className="space-y-6">
-        <div className="rounded border border-purple-400/30 bg-purple-400/5 p-6 text-center space-y-3">
-          <Crown className="h-8 w-8 text-purple-400/50 mx-auto" />
-          <div>
-            <h3 className="text-sm font-bold text-text">set up a commander</h3>
-            <p className="mt-1 text-xs text-text-muted">
-              A commander orchestrates multi-agent projects. Set one up to create teams of captains and talons.
-            </p>
-          </div>
-          <button
-            onClick={() => setChangingCommander(true)}
-            className="inline-flex items-center gap-1.5 rounded bg-purple-400 px-4 py-2 text-xs font-medium text-white hover:bg-purple-500 transition-colors"
-          >
-            <Crown className="h-3 w-3" />
-            set up commander
-          </button>
-        </div>
-        {changingCommander && (
-          <div className="rounded border border-border p-4">
-            <CommanderSetup onCreated={() => { setChangingCommander(false); refresh(); }} />
-          </div>
-        )}
-      </div>
-    );
+  if (!hierarchy) {
+    return <div className="py-20 text-center text-xs text-text-muted">no data available</div>;
   }
 
   const allCaptains = hierarchy.projects.filter((t) => t.captain).length;
@@ -506,14 +461,8 @@ function ProjectsTab({
           <div>
             <div className="flex items-center gap-2">
               <p className="text-[10px] text-text-muted">
-                commander: {hierarchy.commander.display_name || hierarchy.commander.name}
+                commander: {hierarchy?.commander?.display_name || "Eyrie"} (built-in)
               </p>
-              <button
-                onClick={() => setChangingCommander(true)}
-                className="text-[9px] text-purple-400 hover:text-purple-300 transition-colors"
-              >
-                change
-              </button>
             </div>
           </div>
         </div>
@@ -569,18 +518,26 @@ function ProjectsTab({
         />
       </div>
 
-      {/* Commander change overlay */}
-      {changingCommander && (
-        <div className="border-b border-border px-5 py-3">
-          <div className="rounded border border-purple-400/30 bg-purple-400/5 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-medium text-text">change commander</span>
-              <button onClick={() => setChangingCommander(false)} className="text-[10px] text-text-muted hover:text-text">cancel</button>
-            </div>
-            <CommanderSetup onCreated={() => { setChangingCommander(false); refresh(); }} />
-          </div>
+      {/* Agent summary bar with links */}
+      <div className="flex items-center justify-between border-b border-border px-5 py-2">
+        <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
+          // agents: {1 + allCaptains + allTalons}
+        </span>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate("/mission-control/agents")}
+            className="text-[10px] text-accent hover:text-accent/80 transition-colors"
+          >
+            manage agents &rarr;
+          </button>
+          <button
+            onClick={() => navigate("/agents/compare")}
+            className="text-[10px] text-accent hover:text-accent/80 transition-colors"
+          >
+            compare agents &rarr;
+          </button>
         </div>
-      )}
+      </div>
 
       {/* Timeline header */}
       <div className="flex items-center justify-between border-b border-border px-5 py-2">
@@ -684,7 +641,7 @@ export default function HierarchyPage() {
             refresh={refresh}
           />
         ) : (
-          <GuideView hierarchy={hierarchy} refresh={refresh} />
+          <GuideView hierarchy={hierarchy} />
         )}
       </div>
     </div>

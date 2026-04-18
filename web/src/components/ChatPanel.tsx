@@ -13,7 +13,6 @@ import {
   fetchSessions,
   fetchChatMessages,
   streamMessage,
-  streamCommanderBriefing,
   createSession,
   resetSession,
   deleteSession,
@@ -141,15 +140,13 @@ export function ChatPanel({
   const [newSessionName, setNewSessionName] = useState("");
 
   const abortRef = useRef<AbortController | null>(null);
-  const retryTimeoutRef = useRef<ReturnType<typeof setTimeout>[]>([]);
   // Track time-to-first-token for latency metrics
   const sendTimeRef = useRef<number | null>(null);
   const latencyRecordedRef = useRef(false);
   const refreshTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const [searchParams, setSearchParams] = useSearchParams();
+  const [searchParams] = useSearchParams();
   const requestedSession = searchParams.get("session");
-  const briefMode = searchParams.get("brief");
 
   const defaultSessionKey =
     framework === "openclaw" ? "agent:main:main" : "main";
@@ -161,14 +158,6 @@ export function ChatPanel({
   // ── Load sessions ───────────────────────────────────────────────────
 
   useEffect(() => {
-    if (briefMode === "commander") {
-      // WHY: Clear stale sessions so old tabs don't show during briefing.
-      // Sessions will be re-fetched after the briefing completes and the
-      // briefing session tab is selected.
-      setSessions([]);
-      setActiveGroupName("eyrie-commander-briefing");
-      return;
-    }
     fetchSessions(agentName)
       .then((resp) => {
         const all = resp.sessions ?? [];
@@ -190,7 +179,7 @@ export function ChatPanel({
           requestedSession || sessionDisplayName(defaultSessionKey),
         );
       });
-  }, [agentName, alive, defaultSessionKey, requestedSession, briefMode]);
+  }, [agentName, alive, defaultSessionKey, requestedSession]);
 
   // ── Load group messages ─────────────────────────────────────────────
 
@@ -426,7 +415,6 @@ export function ChatPanel({
   // approach: we store a unique string when the briefing fires, and only
   // fire if the current key doesn't match. A new ?brief=commander navigation
   // generates a fresh key via the URL change itself.
-  const briefedKey = useRef<string | null>(null);
 
   // ── Unified chat event handler ────────────────────────────────────────
 
@@ -493,110 +481,6 @@ export function ChatPanel({
     [agentName, setPendingReply],
   );
 
-  // ── Commander briefing ──────────────────────────────────────────────
-
-  useEffect(() => {
-    const currentKey = `${agentName}:commander`;
-    if (briefMode !== "commander" || briefedKey.current === currentKey || !alive) return;
-    briefedKey.current = currentKey;
-    // WHY: Don't clear searchParams here — clearing briefMode mid-stream
-    // re-triggers the session load effect and can cause a double-fire.
-    // Clear it after the briefing completes (in the done handler below).
-
-    let mounted = true;
-    setSending(true);
-    setStreamingContent("");
-    setToolCalls([]);
-
-    const { controller } = streamCommanderBriefing((ev) => {
-      if (!mounted) return;
-      const evType = ev.type as string;
-      if (evType === "session") {
-        const switchToBriefing = () => {
-          fetchSessions(agentName)
-            .then((resp) => {
-              if (!mounted) return;
-              const all = resp.sessions ?? [];
-              setSessions(all);
-              const gs = groupSessions(all);
-              const match = gs.find(
-                (g) => g.name === "eyrie-commander-briefing",
-              );
-              if (match) {
-                setActiveGroupName(match.name);
-              } else {
-                let retryCount = 0;
-                const maxRetries = 3;
-                const retryFetchBriefing = () => {
-                  if (!mounted || retryCount >= maxRetries) return;
-                  retryCount++;
-                  const delay = 1000 * Math.pow(2, retryCount - 1);
-                  const timeoutId = setTimeout(() => {
-                    if (!mounted) return;
-                    fetchSessions(agentName)
-                      .then((resp2) => {
-                        if (!mounted) return;
-                        const all2 = resp2.sessions ?? [];
-                        setSessions(all2);
-                        const gs2 = groupSessions(all2);
-                        const match2 = gs2.find((g) => g.name === "eyrie-commander-briefing");
-                        if (match2) {
-                          setActiveGroupName(match2.name);
-                        } else if (retryCount < maxRetries) {
-                          retryFetchBriefing();
-                        }
-                      })
-                      .catch((err) => {
-                        console.warn("Failed to fetch briefing sessions:", err);
-                      });
-                  }, delay);
-                  retryTimeoutRef.current.push(timeoutId);
-                };
-                retryFetchBriefing();
-              }
-            })
-            .catch(() => {});
-        };
-        switchToBriefing();
-        return;
-      }
-
-      // For "error" in briefing mode, also reset the briefing trigger
-      if (evType === "error") {
-        setChatError(ev.error || "Briefing failed");
-        setStreamingContent("");
-        setToolCalls([]);
-        setSending(false);
-        briefedKey.current = null;
-        setSearchParams({}, { replace: true });
-        return;
-      }
-
-      handleChatEvent(ev as ChatEvent, () => {
-        // On done: clear the brief param and refresh sessions
-        setSearchParams({}, { replace: true });
-        fetchSessions(agentName)
-          .then((resp) => {
-            if (!mounted) return;
-            const all = resp.sessions ?? [];
-            setSessions(all);
-            const gs = groupSessions(all);
-            const match = gs.find(
-              (g) => g.name === "eyrie-commander-briefing",
-            );
-            if (match) setActiveGroupName(match.name);
-          })
-          .catch(() => {});
-      });
-    });
-
-    return () => {
-      mounted = false;
-      controller.abort();
-      retryTimeoutRef.current.forEach(clearTimeout);
-      retryTimeoutRef.current = [];
-    };
-  }, [briefMode, alive, agentName, setSearchParams, handleChatEvent]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleStop = useCallback(() => {
     abortRef.current?.abort();

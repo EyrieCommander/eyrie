@@ -248,14 +248,10 @@ export interface CreateProjectRequest {
 // --- Hierarchy types ---
 
 export interface CommanderInfo {
-  id: string;
   name: string;
   display_name: string;
-  framework: string;
-  port: number;
   status: string;
-  hierarchy_role: HierarchyRole;
-  legacy: boolean;
+  hierarchy_role: string;
 }
 
 export interface HierarchyTree {
