@@ -81,6 +81,12 @@ func (s *Server) handleSetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reset the commander so it re-initializes with the new key.
+	// Without this, rotating a key leaves the commander using the old one.
+	s.commanderMu.Lock()
+	s.commander = nil
+	s.commanderMu.Unlock()
+
 	// Valid reflects whether validation actually ran and passed. When the
 	// client asked to skip validation we haven't proved anything about the
 	// key, so don't claim Valid: true.

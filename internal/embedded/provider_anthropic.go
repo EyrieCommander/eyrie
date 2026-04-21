@@ -359,10 +359,15 @@ func parseAnthropicResponse(data []byte) (*Response, error) {
 		case "text":
 			textBuf.WriteString(block.Text)
 		case "tool_use":
-			argsJSON, _ := json.Marshal(block.Input)
+			args := "{}"
+			if block.Input != nil {
+				if b, err := json.Marshal(block.Input); err == nil {
+					args = string(b)
+				}
+			}
 			tc := ToolCall{ID: block.ID, Type: "function"}
 			tc.Function.Name = block.Name
-			tc.Function.Arguments = string(argsJSON)
+			tc.Function.Arguments = args
 			resp.ToolCalls = append(resp.ToolCalls, tc)
 		}
 	}

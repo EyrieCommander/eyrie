@@ -89,7 +89,7 @@ export default function ApiKeyForm({ provider, onSaved, placeholder }: Props) {
       <div className="flex items-center gap-2">
         <div className="relative flex-1">
           <input
-            type="text"
+            type={show ? "text" : "password"}
             value={value}
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => {
@@ -97,10 +97,9 @@ export default function ApiKeyForm({ provider, onSaved, placeholder }: Props) {
             }}
             placeholder={placeholder ?? "sk-..."}
             aria-label={`${provider} API key`}
-            autoComplete="off"
+            autoComplete="one-time-code"
             data-1p-ignore
             data-lpignore="true"
-            style={show ? undefined : { WebkitTextSecurity: "disc" } as React.CSSProperties}
             className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none"
           />
           <button

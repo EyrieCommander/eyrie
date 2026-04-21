@@ -27,13 +27,18 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const loadKeys = async () => {
     try {
       setLoading(true);
+      setLoadError(null);
       const data = await fetchKeys();
       setKeys(data);
-    } catch {
-      setKeys([]);
+    } catch (err) {
+      // Keep existing keys visible (if any) rather than wiping to [].
+      // Only clear when we know the server returned an empty list.
+      setLoadError(err instanceof Error ? err.message : "failed to load keys");
     } finally {
       setLoading(false);
     }
@@ -138,9 +143,9 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
         </div>
       )}
 
-      {error && (
+      {(error || loadError) && (
         <div className="text-[10px] text-red bg-red/5 border border-red/20 rounded px-2 py-1">
-          {error}
+          {error || loadError}
         </div>
       )}
       {successMsg && (
@@ -193,16 +198,15 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
                     <div className="flex items-center gap-2">
                       <div className="relative flex-1">
                         <input
-                          type="text"
+                          type={showEditKey ? "text" : "password"}
                           value={editKey}
                           onChange={(e) => setEditKey(e.target.value)}
                           onKeyDown={(e) => { if (e.key === "Enter") handleUpdate(entry.provider); }}
                           placeholder="new key..."
                           aria-label={`New key for ${entry.provider}`}
-                          autoComplete="off"
+                          autoComplete="one-time-code"
                           data-1p-ignore
                           data-lpignore="true"
-                          style={showEditKey ? undefined : { WebkitTextSecurity: "disc" } as React.CSSProperties}
                           className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none"
                         />
                         <button
@@ -255,16 +259,15 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
               </select>
               <div className="relative flex-1">
                 <input
-                  type="text"
+                  type={showNewKey ? "text" : "password"}
                   value={newKey}
                   onChange={(e) => setNewKey(e.target.value)}
                   onKeyDown={(e) => { if (e.key === "Enter") handleAdd(); }}
                   placeholder="sk-..."
                   aria-label={`API key${newProvider ? ` for ${newProvider}` : ""}`}
-                  autoComplete="off"
+                  autoComplete="one-time-code"
                   data-1p-ignore
                   data-lpignore="true"
-                  style={showNewKey ? undefined : { WebkitTextSecurity: "disc" } as React.CSSProperties}
                   className="w-full rounded border border-border bg-bg px-2 py-1.5 pr-7 text-xs text-text font-mono focus:border-accent focus:outline-none"
                 />
                 <button

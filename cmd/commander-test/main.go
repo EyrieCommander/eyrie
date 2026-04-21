@@ -163,8 +163,8 @@ func streamEvents(r io.Reader, baseURL string) {
 			output, _ := ev["output"].(string)
 			isErr, _ := ev["error"].(bool)
 			preview := output
-			if len(preview) > 240 {
-				preview = preview[:240] + "…"
+			if r := []rune(preview); len(r) > 240 {
+				preview = string(r[:240]) + "…"
 			}
 			preview = strings.ReplaceAll(preview, "\n", " ")
 			if isErr {
@@ -325,8 +325,8 @@ func runHistory(baseURL string) {
 		case "tool":
 			name, _ := m["name"].(string)
 			preview := content
-			if len(preview) > 240 {
-				preview = preview[:240] + "…"
+			if r := []rune(preview); len(r) > 240 {
+				preview = string(r[:240]) + "…"
 			}
 			preview = strings.ReplaceAll(preview, "\n", " ")
 			fmt.Printf("%s%s[%d] ← %s: %s%s\n", dim, gray, i+1, name, preview, reset)

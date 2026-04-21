@@ -262,6 +262,12 @@ func isSafeToRemove(path string) bool {
 	if err != nil {
 		return false
 	}
+	// Resolve symlinks so a symlinked configDir can't point to a dangerous target.
+	if resolved, err := filepath.EvalSymlinks(abs); err == nil {
+		abs = resolved
+	} else {
+		return false
+	}
 	cleaned := filepath.Clean(abs)
 	if cleaned == "/" || cleaned == "." || cleaned == ".." {
 		return false

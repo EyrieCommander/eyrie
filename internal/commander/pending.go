@@ -156,10 +156,10 @@ func (s *PendingStore) sweepLocked() {
 		if pa.Status == PendingOpen && now.After(pa.ExpiresAt) {
 			pa.Status = PendingExpired
 		}
-		// Keep expired entries visible for a grace period so clients
-		// that race the sweep get a clear "expired" response rather
-		// than "not found". 1 minute after expiry, forget them.
-		if now.After(pa.ExpiresAt.Add(time.Minute)) {
+		// Remove entries after a grace period. Applies to all terminal
+		// states (expired, approved, denied) so resolved entries don't
+		// accumulate indefinitely in memory.
+		if pa.Status != PendingOpen && now.After(pa.ExpiresAt.Add(time.Minute)) {
 			delete(s.actions, id)
 		}
 	}
