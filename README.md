@@ -5,7 +5,7 @@ An agentic factory and control room for the Claw family of AI agent frameworks.
 
 Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, PicoClaw, and others to come.
 
-> **v0.1.1** — This is an early alpha release intended for local development and experimentation. It binds to localhost only and has no authentication. Known security limitations:
+> **v0.2.0** — This is an early alpha release intended for local development and experimentation. It binds to localhost only and has no authentication. Known security limitations:
 > - No request body size limits (large payloads can consume memory)
 > - No authentication or authorization (anyone on localhost can access the API)
 > - Agent-generated HTML previews are sandboxed but not sanitized
