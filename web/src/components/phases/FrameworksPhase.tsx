@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, MessageSquare, RotateCcw } from "lucide-react";
+import type { PhaseId } from "../OnboardingFlow";
 import type { Framework, InstallProgress, KeyEntry } from "../../lib/types";
 import { fetchFrameworks, getFrameworkDetail, fetchAgentConfig, fetchKeys } from "../../lib/api";
 import {
@@ -22,7 +23,7 @@ import FrameworkProgressTimeline, {
   InnerStepId,
   InnerStepState,
 } from "../FrameworkProgressTimeline";
-import FrameworkStepPanel from "../FrameworkStepPanel";
+import FrameworkStepPanel, { askCommander } from "../FrameworkStepPanel";
 
 /**
  * Pull a provider value out of a raw config string. We don't try to fully
@@ -60,7 +61,11 @@ function isSafeId(id: string | null | undefined): id is string {
   return !!id && /^[a-zA-Z0-9_-]+$/.test(id);
 }
 
-export default function FrameworksPhase() {
+interface Props {
+  onNavigate?: (phase: PhaseId) => void;
+}
+
+export default function FrameworksPhase({ onNavigate }: Props) {
   // Browseable framework list (for the choose step)
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [frameworksLoading, setFrameworksLoading] = useState(true);
@@ -337,11 +342,7 @@ export default function FrameworksPhase() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => {
-                const prefill = (window as any).__commanderPrefill;
-                if (typeof prefill === "function")
-                  prefill(`Help me resolve this install error for ${framework?.name}: ${lastError}`);
-              }}
+              onClick={() => askCommander(`Help me resolve this install error for ${framework?.name}: ${lastError}`)}
               className="flex items-center gap-1.5 rounded bg-purple px-3 py-1.5 text-xs font-medium text-white hover:bg-purple/80 transition-colors"
             >
               <MessageSquare className="h-3 w-3" />
@@ -373,10 +374,7 @@ export default function FrameworksPhase() {
             </button>
             <span className="text-border">|</span>
             <button
-              onClick={() => {
-                const timeline = document.querySelector("[data-phase='projects']") as HTMLElement;
-                timeline?.click();
-              }}
+              onClick={() => onNavigate?.("projects")}
               className="text-xs font-medium text-accent hover:text-accent/80 transition-colors"
             >
               continue to projects &rarr;

@@ -33,6 +33,8 @@ import type {
   CommanderHistoryMessage,
   MemoryEntry,
 } from "../lib/types";
+import { useAutoScroll } from "../lib/useAutoScroll";
+import { KEYS_CHANGED_EVENT, COMMANDER_PREFILL_EVENT } from "../lib/events";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -88,68 +90,44 @@ export default function CommanderChat({ phase }: Props) {
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [unavailable, setUnavailable] = useState(false);
 
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useAutoScroll([items]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const controllerRef = useRef<AbortController | null>(null);
 
-  // Persist expand/collapse
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, String(expanded));
   }, [expanded]);
 
-  // Auto-scroll on new content
-  const scrollToBottom = useCallback(() => {
-    requestAnimationFrame(() => {
-      scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight });
-    });
+  // ── Shared rehydration logic ──────────────────────────────────────
+
+  /** Fetch history + memory and update state. Shared across mount,
+   *  keys-changed, and health-poll paths. */
+  const rehydrate = useCallback(async () => {
+    const history = await fetchCommanderHistory();
+    setUnavailable(false);
+    if (history.length > 0) {
+      setItems(history.map((m: CommanderHistoryMessage) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      })));
+    }
+    fetchCommanderMemory().then(setMemories).catch(() => {});
   }, []);
 
-  // Rehydrate history + memory on mount
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      try {
-        const history = await fetchCommanderHistory();
-        if (cancelled) return;
-        setUnavailable(false);
-        if (history.length > 0) {
-          setItems(history.map((m: CommanderHistoryMessage) => ({
-            role: m.role as "user" | "assistant",
-            content: m.content,
-          })));
-        }
-      } catch {
-        if (!cancelled) setUnavailable(true);
-      }
-      try {
-        const mem = await fetchCommanderMemory();
-        if (!cancelled) setMemories(mem);
-      } catch { /* memory is advisory */ }
-    })();
+    rehydrate().catch(() => { if (!cancelled) setUnavailable(true); });
     return () => { cancelled = true; };
-  }, []);
+  }, [rehydrate]);
 
   // Immediately re-check when keys change (add or delete from any page)
   useEffect(() => {
     const handler = () => {
-      fetchCommanderHistory()
-        .then((history) => {
-          setUnavailable(false);
-          if (history.length > 0) {
-            setItems(history.map((m: CommanderHistoryMessage) => ({
-              role: m.role as "user" | "assistant",
-              content: m.content,
-            })));
-          }
-          fetchCommanderMemory().then(setMemories).catch(() => {});
-        })
-        .catch(() => {
-          setUnavailable(true);
-        });
+      rehydrate().catch(() => setUnavailable(true));
     };
-    window.addEventListener("eyrie-keys-changed", handler);
-    return () => window.removeEventListener("eyrie-keys-changed", handler);
-  }, []);
+    window.addEventListener(KEYS_CHANGED_EVENT, handler);
+    return () => window.removeEventListener(KEYS_CHANGED_EVENT, handler);
+  }, [rehydrate]);
 
   // Continuous health poll — fast (5s) while unavailable, slow (15s) when up.
   // Detects both key addition (becomes available) and key deletion (goes offline).
@@ -157,29 +135,17 @@ export default function CommanderChat({ phase }: Props) {
     const interval = unavailable ? 5_000 : 15_000;
     const id = setInterval(async () => {
       try {
-        const history = await fetchCommanderHistory();
         if (unavailable) {
-          // Coming online — rehydrate
-          setUnavailable(false);
-          if (history.length > 0) {
-            setItems(history.map((m: CommanderHistoryMessage) => ({
-              role: m.role as "user" | "assistant",
-              content: m.content,
-            })));
-          }
-          fetchCommanderMemory().then(setMemories).catch(() => {});
+          await rehydrate();
+        } else {
+          await fetchCommanderHistory();
         }
       } catch {
-        if (!unavailable) {
-          setUnavailable(true);
-        }
+        if (!unavailable) setUnavailable(true);
       }
     }, interval);
     return () => clearInterval(id);
-  }, [unavailable]);
-
-  // Scroll when items change
-  useEffect(() => { scrollToBottom(); }, [items, scrollToBottom]);
+  }, [unavailable, rehydrate]);
 
   // ── SSE event handler ──────────────────────────────────────────────
 
@@ -196,7 +162,6 @@ export default function CommanderChat({ phase }: Props) {
           }
           return copy;
         });
-        scrollToBottom();
         break;
 
       case "tool_call":
@@ -245,7 +210,6 @@ export default function CommanderChat({ phase }: Props) {
           }
           return copy;
         });
-        scrollToBottom();
         break;
 
       case "message":
@@ -286,7 +250,7 @@ export default function CommanderChat({ phase }: Props) {
         });
         break;
     }
-  }, [scrollToBottom]);
+  }, []);
 
   // ── Actions ────────────────────────────────────────────────────────
 
@@ -337,11 +301,15 @@ export default function CommanderChat({ phase }: Props) {
     requestAnimationFrame(() => inputRef.current?.focus());
   }, [expanded]);
 
-  // Expose prefill on window for cross-component use (the main content
-  // phases need to call it without prop-drilling through every layer).
+  // Listen for prefill events dispatched by other components (avoids
+  // prop-drilling through every layer).
   useEffect(() => {
-    (window as any).__commanderPrefill = prefill;
-    return () => { delete (window as any).__commanderPrefill; };
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail) prefill(detail);
+    };
+    window.addEventListener(COMMANDER_PREFILL_EVENT, handler);
+    return () => window.removeEventListener(COMMANDER_PREFILL_EVENT, handler);
   }, [prefill]);
 
   // ── Collapsed strip ────────────────────────────────────────────────

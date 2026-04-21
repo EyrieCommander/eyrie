@@ -524,36 +524,44 @@ export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
 
 // --- Commander chat endpoints ---
 
-/** Stream a commander chat turn. POST body is {"message": "..."}.
- *  The response is SSE with typed events (delta, tool_call, tool_result,
- *  message, done, error, confirm_required). Returns an AbortController
- *  so the caller can cancel the stream. */
-export function streamCommanderChat(
-  message: string,
+/** Fire-and-forget SSE request — shared plumbing for commander endpoints. */
+function streamSSE(
+  url: string,
+  body: Record<string, unknown>,
   onEvent: (event: CommanderEvent) => void,
+  errorLabel: string,
 ): AbortController {
   const controller = new AbortController();
   (async () => {
     try {
-      const res = await fetch(`${BASE}/api/commander/chat`, {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText });
+        const data = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: data.error || res.statusText });
         return;
       }
       await readSSEStream(res.body!, onEvent);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
-        onEvent({ type: "error", error: e instanceof Error ? e.message : "Chat request failed" });
+        onEvent({ type: "error", error: e instanceof Error ? e.message : errorLabel });
       }
     }
   })();
   return controller;
+}
+
+/** Stream a commander chat turn. Returns an AbortController so the
+ *  caller can cancel the stream. */
+export function streamCommanderChat(
+  message: string,
+  onEvent: (event: CommanderEvent) => void,
+): AbortController {
+  return streamSSE(`${BASE}/api/commander/chat`, { message }, onEvent, "Chat request failed");
 }
 
 /** Approve or deny a pending confirm-tier tool call, then stream the
@@ -564,28 +572,12 @@ export function confirmCommanderAction(
   onEvent: (event: CommanderEvent) => void,
   reason?: string,
 ): AbortController {
-  const controller = new AbortController();
-  (async () => {
-    try {
-      const res = await fetch(`${BASE}/api/commander/confirm/${id}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved, reason }),
-        signal: controller.signal,
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText });
-        return;
-      }
-      await readSSEStream(res.body!, onEvent);
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        onEvent({ type: "error", error: e instanceof Error ? e.message : "Confirm request failed" });
-      }
-    }
-  })();
-  return controller;
+  return streamSSE(
+    `${BASE}/api/commander/confirm/${id}`,
+    { approved, reason },
+    onEvent,
+    "Confirm request failed",
+  );
 }
 
 export async function fetchCommanderHistory(): Promise<CommanderHistoryMessage[]> {

@@ -2,10 +2,11 @@
 // and a provider dropdown + input to add new ones. Used by both
 // SettingsPage and CommanderPhase.
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Key, Trash2, Loader2, Eye, EyeOff, Check, ShieldCheck, ShieldAlert, Pencil } from "lucide-react";
 import { fetchKeys, setKey, deleteKey } from "../lib/api";
 import type { KeyEntry } from "../lib/types";
+import { KEYS_CHANGED_EVENT } from "../lib/events";
 
 const KNOWN_PROVIDERS = ["openrouter", "anthropic", "openai", "deepseek"];
 
@@ -38,6 +39,14 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
     }
   };
 
+  /** Shared epilogue after any successful add/update/delete. */
+  const afterMutation = async (msg: string) => {
+    setSuccessMsg(msg);
+    await loadKeys();
+    window.dispatchEvent(new Event(KEYS_CHANGED_EVENT));
+    onChanged?.();
+  };
+
   useEffect(() => { loadKeys(); }, []);
 
   useEffect(() => {
@@ -55,10 +64,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
       setNewProvider("");
       setNewKey("");
       setShowNewKey(false);
-      setSuccessMsg(`${newProvider} key saved`);
-      await loadKeys();
-      window.dispatchEvent(new Event("eyrie-keys-changed"));
-      onChanged?.();
+      await afterMutation(`${newProvider} key saved`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to save key");
     } finally {
@@ -74,10 +80,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
       setDeletingProvider(provider);
       setError(null);
       await deleteKey(provider);
-      setSuccessMsg(`${provider} key removed`);
-      await loadKeys();
-      window.dispatchEvent(new Event("eyrie-keys-changed"));
-      onChanged?.();
+      await afterMutation(`${provider} key removed`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to delete key");
     } finally {
@@ -99,10 +102,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
       setEditingProvider(null);
       setEditKey("");
       setShowEditKey(false);
-      setSuccessMsg(`${provider} key updated`);
-      await loadKeys();
-      window.dispatchEvent(new Event("eyrie-keys-changed"));
-      onChanged?.();
+      await afterMutation(`${provider} key updated`);
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to update key");
     } finally {
@@ -110,8 +110,9 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
     }
   };
 
-  const availableProviders = KNOWN_PROVIDERS.filter(
-    (p) => !keys.some((k) => k.provider === p),
+  const availableProviders = useMemo(
+    () => KNOWN_PROVIDERS.filter((p) => !keys.some((k) => k.provider === p)),
+    [keys],
   );
 
   // Default to the first available provider so the save button works immediately

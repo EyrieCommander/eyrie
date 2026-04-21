@@ -9,7 +9,7 @@
 // Phase 1 (frameworks) is the meaty piece — 5-sub-step inner flow.
 // Phase 2 (projects) is a single-page project form — implemented in step 3.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import MacroTimeline from "./MacroTimeline";
 import CommanderPhase from "./phases/CommanderPhase";
 import FrameworksPhase from "./phases/FrameworksPhase";
@@ -93,13 +93,26 @@ export default function OnboardingFlow() {
   // Commander health: polls continuously so adding or deleting a key
   // is reflected promptly. Fast (3s) while unhealthy, slow (15s) once up.
   const [commanderHealthy, setCommanderHealthy] = useState<boolean | null>(null);
+  const prevHealthy = useRef<boolean | null>(null);
   useEffect(() => {
     let cancelled = false;
     const interval = commanderHealthy === true ? 15_000 : 3_000;
     const check = () => {
       fetchCommanderHistory()
-        .then(() => { if (!cancelled) setCommanderHealthy(true); })
-        .catch(() => { if (!cancelled) setCommanderHealthy(false); });
+        .then(() => {
+          if (cancelled) return;
+          if (prevHealthy.current !== true) {
+            prevHealthy.current = true;
+            setCommanderHealthy(true);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          if (prevHealthy.current !== false) {
+            prevHealthy.current = false;
+            setCommanderHealthy(false);
+          }
+        });
     };
     check();
     const id = setInterval(check, interval);
@@ -171,7 +184,7 @@ export default function OnboardingFlow() {
       <MacroTimeline active={active} status={status} onSelect={handleSelect} />
 
       {active === "commander" && <CommanderPhase onContinue={() => handleSelect("frameworks")} />}
-      {active === "frameworks" && <FrameworksPhase />}
+      {active === "frameworks" && <FrameworksPhase onNavigate={handleSelect} />}
       {active === "projects" && <ProjectsPhase />}
     </div>
   );

@@ -16,6 +16,7 @@ import type { Framework } from "../lib/types";
 import type { ApiKeyState } from "../lib/frameworkStatus";
 import type { InnerStepId } from "./FrameworkProgressTimeline";
 import { shellQuote } from "../lib/shell";
+import { COMMANDER_PREFILL_EVENT } from "../lib/events";
 
 interface Props {
   step: InnerStepId;
@@ -448,9 +449,8 @@ function TabButton({
 }
 
 /** Pre-fill a question in the commander chat panel. */
-function askCommander(question: string) {
-  const prefill = (window as any).__commanderPrefill;
-  if (typeof prefill === "function") prefill(question);
+export function askCommander(question: string): void {
+  window.dispatchEvent(new CustomEvent(COMMANDER_PREFILL_EVENT, { detail: question }));
 }
 
 function AskCommander({ question, label }: { question: string; label: string }) {
