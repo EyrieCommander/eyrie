@@ -111,7 +111,7 @@ export default function Sidebar() {
   return (
     <aside className="flex h-screen w-56 shrink-0 flex-col bg-bg-sidebar border-r border-border">
       <div className="px-5 pt-7 pb-6">
-        <Link to="/mission-control" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <span className="relative h-5 w-5">
             <Bird className={`h-5 w-5 text-accent absolute inset-0 transition-all duration-500 ${windMode ? "opacity-0 translate-x-3 -translate-y-2 scale-75" : "opacity-100"}`} />
             <Wind className={`h-5 w-5 text-accent absolute inset-0 transition-all duration-500 ${windMode ? "opacity-100" : "opacity-0 -translate-x-2 scale-75"}`} />

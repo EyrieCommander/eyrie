@@ -111,11 +111,11 @@ export default function ProjectsPhase() {
 
   const handleSubmit = async () => {
     setError(null);
-    if (!name.trim()) return setError("project name is required");
-    if (!description.trim())
-      return setError("a one-line description helps the commander brief agents");
-    if (captain.kind === "new" && !captain.name.trim())
-      return setError("captain name is required (or pick an existing captain)");
+    const projectName = name.trim() || "finance tracker";
+    const projectDesc = description.trim() || "Build a personal finance tracker with budget alerts.";
+    const captainName = captain.kind === "new"
+      ? (captain.name.trim() || "captain")
+      : "";
     if (captain.kind === "existing" && !captain.instanceId)
       return setError("pick a captain");
 
@@ -123,8 +123,8 @@ export default function ProjectsPhase() {
     const provisionedIds: string[] = [];
     try {
       const proj = await createProject({
-        name: name.trim(),
-        description: description.trim(),
+        name: projectName,
+        description: projectDesc,
         goal: goal.trim() || undefined,
       });
 
@@ -134,7 +134,7 @@ export default function ProjectsPhase() {
         captainId = captain.instanceId;
       } else {
         const inst = await createInstance({
-          name: captain.name.trim(),
+          name: captainName,
           framework: captain.framework,
           hierarchy_role: "captain",
           project_id: proj.id,
@@ -247,34 +247,14 @@ export default function ProjectsPhase() {
 
           {/* Describe */}
           <Section label="describe" n={1}>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
-              <Field label="project name">
-                <input
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="finance tracker"
-                  className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
-                />
-              </Field>
-              <Field label="framework">
-                <select
-                  value={framework}
-                  onChange={(e) => {
-                    const next = e.target.value;
-                    setFramework(next);
-                    setCaptain(newSlot(next));
-                    setTalons([]);
-                  }}
-                  className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
-                >
-                  {frameworks.map((fw) => (
-                    <option key={fw.id} value={fw.id}>
-                      {fw.name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
+            <Field label="project name">
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="finance tracker"
+                className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
+              />
+            </Field>
             <Field label="description">
               <textarea
                 value={description}
