@@ -73,7 +73,7 @@ function AgentCard({
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { agents, projects: ctxProjects, instances: ctxInstances, commander: ctxCommander, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
+  const { agents, projects: ctxProjects, instances: ctxInstances, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -94,9 +94,7 @@ export default function ProjectDetail() {
     : [];
   const loading = ctxLoading && !hasLoadedRef.current;
 
-  // Commander comes from DataContext — no separate fetch needed
-  const commanderName = ctxCommander?.name ?? "";
-  const commanderStatus = ctxCommander?.status ?? "";
+  // Commander is always Eyrie (built-in) — no agent lookup needed.
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -300,34 +298,20 @@ export default function ProjectDetail() {
 
           <div className="h-px w-full bg-border" />
 
-          {/* Commander */}
-          {commanderName && (
-            <div>
-              <div className="mb-2">
-                <span className="text-[10px] font-medium text-text-muted">// commander</span>
-              </div>
-              {(() => {
-                const cmdAgent = agents.find((a) => a.name === commanderName);
-                return cmdAgent ? (
-                  <button
-                    onClick={() => navigate(`/agents/${commanderName}/chat`)}
-                    className="flex w-full items-center gap-2.5 rounded border border-border bg-transparent px-3 py-2.5 text-left text-xs transition-all hover:border-accent/30 hover:bg-surface-hover/50"
-                  >
-                    <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${commanderStatus === "running" ? "bg-green" : "bg-text-muted"}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-text truncate">{cmdAgent.display_name || cmdAgent.name}</div>
-                      <div className="text-text-muted truncate">{cmdAgent.framework} · :{cmdAgent.port}</div>
-                    </div>
-                    <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400 opacity-50 hover:opacity-100" />
-                  </button>
-                ) : (
-                  <div className="rounded border border-dashed border-border px-3 py-3 text-center text-[10px] text-text-muted">
-                    commander not found
-                  </div>
-                );
-              })()}
+          {/* Commander — always Eyrie (built-in) */}
+          <div>
+            <div className="mb-2">
+              <span className="text-[10px] font-medium text-text-muted">// commander</span>
             </div>
-          )}
+            <div className="flex items-center gap-2.5 rounded border border-border px-3 py-2.5 text-xs">
+              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-green" />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-text">Eyrie</div>
+                <div className="text-text-muted">built-in commander</div>
+              </div>
+              <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400" />
+            </div>
+          </div>
 
           <div className="h-px w-full bg-border" />
 
@@ -443,12 +427,11 @@ export default function ProjectDetail() {
               <span className="text-[10px] font-medium text-text-muted">// hierarchy</span>
             </div>
             <ProjectHierarchy
-              commander={commanderName ? {
-                name: commanderName,
+              commander={{
+                name: "Eyrie",
                 role: "commander",
-                status: commanderStatus === "running" ? "running" : "stopped",
-                onClick: () => navigate(`/agents/${commanderName}/chat`),
-              } : null}
+                status: "running",
+              }}
               captain={captainInstance ? {
                 name: captainInstance.display_name || captainInstance.name,
                 role: "captain",

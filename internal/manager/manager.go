@@ -34,6 +34,8 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 		return executeOpenClaw(ctx, action)
 	case "hermes":
 		return executeHermes(ctx, action)
+	case "picoclaw":
+		return executePicoClaw(ctx, action)
 	case "embedded":
 		// Embedded agents run in-process as goroutines — lifecycle is managed
 		// by the adapter, not by external CLI commands. This is a no-op.
@@ -176,6 +178,20 @@ func executeHermes(ctx context.Context, action LifecycleAction) error {
 		return run(ctx, "hermes", "gateway", "restart")
 	default:
 		return fmt.Errorf("unsupported action %q for Hermes", action)
+	}
+}
+
+func executePicoClaw(ctx context.Context, action LifecycleAction) error {
+	switch action {
+	case ActionStart:
+		return run(ctx, "picoclaw", "gateway")
+	case ActionStop:
+		return run(ctx, "picoclaw", "gateway", "stop")
+	case ActionRestart:
+		_ = run(ctx, "picoclaw", "gateway", "stop")
+		return run(ctx, "picoclaw", "gateway")
+	default:
+		return fmt.Errorf("unsupported action %q for PicoClaw", action)
 	}
 }
 
@@ -359,6 +375,16 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 			return runDetachedWithEnv(ctx, hLogDir, mergeEnv(extraEnv), "hermes", "gateway", string(action), "--config", configPath)
 		}
 		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	case "picoclaw":
+		if action == ActionStart || action == ActionRestart {
+			pcLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+			return runDetachedWithEnv(ctx, pcLogDir, mergeEnv(extraEnv), "picoclaw", "gateway", "--config", configPath)
+		}
+		if action == ActionStop {
+			// PicoClaw doesn't have a gateway stop command — kill by port.
+			return run(ctx, "picoclaw", "gateway", "stop")
+		}
+		return run(ctx, "picoclaw", "gateway", string(action), "--config", configPath)
 	case "embedded":
 		return nil
 	default:
@@ -424,6 +450,12 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			return runDetached(ctx, hLogDir, "hermes", "gateway", string(action), "--config", configPath)
 		}
 		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	case "picoclaw":
+		if action == ActionStart || action == ActionRestart {
+			pcLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+			return runDetached(ctx, pcLogDir, "picoclaw", "gateway", "--config", configPath)
+		}
+		return run(ctx, "picoclaw", "gateway", string(action))
 	case "embedded":
 		// Embedded agents have no external process — lifecycle is managed
 		// by the adapter's Start/Stop/Restart methods directly.
@@ -445,6 +477,8 @@ func CommandString(framework string, action LifecycleAction) string {
 			return "hermes gateway start"
 		}
 		return fmt.Sprintf("adapter.%s() (PID-based)", strings.Title(string(action)))
+	case "picoclaw":
+		return "picoclaw gateway " + string(action)
 	default:
 		return fmt.Sprintf("<unknown framework %q> %s", framework, action)
 	}

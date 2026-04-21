@@ -111,14 +111,24 @@ type Registry struct {
 // Additional tools are registered here as the commander grows.
 func NewRegistry(deps RegistryDeps) *Registry {
 	r := &Registry{tools: make(map[string]Tool)}
-	// Read-only (Auto risk)
-	r.register(listProjectsTool(deps.Projects))
-	r.register(getProjectTool(deps.Projects))
+	// Read-only (Auto risk) — guard on deps so a nil pointer doesn't
+	// cause a panic when the LLM invokes the tool. Missing deps just
+	// mean the tool isn't offered; the LLM picks from what's available.
+	if deps.Projects != nil {
+		r.register(listProjectsTool(deps.Projects))
+		r.register(getProjectTool(deps.Projects))
+	}
 	r.register(listPersonasTool())
-	r.register(listAgentsTool(deps.Discovery))
-	r.register(readProjectChatTool(deps.Chat))
+	if deps.Discovery != nil {
+		r.register(listAgentsTool(deps.Discovery))
+	}
+	if deps.Chat != nil {
+		r.register(readProjectChatTool(deps.Chat))
+	}
 	// Write (Confirm risk)
-	r.register(createProjectTool(deps.Projects))
+	if deps.Projects != nil {
+		r.register(createProjectTool(deps.Projects))
+	}
 	if deps.SendToProject != nil {
 		r.register(sendToProjectTool(deps.SendToProject, deps.Projects))
 	}
