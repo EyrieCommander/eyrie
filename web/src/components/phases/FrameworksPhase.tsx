@@ -116,17 +116,23 @@ export default function FrameworksPhase({ onNavigate }: Props) {
       setRawConfig("");
       return;
     }
+    let fw: Framework | null = null;
     try {
-      const fw = await getFrameworkDetail(safeId);
+      fw = await getFrameworkDetail(safeId);
       setFramework(fw);
     } catch {
       setFramework(null);
     }
-    // Config is best-effort; missing config file is a valid state during setup.
-    try {
-      const cfg = await fetchAgentConfig(safeId);
-      setRawConfig(cfg.content);
-    } catch {
+    // Only fetch config when the framework is installed + configured.
+    // Before that, the config endpoint 404s every poll cycle.
+    if (fw?.installed && fw?.configured) {
+      try {
+        const cfg = await fetchAgentConfig(safeId);
+        setRawConfig(cfg.content);
+      } catch {
+        setRawConfig("");
+      }
+    } else {
       setRawConfig("");
     }
   }, [safeId]);

@@ -42,7 +42,7 @@ func NewPicoClawAdapter(id, name, host string, gatewayPort int, token, configPat
 		name:        name,
 		host:        host,
 		gatewayPort: gatewayPort,
-		webPort:     gatewayPort + 10, // PicoClaw convention: web backend = gateway + 10
+		webPort:     gatewayPort, // PicoClaw v0.2.x serves everything on one port
 		token:       token,
 		configPath:  configPath,
 		client: &http.Client{
