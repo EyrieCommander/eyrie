@@ -698,14 +698,24 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 			}
 		}
 
-		// Remove config directory
+		// Remove the config directory only if it's empty after removing
+		// the framework's own config file. os.RemoveAll on the whole dir
+		// could wipe user files (custom scripts, notes, etc.) that live
+		// alongside the framework config.
 		if _, statErr := os.Stat(configDir); statErr == nil {
-			sendLog(fmt.Sprintf("Removing config directory %s", fw.ConfigDir))
-			if err := os.RemoveAll(configDir); err != nil {
-				sendLog(fmt.Sprintf("Warning: could not remove config directory: %s", err))
+			entries, readErr := os.ReadDir(configDir)
+			if readErr != nil {
+				sendLog(fmt.Sprintf("Warning: could not read config directory %s: %s", fw.ConfigDir, readErr))
+			} else if len(entries) == 0 {
+				sendLog(fmt.Sprintf("Config directory %s is empty — removing", fw.ConfigDir))
+				if err := os.Remove(configDir); err != nil {
+					sendLog(fmt.Sprintf("Warning: could not remove empty config directory: %s", err))
+				} else {
+					sendLog("Config directory removed")
+					removed = true
+				}
 			} else {
-				sendLog("Config directory removed")
-				removed = true
+				sendLog(fmt.Sprintf("Config directory %s still has %d entries — leaving in place", fw.ConfigDir, len(entries)))
 			}
 		}
 

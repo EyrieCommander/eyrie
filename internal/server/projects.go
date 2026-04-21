@@ -869,9 +869,9 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() { wg.Wait(); close(resultCh) }()
 	var destroyed []string
-	for r := range resultCh {
-		if r.ok {
-			destroyed = append(destroyed, r.name)
+	for res := range resultCh {
+		if res.ok {
+			destroyed = append(destroyed, res.name)
 		}
 	}
 

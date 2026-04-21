@@ -135,7 +135,8 @@ function ConfigureStep({ framework, safeId, onRun }: Props) {
 
   const handleEdit = () => {
     // Quote the config path for the same reason.
-    onRun(`$\{EDITOR:-vi\} ${shellQuote(framework.config_path)}`);
+    // Use string concat to avoid the template literal escaping $ as $\{...}
+    onRun("${EDITOR:-vi} " + shellQuote(framework.config_path));
   };
 
   return (

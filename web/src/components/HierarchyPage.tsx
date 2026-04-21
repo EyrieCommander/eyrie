@@ -461,7 +461,7 @@ function ProjectsTab({
           <div>
             <div className="flex items-center gap-2">
               <p className="text-[10px] text-text-muted">
-                commander: {hierarchy?.commander?.display_name || "Eyrie"} (built-in)
+                commander: {hierarchy?.commander?.display_name || "Eyrie"}{!hierarchy?.commander?.display_name || hierarchy.commander.display_name === "Eyrie" ? " (built-in)" : ""}
               </p>
             </div>
           </div>

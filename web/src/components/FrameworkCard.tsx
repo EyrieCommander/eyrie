@@ -39,7 +39,7 @@ export default function FrameworkCard({
           handleClick();
         }
       }}
-      className="flex flex-1 flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors cursor-pointer"
+      className="flex flex-1 flex-col gap-2 rounded border border-border bg-surface p-3 hover:border-accent/30 transition-colors cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent focus-visible:outline-offset-2"
     >
       {/* Header */}
       <div className="flex items-center gap-2.5">

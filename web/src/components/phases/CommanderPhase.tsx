@@ -21,6 +21,7 @@ export default function CommanderPhase({ onContinue }: { onContinue?: () => void
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [detailsOpen, setDetailsOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const [clearError, setClearError] = useState(false);
 
   const check = useCallback(async () => {
     try {
@@ -40,11 +41,15 @@ export default function CommanderPhase({ onContinue }: { onContinue?: () => void
 
   const handleClear = async () => {
     setClearing(true);
+    setClearError(false);
     try {
       await clearCommanderHistory();
       setHistoryCount(0);
-    } catch { /* silent */ }
-    setClearing(false);
+    } catch {
+      setClearError(true);
+    } finally {
+      setClearing(false);
+    }
   };
 
   // Loading
@@ -105,14 +110,17 @@ export default function CommanderPhase({ onContinue }: { onContinue?: () => void
               <div className="flex items-center gap-2">
                 <span className="text-text">{historyCount} messages</span>
                 {historyCount > 0 && (
-                  <button
-                    onClick={handleClear}
-                    disabled={clearing}
-                    className="flex items-center gap-1 text-[10px] text-text-muted hover:text-red transition-colors disabled:opacity-40"
-                  >
-                    <Trash2 className="h-3 w-3" />
-                    clear
-                  </button>
+                  <>
+                    <button
+                      onClick={handleClear}
+                      disabled={clearing}
+                      className="flex items-center gap-1 text-[10px] text-text-muted hover:text-red transition-colors disabled:opacity-40"
+                    >
+                      <Trash2 className="h-3 w-3" />
+                      clear
+                    </button>
+                    {clearError && <span className="text-[10px] text-red">failed</span>}
+                  </>
                 )}
               </div>
             </div>

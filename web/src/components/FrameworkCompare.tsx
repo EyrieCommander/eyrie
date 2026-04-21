@@ -330,8 +330,12 @@ export default function FrameworkCompare() {
   const agentCounts: Record<string, number> = {};
   const memoryByFramework: Record<string, number> = {};
   for (const a of agents) {
-    if (a.alive) agentCounts[a.framework] = (agentCounts[a.framework] || 0) + 1;
-    if (a.health?.ram_bytes) memoryByFramework[a.framework] = (memoryByFramework[a.framework] || 0) + a.health.ram_bytes;
+    if (a.alive) {
+      agentCounts[a.framework] = (agentCounts[a.framework] || 0) + 1;
+      // Only count memory for alive agents — stale ram_bytes from a dead
+      // agent's last health snapshot would inflate the total.
+      if (a.health?.ram_bytes) memoryByFramework[a.framework] = (memoryByFramework[a.framework] || 0) + a.health.ram_bytes;
+    }
   }
 
   return (

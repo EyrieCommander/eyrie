@@ -795,11 +795,14 @@ func (o *ChatOrchestrator) consumeAgentStream(
 	agentName, agentRole, projectID string,
 ) agentStreamResult {
 	var content string
+	var deltaBuilder strings.Builder
 	var toolCalls []project.ChatPart
 	for ev := range ch {
 		switch ev.Type {
 		case "done":
 			content = ev.Content
+		case "delta":
+			deltaBuilder.WriteString(ev.Content)
 		case "tool_start":
 			toolCalls = append(toolCalls, project.ChatPart{
 				Type: "tool_call", ID: ev.ToolID, Name: ev.Tool, Args: ev.Args,
@@ -822,6 +825,12 @@ func (o *ChatOrchestrator) consumeAgentStream(
 			"role":   agentRole,
 			"event":  ev,
 		})
+	}
+
+	// If the stream ended without a "done" event (connection drop, agent
+	// crash), use deltas accumulated from individual chunks.
+	if content == "" && deltaBuilder.Len() > 0 {
+		content = deltaBuilder.String()
 	}
 
 	trimmed := strings.TrimSpace(content)

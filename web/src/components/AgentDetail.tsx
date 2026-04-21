@@ -958,7 +958,28 @@ function replaceYamlValue(content: string, fieldKey: string, newValue: string, f
 
     // Found our target key at the right depth
     if (depth === parentPath.length && re.test(line)) {
-      lines[i] = line.replace(re, `$1${formatted}`);
+      const match = line.match(re);
+      const existingValue = match?.[2]?.trim() ?? "";
+      // Detect block scalar indicators (| or >) — the value spans multiple
+      // lines with greater indentation. Remove the header + all continuation
+      // lines before inserting the new inline value.
+      if (existingValue.startsWith("|") || existingValue.startsWith(">")) {
+        const blockIndent = indent + 2; // continuation lines have at least this indent
+        let endOfBlock = i + 1;
+        while (endOfBlock < lines.length) {
+          const nextLine = lines[endOfBlock];
+          const nextTrimmed = nextLine.trimStart();
+          const nextIndent = nextLine.length - nextTrimmed.length;
+          // Blank lines are part of the block; non-blank lines with
+          // less indentation terminate it.
+          if (nextTrimmed !== "" && nextIndent < blockIndent) break;
+          endOfBlock++;
+        }
+        // Replace header + continuation range with a single inline value
+        lines.splice(i, endOfBlock - i, line.replace(re, `$1${formatted}`));
+      } else {
+        lines[i] = line.replace(re, `$1${formatted}`);
+      }
       return lines.join("\n");
     }
   }

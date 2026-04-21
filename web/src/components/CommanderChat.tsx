@@ -314,18 +314,26 @@ export default function CommanderChat({ phase }: Props) {
 
   // ── Collapsed strip ────────────────────────────────────────────────
 
+  // Abort any in-flight SSE stream on unmount so handleEvent doesn't
+  // try to setState on an unmounted component.
+  useEffect(() => {
+    return () => { controllerRef.current?.abort(); };
+  }, []);
+
   if (!expanded) {
     return (
-      <div
+      <button
         onClick={() => setExpanded(true)}
-        className="flex w-11 shrink-0 cursor-pointer flex-col items-center gap-2 border-l border-border bg-surface py-4 hover:bg-surface-hover transition-colors"
+        aria-label="expand commander chat"
+        aria-expanded={false}
+        className="flex w-11 shrink-0 cursor-pointer flex-col items-center gap-2 border-l border-border bg-surface py-4 hover:bg-surface-hover transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         title="expand commander chat"
       >
         <PanelRightOpen className="h-4 w-4 text-text-muted" />
         <span className="text-[9px] text-text-muted [writing-mode:vertical-rl] rotate-180">
           commander
         </span>
-      </div>
+      </button>
     );
   }
 

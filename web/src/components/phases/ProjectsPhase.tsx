@@ -111,8 +111,12 @@ export default function ProjectsPhase() {
 
   const handleSubmit = async () => {
     setError(null);
-    const projectName = name.trim() || "finance tracker";
-    const projectDesc = description.trim() || "Build a personal finance tracker with budget alerts.";
+    const projectName = name.trim();
+    if (!projectName) {
+      setError("project name is required");
+      return;
+    }
+    const projectDesc = description.trim();
     const captainName = captain.kind === "new"
       ? (captain.name.trim() || "captain")
       : "";
