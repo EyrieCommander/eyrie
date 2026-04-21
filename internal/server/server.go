@@ -42,7 +42,13 @@ type Server struct {
 	// commander is the built-in LLM-driven orchestrator. The user chats
 	// with it directly via /api/commander/chat. It has direct access to
 	// the project store via its tool registry.
-	commander *commander.Commander
+	//
+	// May be nil at startup if no API key is configured. The handler
+	// guard (commanderAvailable) attempts lazy initialization on each
+	// request so the user can add a key via the Settings page and the
+	// commander comes online without a server restart.
+	commander   *commander.Commander
+	commanderMu sync.Mutex
 
 	// activeChats stores cancel functions for in-flight project chat
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
@@ -92,11 +98,15 @@ func New(cfg config.Config) (*Server, error) {
 		Discovery:     s.runDiscovery,
 		SendToProject: s.sendCommanderMessageToProject,
 		RestartAgent:  s.restartAgentByName,
+		Vault:         vault,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("commander: %w", err)
+		// Non-fatal: the server runs without a commander. The chat
+		// endpoints return 503 and the UI shows a "configure API key"
+		// card. The user can set a key via the Settings page and restart.
+		slog.Warn("commander unavailable (set OPENROUTER_API_KEY or ANTHROPIC_API_KEY)", "error", err)
 	}
-	s.commander = cmd
+	s.commander = cmd // may be nil
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{

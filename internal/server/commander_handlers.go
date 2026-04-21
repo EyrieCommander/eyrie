@@ -11,6 +11,37 @@ import (
 	"github.com/Audacity88/eyrie/internal/commander"
 )
 
+// commanderAvailable returns false and writes a 503 if the commander
+// cannot be initialised. On first call with a nil commander, it attempts
+// lazy construction — so if the user added an API key via the Settings
+// page since startup, the commander comes online without a restart.
+func (s *Server) commanderAvailable(w http.ResponseWriter) bool {
+	s.commanderMu.Lock()
+	defer s.commanderMu.Unlock()
+
+	if s.commander != nil {
+		return true
+	}
+	// Attempt lazy init — selectProvider re-reads the vault.
+	cmd, err := commander.NewDefault(commander.DefaultConfig{
+		Projects:      s.projectStore,
+		Chat:          s.chatStore,
+		Discovery:     s.runDiscovery,
+		SendToProject: s.sendCommanderMessageToProject,
+		RestartAgent:  s.restartAgentByName,
+		Vault:         s.vault,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "commander unavailable — add an API key for OpenRouter or Anthropic in the setup below",
+		})
+		return false
+	}
+	slog.Info("commander: lazy-initialized after API key was added")
+	s.commander = cmd
+	return true
+}
+
 // handleCommanderChat streams a commander turn via SSE.
 // Body: {"message": "..."}
 //
@@ -19,6 +50,9 @@ import (
 // persisting the conversation. The request context is used only for the
 // SSE writes; agent work runs on a separate context with a generous timeout.
 func (s *Server) handleCommanderChat(w http.ResponseWriter, r *http.Request) {
+	if !s.commanderAvailable(w) {
+		return
+	}
 	var body struct {
 		Message string `json:"message"`
 	}
@@ -54,6 +88,9 @@ func (s *Server) handleCommanderChat(w http.ResponseWriter, r *http.Request) {
 // handleCommanderHistory returns the full conversation as a JSON array.
 // GET /api/commander/history
 func (s *Server) handleCommanderHistory(w http.ResponseWriter, r *http.Request) {
+	if !s.commanderAvailable(w) {
+		return
+	}
 	messages, err := s.commander.Store().All()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -66,6 +103,9 @@ func (s *Server) handleCommanderHistory(w http.ResponseWriter, r *http.Request) 
 // a fresh conversation without restarting the server.
 // DELETE /api/commander/history
 func (s *Server) handleCommanderClear(w http.ResponseWriter, r *http.Request) {
+	if !s.commanderAvailable(w) {
+		return
+	}
 	if err := s.commander.Store().Clear(); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -80,6 +120,9 @@ func (s *Server) handleCommanderClear(w http.ResponseWriter, r *http.Request) {
 // GET /api/commander/memory
 // GET /api/commander/memory?key=<k>
 func (s *Server) handleCommanderMemory(w http.ResponseWriter, r *http.Request) {
+	if !s.commanderAvailable(w) {
+		return
+	}
 	mem := s.commander.Memory()
 	if mem == nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "memory store unavailable"})
@@ -114,6 +157,9 @@ func (s *Server) handleCommanderMemory(w http.ResponseWriter, r *http.Request) {
 // only way to get a Confirm-tier tool executed is for an external
 // client to POST approval here.
 func (s *Server) handleCommanderConfirm(w http.ResponseWriter, r *http.Request) {
+	if !s.commanderAvailable(w) {
+		return
+	}
 	id := r.PathValue("id")
 	if id == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "pending id is required"})

@@ -106,6 +106,13 @@ func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reset the commander so it re-checks the vault on next request.
+	// If the deleted key was the one powering the commander, lazy init
+	// will fail and the UI shows the setup card again.
+	s.commanderMu.Lock()
+	s.commander = nil
+	s.commanderMu.Unlock()
+
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 

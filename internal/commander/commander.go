@@ -148,6 +148,9 @@ type DefaultConfig struct {
 	Discovery     func(ctx context.Context) discovery.Result
 	SendToProject func(ctx context.Context, projectID, message string) error
 	RestartAgent  func(ctx context.Context, name string) error
+	// Vault is the key vault to read API keys from. When nil,
+	// selectProvider falls back to config.GetKeyVault().
+	Vault         *config.KeyVault
 }
 
 // NewDefault builds a Commander with the skeleton defaults: OpenRouter
@@ -168,7 +171,7 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 	if err != nil {
 		return nil, fmt.Errorf("commander store: %w", err)
 	}
-	pc, err := selectProvider()
+	pc, err := selectProvider(deps.Vault)
 	if err != nil {
 		return nil, err
 	}
@@ -225,9 +228,11 @@ type providerChoice struct {
 	contextWindow int
 }
 
-func selectProvider() (providerChoice, error) {
+func selectProvider(vault *config.KeyVault) (providerChoice, error) {
 	choice := strings.ToLower(strings.TrimSpace(os.Getenv("EYRIE_COMMANDER_PROVIDER")))
-	vault := config.GetKeyVault()
+	if vault == nil {
+		vault = config.GetKeyVault()
+	}
 
 	switch choice {
 	case "anthropic":
