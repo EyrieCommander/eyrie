@@ -37,40 +37,17 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { Send } from "lucide-react";
 import type { ProjectChatMessage } from "../lib/types";
-import { PartToolCallCard, StreamingCursor } from "./ChatPanel";
-import { fetchProjectChat, streamProjectChat, stopProjectChat } from "../lib/api";
+import { MessageRow } from "./ChatPanel";
+import { ChatError } from "./chat/ChatError";
+import { StreamingIndicator } from "./chat/StreamingIndicator";
+import type { StreamingPart } from "./chat/StreamingIndicator";
+import { roleLabel, roleColor } from "./chat/MessageHeader";
+import { fetchProjectChat, streamProjectChat, stopProjectChat, projectChatStatus } from "../lib/api";
+import { useAutoScroll } from "../lib/useAutoScroll";
 import { useData } from "../lib/DataContext";
 import { recordLatency, recordUsage } from "../lib/useAgentMetrics";
 
-const ROLE_COLORS: Record<string, string> = {
-  user: "text-green",
-  commander: "text-purple",
-  captain: "text-yellow-400",
-  talon: "text-blue-400",
-  system: "text-text-muted",
-};
-
-type StreamingPart =
-  | { kind: "tool"; name: string; done: boolean; args?: any; output?: string }
-  | { kind: "text"; content: string };
-
-// Shared message header: role label + display name + timestamp + tool count
-function MessageHeader({ role, sender, displayName, time, toolCount }: {
-  role: string; sender?: string; displayName?: string; time: string; toolCount?: number;
-}) {
-  const name = displayName || sender;
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className={`font-bold ${ROLE_COLORS[role] || "text-text"}`}>
-        {role === "user" ? "you" : name || role}
-      </span>
-      <span className="text-[10px] text-text-muted">{time}</span>
-      {(toolCount ?? 0) > 0 && (
-        <span className="text-[10px] text-accent/60">[{toolCount} tool{toolCount! > 1 ? "s" : ""}]</span>
-      )}
-    </div>
-  );
-}
+// StreamingPart type imported from chat/StreamingIndicator
 
 export interface ProjectChatProps {
   projectId: string;
@@ -93,11 +70,13 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const [streamingAgent, setStreamingAgent] = useState("");
   const [streamingRole, setStreamingRole] = useState("");
   const [streamingTime, setStreamingTime] = useState("");
+  const [pendingAgent, setPendingAgent] = useState(""); // set from routing debug event
   const [streamingParts, setStreamingParts] = useState<StreamingPart[]>([]);
+  const [toggledSet, setToggledSet] = useState<Set<string>>(new Set());
   const [showMentions, setShowMentions] = useState(false);
   const [mentionFilter, setMentionFilter] = useState("");
   const [mentionIdx, setMentionIdx] = useState(0);
-  const scrollRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useAutoScroll([messages, streamingParts]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Latency tracking: measures time from handoff to first token per agent.
@@ -108,54 +87,95 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
 
   const RESPONSE_TIMEOUT = 60_000; // 60 seconds with no SSE activity
 
+  // WHY no abort on timeout: The agent may still be processing (tool
+  // calls, long LLM response). Aborting would kill the SSE stream and
+  // cause message loss. Instead, show a warning and let the stream
+  // continue. If the agent truly isn't responding, the user can click stop.
   const resetTimeout = useCallback(() => {
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     timeoutRef.current = setTimeout(() => {
-      setSending(false);
-      setChatError("agent did not respond — try again or check agent status");
-      if (abortRef.current) abortRef.current.abort();
+      setChatError("agent may be unresponsive — click stop if needed");
     }, RESPONSE_TIMEOUT);
   }, []);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Load messages on mount
+  // WHY backgroundStreaming: When the user navigates away during streaming
+  // and comes back, the agent may still be responding (detached context).
+  // We detect this via the status endpoint and poll rapidly (every 1s)
+  // to show the incrementally-persisted content as it arrives.
+  const [backgroundStreaming, setBackgroundStreaming] = useState(false);
+
+  // Load messages on mount + check if a response is in-flight
   const [chatLoaded, setChatLoaded] = useState(false);
   useEffect(() => {
     setChatLoaded(false);
-    fetchProjectChat(projectId)
-      .then((msgs) => { setMessages(msgs); setChatLoaded(true); })
-      .catch((err) => { console.error(err); setChatLoaded(true); });
+    Promise.all([
+      fetchProjectChat(projectId),
+      projectChatStatus(projectId),
+    ]).then(([msgs, status]) => {
+      setMessages(msgs);
+      setBackgroundStreaming(status.streaming);
+      setChatLoaded(true);
+    }).catch((err) => { console.error(err); setChatLoaded(true); });
   }, [projectId]);
 
-  // Poll for new messages when idle
+  // Poll for new messages — fast (1s) when agent is responding in
+  // background, slow (4s) when idle. Checks status each cycle to
+  // detect when the response completes.
   useEffect(() => {
-    if (sending) return;
+    if (sending) return; // SSE handles updates while we're the sender
+    const interval = backgroundStreaming ? 1000 : 4000;
     const id = setInterval(() => {
-      fetchProjectChat(projectId).then((msgs) => {
+      const statusCheck = backgroundStreaming
+        ? projectChatStatus(projectId).then((s) => {
+            if (!s.streaming) setBackgroundStreaming(false);
+          })
+        : Promise.resolve();
+
+      Promise.all([
+        fetchProjectChat(projectId),
+        statusCheck,
+      ]).then(([msgs]) => {
         setMessages((prev) => {
-          if (msgs.length === prev.length) return prev;
-          const ids = new Set(msgs.map((m) => m.id));
+          if (msgs.length === prev.length && !backgroundStreaming) return prev;
+          const ids = new Set(msgs.map((m: ProjectChatMessage) => m.id));
           const extras = prev.filter((m) => !ids.has(m.id) && !m.id.startsWith("optimistic-"));
           return [...msgs, ...extras];
         });
       }).catch(() => {});
-    }, 4000);
+    }, interval);
     return () => clearInterval(id);
-  }, [projectId, sending]);
+  }, [projectId, sending, backgroundStreaming]);
 
-  // Auto-scroll
-  useEffect(() => {
-    scrollRef.current?.scrollTo(0, scrollRef.current.scrollHeight);
-  }, [messages, streamingParts]);
+  // Auto-scroll handled by useAutoScroll above
 
   useEffect(() => () => {
     abortRef.current?.abort();
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
   }, []);
 
-  // Helper: mark agent as streaming (sets agent + time on first call)
+  // Helper: mark agent as streaming. If a different agent was streaming,
+  // flush its parts into messages first so they don't disappear.
   const markStreaming = (sender: string, role: string) => {
     setStreamingAgent((prev) => {
+      if (prev && prev !== sender) {
+        // Previous agent's parts → convert to a stored message
+        setStreamingParts((parts) => {
+          if (parts.length > 0) {
+            const text = parts.filter((p) => p.kind === "text").map((p) => p.content || "").join("");
+            if (text) {
+              setMessages((msgs) => [...msgs, {
+                id: `stream-${prev}-${Date.now()}`,
+                sender: prev,
+                role: streamingRole || "agent",
+                content: text,
+                timestamp: streamingTime || new Date().toISOString(),
+              }]);
+            }
+          }
+          return []; // Clear for the new agent
+        });
+      }
       if (!prev) setStreamingTime(new Date().toLocaleTimeString());
       return sender;
     });
@@ -166,6 +186,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   const clearStreaming = () => {
     setStreamingAgent("");
     setStreamingParts([]);
+    setPendingAgent("");
     setStreamingTime("");
   };
 
@@ -196,9 +217,15 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       switch (event.type) {
         case "message":
           if (event.message) {
+            const m = event.message;
+            // Skip agent response messages — they're already visible
+            // via streamingParts from the agent_event deltas. Adding
+            // them to messages too causes duplication. The idle poll
+            // will pick them up from the server after streaming ends.
+            if (m.role !== "user" && m.role !== "system") break;
+
             setMessages((prev) => {
               // Replace optimistic user message with server version
-              const m = event.message!;
               if (m.role === "user" && prev.some((p) => p.id.startsWith("optimistic-") && p.content === m.content)) {
                 return prev.map((p) => p.id.startsWith("optimistic-") && p.content === m.content ? m : p);
               }
@@ -246,7 +273,9 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
               if (event.sender && (ev.input_tokens !== undefined || ev.output_tokens !== undefined || ev.cost_usd !== undefined)) {
                 recordUsage(event.sender, ev.input_tokens ?? 0, ev.output_tokens ?? 0, ev.cost_usd ?? 0);
               }
-              clearStreaming();
+              // Don't clearStreaming — streaming parts stay visible to
+              // preserve tool call expand/collapse state. Duplicate stored
+              // message is filtered out in the render. Cleared on next send().
             } else if (ev.type === "error") {
               setMessages((prev) => [...prev, {
                 id: `err-${Date.now()}`,
@@ -262,22 +291,18 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
         case "done":
           if (timeoutRef.current) clearTimeout(timeoutRef.current);
           setSending(false);
-          clearStreaming();
-          // Merge server messages with local state rather than replacing,
-          // so messages received via SSE aren't lost if they haven't been
-          // written to disk yet (race with detached context storage).
-          fetchProjectChat(projectId).then((serverMsgs) => {
-            setMessages((prev) => {
-              const ids = new Set(serverMsgs.map((m) => m.id));
-              // Keep any local messages not yet on server (SSE-received)
-              const extras = prev.filter((m) => !ids.has(m.id) && !m.id.startsWith("optimistic-"));
-              return [...serverMsgs, ...extras];
-            });
-          }).catch(() => {});
+          // Messages were already added via SSE "message" events during
+          // streaming. No need to re-fetch — that would re-render
+          // everything and lose tool call expand/collapse state.
           break;
 
         case "debug":
           console.log(`[eyrie] ${event.msg}`, event.detail || "");
+          // "routing to magnus (commander)" → extract "magnus"
+          if (event.msg?.startsWith("routing to ")) {
+            const name = event.msg.slice(11).replace(/ \(.*\)$/, "");
+            setPendingAgent(displayNames.get(name) || name);
+          }
           break;
 
         case "error":
@@ -303,18 +328,12 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
     abortRef.current = null;
     if (timeoutRef.current) clearTimeout(timeoutRef.current);
     setSending(false);
+    // Don't clearStreaming() — keep the partial content visible so the
+    // user can see what the agent was doing when they stopped it.
+    // Streaming state is cleared on the next send().
     // Cancel the backend's detached orchestration so the agent stops too
     stopProjectChat(projectId).catch(() => {});
   }, [projectId]);
-
-  const stopButton = (
-    <button
-      onClick={handleStop}
-      className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
-    >
-      stop
-    </button>
-  );
 
   // Auto-start project chat when loaded with no messages.
   // WHY autoStartedRef: Prevents double-fire in StrictMode. The ref is set
@@ -335,7 +354,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
   }, [chatLoaded, sending, messages.length, send]);
 
   // Sort messages: system before user when timestamps are within 1 second
-  const sortedMessages = [...messages].sort((a, b) => {
+  const sortedMessages = useMemo(() => [...messages].sort((a, b) => {
     const ta = new Date(a.timestamp).getTime();
     const tb = new Date(b.timestamp).getTime();
     if (Math.abs(ta - tb) < 1000) {
@@ -343,95 +362,116 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
       if (a.role === "user" && b.role === "system") return 1;
     }
     return ta - tb;
-  });
+  }), [messages]);
 
   return (
     <div className="flex flex-1 flex-col overflow-hidden">
-      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4">
-        {/* Error display */}
-        {chatError && (
-          <div className="rounded border border-red/30 bg-red/5 px-4 py-2 text-xs text-red">{chatError}</div>
+      <div ref={scrollRef} className="flex-1 overflow-y-auto space-y-3 p-4 text-xs">
+        {/* Expand/collapse controls — sticky top-right, same as 1:1 chat */}
+        {sortedMessages.length > 1 && (
+          <div className="sticky top-0 z-10 float-right flex gap-0.5 pr-2 pt-2">
+            <button
+              onClick={() => setToggledSet(new Set())}
+              className="text-green font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
+              title="Expand all"
+            >
+              +
+            </button>
+            <button
+              onClick={() => setToggledSet(new Set(sortedMessages.map((m) => m.id)))}
+              className="text-purple font-bold text-sm leading-none px-1 rounded hover:bg-surface-hover transition-colors"
+              title="Compact all"
+            >
+              {"\u2212"}
+            </button>
+          </div>
         )}
 
-        {/* Messages — hide pre-chat system messages until chat has started */}
-        {sortedMessages
-          .filter((m) => messages.some((x) => x.role !== "system") || m.role !== "system")
-          .map((msg) => {
-          const parts = msg.parts ?? [];
-          const hasParts = parts.length > 0;
-          const toolCount = parts.filter((p) => p.type === "tool_call").length;
+        {/* Error display */}
+        {chatError && (
+          <ChatError message={chatError} />
+        )}
+
+        {/* Messages — hide pre-chat system messages until chat has started.
+            When streamingParts is non-empty, the last message from that agent
+            is already rendered by StreamingIndicator — skip it here to avoid
+            duplication. */}
+        {(() => {
+          const hasNonSystem = sortedMessages.some((x) => x.role !== "system");
+          let visible = sortedMessages.filter((m) => hasNonSystem || m.role !== "system");
+          if (streamingParts.length > 0 && streamingAgent) {
+            // Find the last message from the streaming agent and exclude it
+            const lastIdx = visible.map((m) => m.sender).lastIndexOf(streamingAgent);
+            if (lastIdx >= 0) {
+              visible = visible.filter((_, i) => i !== lastIdx);
+            }
+          }
+          return visible;
+        })().map((msg) => {
+          // Default: expanded. Toggle collapses.
+          const expanded = !toggledSet.has(msg.id);
           return (
-            <div key={msg.id} className="text-xs">
-              <MessageHeader
-                role={msg.role}
-                sender={msg.sender}
-                displayName={displayNames.get(msg.sender)}
-                time={new Date(msg.timestamp).toLocaleTimeString()}
-                toolCount={toolCount}
-              />
-              {hasParts ? (
-                <div className="mt-1 space-y-1">
-                  {parts.map((part, i) =>
-                    part.type === "tool_call" ? (
-                      <PartToolCallCard key={`${msg.id}-p-${i}`} part={part} />
-                    ) : part.type === "text" && part.text ? (
-                      <div key={`${msg.id}-p-${i}`} className="text-text whitespace-pre-wrap">{part.text}</div>
-                    ) : null
-                  )}
-                </div>
-              ) : (
-                <div className="mt-0.5 text-text whitespace-pre-wrap">{msg.content}</div>
-              )}
-            </div>
+            <MessageRow
+              key={msg.id}
+              msg={{
+                ...msg,
+                timestamp: typeof msg.timestamp === "string" ? msg.timestamp : new Date(msg.timestamp).toISOString(),
+                display_name: displayNames.get(msg.sender),
+              }}
+              expanded={expanded}
+              onToggle={() => {
+                setToggledSet((prev) => {
+                  const next = new Set(prev);
+                  if (next.has(msg.id)) next.delete(msg.id);
+                  else next.add(msg.id);
+                  return next;
+                });
+              }}
+            />
           );
         })}
 
         {/* Streaming indicator */}
-        {sending && streamingAgent && (
-          <div className="text-xs">
-            <MessageHeader
-              role={streamingRole || "agent"}
-              sender={streamingAgent}
-              displayName={displayNames.get(streamingAgent)}
-              time={streamingTime}
-            />
-            {streamingParts.length === 0 && (
-              <div className="mt-0.5 text-text-muted animate-pulse">thinking...</div>
-            )}
-            {streamingParts.length > 0 && (
-              <div className="mt-1 space-y-1">
-                {streamingParts.map((part, i) =>
-                  part.kind === "tool" ? (
-                    <PartToolCallCard
-                      key={i}
-                      part={{
-                        type: "tool_call",
-                        name: part.name,
-                        args: part.args,
-                        output: part.output,
-                        pending: !part.done,
-                      }}
-                    />
-                  ) : (
-                    <div key={i} className="text-text whitespace-pre-wrap">
-                      {part.content}<StreamingCursor />
-                    </div>
-                  )
-                )}
-              </div>
-            )}
-            {stopButton}
+        {/* Show streaming indicator while actively streaming, or after stop
+            if there's partial content to preserve */}
+        {((sending && streamingAgent) || (!sending && streamingParts.length > 0)) && (
+          <StreamingIndicator
+            parts={streamingParts}
+            onStop={sending ? handleStop : undefined}
+            header={
+              <>
+                <span className="text-text-muted">{streamingTime}</span>{" "}
+                <span className={`font-medium ${roleColor(streamingRole || "agent")}`}>
+                  {roleLabel(streamingRole || "agent", displayNames.get(streamingAgent), streamingAgent)}:
+                </span>
+              </>
+            }
+          />
+        )}
+
+        {/* Waiting indicator — before the agent starts streaming */}
+        {sending && !streamingAgent && messages.length > 0 && (
+          <div className="text-xs py-1">
+            <div className="flex items-center gap-2 text-text-muted animate-pulse">
+              <span className="h-1 w-1 rounded-full bg-accent" />
+              {pendingAgent ? `waiting for ${pendingAgent}...` : "waiting for agent response..."}
+            </div>
+            <button
+              onClick={handleStop}
+              className="mt-1.5 rounded border border-border px-2 py-0.5 text-[10px] text-text-muted hover:border-red/50 hover:text-red transition-colors"
+            >
+              stop
+            </button>
           </div>
         )}
 
-        {/* Waiting indicator */}
-        {sending && !streamingAgent && messages.length > 0 && (
+        {/* Background streaming indicator — agent is responding but we reconnected */}
+        {backgroundStreaming && !sending && (
           <div className="text-xs py-1">
-            <div className="flex items-center gap-2 text-text-muted">
-              <span className="h-1 w-1 rounded-full bg-accent animate-pulse" />
-              waiting for agent response...
+            <div className="flex items-center gap-2 text-text-muted animate-pulse">
+              <span className="h-1 w-1 rounded-full bg-accent" />
+              {pendingAgent ? `waiting for ${pendingAgent}...` : "waiting for agent response..."}
             </div>
-            {stopButton}
           </div>
         )}
       </div>
@@ -454,7 +494,7 @@ export function ProjectChat({ projectId, participants }: ProjectChatProps) {
                   }}
                   className={`flex w-full items-center gap-2 px-3 py-1.5 text-xs text-left ${i === mentionIdx ? "bg-surface-hover" : "hover:bg-surface-hover"}`}
                 >
-                  <span className={`font-bold ${ROLE_COLORS[p.role] || "text-text"}`}>{p.role}</span>
+                  <span className={`font-bold ${roleColor(p.role)}`}>{p.role}</span>
                   <span className="text-text-muted">{p.name}</span>
                 </button>
               ))}

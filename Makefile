@@ -2,16 +2,32 @@ BINARY_NAME := eyrie
 BUILD_DIR := bin
 VERSION := 0.1.0
 LDFLAGS := -ldflags "-X github.com/Audacity88/eyrie/internal/config.Version=$(VERSION)"
+GOBIN := $(shell go env GOPATH)/bin
 
-.PHONY: build dev dev-go dev-web clean test lint web install
+# Disable built-in Modula-2 rules that try to compile go.mod with m2c
+%: %.mod
+%.o: %.mod
+
+.PHONY: build dev dev-go dev-web clean test lint web install uninstall ensure-air
 
 build: web embed
 	go build $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/eyrie
 
+# Install air (Go live-reload) if missing
+ensure-air:
+	@command -v air >/dev/null 2>&1 || test -x $(GOBIN)/air || \
+		(echo "Installing air..."; go install github.com/air-verse/air@latest)
+
+# Resolve air binary at recipe time (not parse time) so ensure-air can
+# install it first. Using $(shell ...) at the top level would capture an
+# empty value before air is installed, breaking `make dev` / `make dev-go`
+# on fresh systems.
+AIR = $$(test -x $(GOBIN)/air && echo $(GOBIN)/air || command -v air 2>/dev/null)
+
 # Run both Go (air) and Vite dev servers. Ctrl-C stops both.
-dev: dev-static
+dev: ensure-air dev-static
 	@trap 'kill 0' EXIT; \
-	$(HOME)/go/bin/air & \
+	$(AIR) & \
 	echo "Waiting for backend to be ready..."; \
 	while ! lsof -i :7200 >/dev/null 2>&1; do sleep 0.5; done; \
 	echo "Backend ready, starting Vite..."; \
@@ -19,8 +35,8 @@ dev: dev-static
 	wait
 
 # Run only the Go backend with auto-reload
-dev-go: dev-static
-	$(HOME)/go/bin/air
+dev-go: ensure-air dev-static
+	@$(AIR)
 
 # Run only the Vite frontend dev server
 dev-web:
@@ -63,3 +79,11 @@ lint:
 install: build
 	mkdir -p $(HOME)/.local/bin
 	cp $(BUILD_DIR)/$(BINARY_NAME) $(HOME)/.local/bin/$(BINARY_NAME)
+	@mkdir -p $(HOME)/.eyrie
+	@test -f $(HOME)/.eyrie/registry.json || \
+		(cp registry.json $(HOME)/.eyrie/registry.json && echo "Seeded ~/.eyrie/registry.json")
+	@test -f $(HOME)/.eyrie/personas.json || \
+		(cp personas.json $(HOME)/.eyrie/personas.json && echo "Seeded ~/.eyrie/personas.json")
+
+uninstall:
+	rm -f $(HOME)/.local/bin/$(BINARY_NAME)

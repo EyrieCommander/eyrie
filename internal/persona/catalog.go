@@ -25,7 +25,7 @@ func DefaultCatalogURL() string {
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
-		return "file://./personas.example.json"
+		return "file://./personas.json"
 	}
 	// Source path is distinct from cache path (~/.eyrie/cache/personas.json)
 	p := filepath.Join(home, ".eyrie", "personas.json")

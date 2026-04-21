@@ -52,26 +52,34 @@ export function DataProvider({ children }: { children: ReactNode }) {
         fetchCommander(),
       ]);
 
+      // WHY JSON comparison: Without this, every 30s poll calls setState with
+      // a new array/object reference even when data hasn't changed. React
+      // re-renders all consumers (AgentDetail, ProjectChat, HierarchyPage, etc.)
+      // unnecessarily. JSON.stringify is cheap for our data sizes (<100KB) and
+      // prevents cascading re-renders of message lists, chat history, and forms.
       if (agentResult.status === "fulfilled") {
-        setAgents(agentResult.value.map((a) => ({ ...a, display_name: cleanDisplayName(a.display_name) || a.display_name })));
+        const mapped = agentResult.value.map((a) => ({ ...a, display_name: cleanDisplayName(a.display_name) || a.display_name }));
+        setAgents((prev) => JSON.stringify(prev) === JSON.stringify(mapped) ? prev : mapped);
       } else {
         errors.push(`agents: ${agentResult.reason?.message || "fetch failed"}`);
       }
 
       if (projectResult.status === "fulfilled") {
-        setProjects(projectResult.value);
+        setProjects((prev) => JSON.stringify(prev) === JSON.stringify(projectResult.value) ? prev : projectResult.value);
       } else {
         errors.push(`projects: ${projectResult.reason?.message || "fetch failed"}`);
       }
 
       if (instanceResult.status === "fulfilled") {
-        setInstances(instanceResult.value.map((i) => ({ ...i, display_name: cleanDisplayName(i.display_name) || i.display_name })));
+        const mapped = instanceResult.value.map((i) => ({ ...i, display_name: cleanDisplayName(i.display_name) || i.display_name }));
+        setInstances((prev) => JSON.stringify(prev) === JSON.stringify(mapped) ? prev : mapped);
       } else {
         errors.push(`instances: ${instanceResult.reason?.message || "fetch failed"}`);
       }
 
       if (commanderResult.status === "fulfilled") {
-        setCommander(commanderResult.value ?? null);
+        const val = commanderResult.value ?? null;
+        setCommander((prev) => JSON.stringify(prev) === JSON.stringify(val) ? prev : val);
       }
       // Commander fetch failure is not counted as an error — it's optional
       // (no commander set up yet is a valid state)

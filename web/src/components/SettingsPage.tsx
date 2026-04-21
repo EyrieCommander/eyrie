@@ -4,6 +4,7 @@ import { useTheme, type Theme } from "../lib/useTheme";
 import { useLatencyThresholds } from "../lib/useLatencyThresholds";
 import { useState, useEffect, useRef } from "react";
 import { Minus, Plus, RotateCcw, Moon, Sun, Check } from "lucide-react";
+import ApiKeysSection from "./ApiKeysSection";
 
 export default function SettingsPage() {
   const { zoom, setZoom, reset: resetZoom, min, max, step } = useZoom();
@@ -49,6 +50,9 @@ export default function SettingsPage() {
         </p>
       </div>
 
+      {/* API Keys */}
+      <ApiKeysSection />
+
       {/* Theme + Zoom + Latency */}
       <div className="grid gap-4 md:grid-cols-3">
         {/* Theme */}
@@ -81,7 +85,7 @@ export default function SettingsPage() {
         </div>
 
         {/* Zoom */}
-        <div className="rounded border border-border bg-surface p-4 space-y-3">
+        <div className="rounded border border-border bg-surface p-4 space-y-3 overflow-hidden">
           <div className="flex items-center justify-between">
             <div>
               <h3 className="text-xs font-medium text-text">zoom level</h3>

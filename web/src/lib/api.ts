@@ -9,14 +9,18 @@ import type {
   ChatMessage,
   ChatEvent,
   Framework,
-  InstallProgress,
-  InstallLogEvent,
   Persona,
   PersonaCategory,
   Project,
   CreateProjectRequest,
   HierarchyTree,
   ProjectChatMessage,
+  KeyEntry,
+  SetKeyResponse,
+  ValidateKeyResponse,
+  CommanderEvent,
+  CommanderHistoryMessage,
+  MemoryEntry,
 } from "./types";
 
 const BASE = "";
@@ -350,77 +354,6 @@ export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
   return res.json();
 }
 
-export async function fetchInstallStatus(): Promise<
-  Record<string, InstallProgress>
-> {
-  const res = await fetchWithTimeout(`${BASE}/api/registry/install/status`);
-  if (!res.ok)
-    throw new Error(`Failed to fetch install status: ${res.statusText}`);
-  return res.json();
-}
-
-export function streamInstall(
-  frameworkId: string,
-  copyFrom: string | undefined,
-  onProgress: (progress: InstallProgress) => void,
-  onLog: (log: string) => void,
-  force?: boolean,
-): AbortController {
-  const controller = new AbortController();
-
-  (async () => {
-    try {
-      const res = await fetchWithTimeout(`${BASE}/api/registry/install`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          framework_id: frameworkId,
-          copy_from: copyFrom,
-          skip_confirm: true,
-          force: force || false,
-        }),
-        signal: controller.signal,
-      });
-
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        onProgress({
-          framework_id: frameworkId,
-          phase: "error",
-          status: "error",
-          progress: 0,
-          message: body.error || `Installation failed: ${res.statusText}`,
-          error: body.error || res.statusText,
-          started_at: new Date().toISOString(),
-        });
-        return;
-      }
-
-      await readSSEStream(res.body!, (data) => {
-        if (data.type === "log") {
-          onLog((data as InstallLogEvent).message);
-        } else {
-          onProgress(data as InstallProgress);
-        }
-      });
-    } catch (e) {
-      if ((e as Error).name !== "AbortError") {
-        onProgress({
-          framework_id: frameworkId,
-          phase: "error",
-          status: "error",
-          progress: 0,
-          message: e instanceof Error ? e.message : "Installation failed",
-          error: e instanceof Error ? e.message : "Unknown error",
-          started_at: new Date().toISOString(),
-        });
-      }
-    }
-  })();
-
-  return controller;
-}
-
 // Persona API
 
 export async function fetchPersonas(): Promise<Persona[]> {
@@ -589,41 +522,79 @@ export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
   return data.commander ?? null;
 }
 
-export function streamCommanderBriefing(
-  onEvent: (event: ChatEvent & { session_key?: string }) => void,
-): { controller: AbortController; sessionReady: Promise<string> } {
+// --- Commander chat endpoints ---
+
+/** Fire-and-forget SSE request — shared plumbing for commander endpoints. */
+function streamSSE(
+  url: string,
+  body: Record<string, unknown>,
+  onEvent: (event: CommanderEvent) => void,
+  errorLabel: string,
+): AbortController {
   const controller = new AbortController();
-  let resolveSession: (key: string) => void;
-  let sessionResolved = false;
-  const sessionReady = new Promise<string>((resolve) => { resolveSession = resolve; });
   (async () => {
     try {
-      const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander/brief`, {
+      const res = await fetch(url, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
         signal: controller.signal,
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        onEvent({ type: "error", error: body.error || res.statusText, code: body.code });
-        resolveSession!("");
+        const data = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: data.error || res.statusText });
         return;
       }
-      await readSSEStream(res.body!, (ev) => {
-        if (ev.type === "session" && ev.session_key) {
-          resolveSession!(ev.session_key); sessionResolved = true;
-        }
-        onEvent(ev);
-      });
-      // Ensure promise settles even if no session event was received
-      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
+      await readSSEStream(res.body!, onEvent);
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
-        onEvent({ type: "error", error: e instanceof Error ? e.message : "Briefing failed" });
+        onEvent({ type: "error", error: e instanceof Error ? e.message : errorLabel });
       }
-      if (!sessionResolved) { resolveSession!(""); sessionResolved = true; }
     }
   })();
-  return { controller, sessionReady };
+  return controller;
+}
+
+/** Stream a commander chat turn. Returns an AbortController so the
+ *  caller can cancel the stream. */
+export function streamCommanderChat(
+  message: string,
+  onEvent: (event: CommanderEvent) => void,
+): AbortController {
+  return streamSSE(`${BASE}/api/commander/chat`, { message }, onEvent, "Chat request failed");
+}
+
+/** Approve or deny a pending confirm-tier tool call, then stream the
+ *  continuation turn. Returns an AbortController. */
+export function confirmCommanderAction(
+  id: string,
+  approved: boolean,
+  onEvent: (event: CommanderEvent) => void,
+  reason?: string,
+): AbortController {
+  return streamSSE(
+    `${BASE}/api/commander/confirm/${id}`,
+    { approved, reason },
+    onEvent,
+    "Confirm request failed",
+  );
+}
+
+export async function fetchCommanderHistory(): Promise<CommanderHistoryMessage[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/commander/history`);
+  if (!res.ok) throw new Error(`Failed to fetch commander history: ${res.statusText}`);
+  return res.json();
+}
+
+export async function clearCommanderHistory(): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/commander/history`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to clear commander history: ${res.statusText}`);
+}
+
+export async function fetchCommanderMemory(): Promise<MemoryEntry[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/commander/memory`);
+  if (!res.ok) throw new Error(`Failed to fetch commander memory: ${res.statusText}`);
+  return res.json();
 }
 
 export function streamCaptainBriefing(
@@ -714,6 +685,13 @@ export function streamProjectChat(
   return controller;
 }
 
+/** Check if a project chat response is currently being streamed. */
+export async function projectChatStatus(projectId: string): Promise<{ streaming: boolean }> {
+  const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/status`);
+  if (!res.ok) return { streaming: false };
+  return res.json();
+}
+
 /** Tell the backend to cancel an in-flight project chat orchestration. */
 export async function stopProjectChat(projectId: string): Promise<void> {
   const res = await fetchWithTimeout(`${BASE}/api/projects/${projectId}/chat/stop`, { method: "POST" });
@@ -723,14 +701,53 @@ export async function stopProjectChat(projectId: string): Promise<void> {
   }
 }
 
-export async function setCommander(opts: { instanceId?: string; agentName?: string }): Promise<void> {
-  const res = await fetchWithTimeout(`${BASE}/api/hierarchy/commander`, {
-    method: "POST",
+// --- Key Vault API ---
+
+export async function fetchKeys(): Promise<KeyEntry[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys`);
+  if (!res.ok) throw new Error(`Failed to fetch keys: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setKey(
+  provider: string,
+  key: string,
+  skipValidation = false,
+): Promise<SetKeyResponse> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys/${encodeURIComponent(provider)}`, {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ instance_id: opts.instanceId, agent_name: opts.agentName }),
+    body: JSON.stringify({ key, skip_validation: skipValidation }),
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
-    throw new Error(body.error || `Failed to set commander: ${res.statusText}`);
+    throw new Error(body.error || `Failed to set key: ${res.statusText}`);
   }
+  return res.json();
+}
+
+export async function deleteKey(provider: string): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys/${encodeURIComponent(provider)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to delete key: ${res.statusText}`);
+  }
+}
+
+export async function validateKey(
+  provider: string,
+  key: string,
+): Promise<ValidateKeyResponse> {
+  const res = await fetchWithTimeout(`${BASE}/api/keys/${encodeURIComponent(provider)}/validate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ key }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to validate key: ${res.statusText}`);
+  }
+  return res.json();
 }

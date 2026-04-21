@@ -206,8 +206,11 @@ func (p *Provisioner) renderIdentityFiles(workspaceDir string, role HierarchyRol
 }
 
 func (p *Provisioner) generateConfig(inst *Instance, pers *persona.Persona, modelOverride string) error {
-	model := "anthropic/claude-sonnet-4-20250514"
-	provider := "openrouter"
+	// WHY inherit from parent: The provisioner used to hardcode "openrouter"
+	// and a specific model ID, breaking any setup that uses a different provider
+	// (e.g., custom proxy, direct Anthropic API). Reading the parent's config
+	// ensures provisioned instances use the same LLM backend as the parent.
+	model, provider := parentProviderDefaults(inst.Framework)
 	if pers != nil && pers.PreferredModel != "" {
 		model = pers.PreferredModel
 	}
@@ -249,28 +252,60 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 			"session_persistence": true,
 			"require_pairing":     true,
 		},
-		// WHY autonomous: Provisioned agents (captains/talons) are working
+		// WHY full autonomy: Provisioned agents (captains/talons) are working
 		// agents, not interactive assistants. They need to call the Eyrie API
 		// via curl, run build commands, and operate without per-command approval.
 		// The user monitors them through the project chat, not by approving
-		// individual shell commands.
+		// individual shell commands. ZeroClaw expects "full" (not "autonomous").
+		// WHY auto_approve: Provisioned agents are headless — no terminal to
+		// click "approve". ZeroClaw's current tool name is "Bash" (not "shell").
+		// Without auto_approve, Bash tool calls get blocked with "requires approval".
+		// allowed_commands + workspace_only provide the safety boundary.
 		"autonomy": map[string]any{
-			"level":          "autonomous",
-			"workspace_only": true,
+			"level":            "full",
+			"workspace_only":   true,
+			"allowed_commands": DefaultAllowedCommands(),
+			"auto_approve":     []string{"Bash", "Read", "Write", "http_request", "web_fetch"},
+		},
+		// WHY sandbox=none: macOS seatbelt sandbox blocks basic operations
+		// (ls, pwd, find) even within the workspace directory. Provisioned
+		// agents are already isolated by workspace_only and allowed_commands.
+		"security": map[string]any{
+			"sandbox": map[string]any{
+				"backend": "none",
+			},
 		},
 		"memory": map[string]any{
 			"backend":   "sqlite",
 			"auto_save": true,
 		},
+		// WHY disable claude_code tools: ZeroClaw's claude_code and
+		// claude_code_runner tools delegate to a Claude Code subprocess with
+		// its own permission system that blocks Bash for headless agents.
+		// With these disabled, the agent uses ZeroClaw's native "shell" tool
+		// which respects the autonomy config (level: full + allowed_commands).
+		"claude_code": map[string]any{
+			"enabled": false,
+		},
+		"claude_code_runner": map[string]any{
+			"enabled": false,
+		},
 		"http_request": map[string]any{
-			"enabled":              true,
-			"allowed_domains":      []string{"localhost"},
-			"allowed_private_hosts": []string{"localhost"},
+			"enabled":         true,
+			"allowed_domains": []string{"localhost"},
+			// WHY allow_private_hosts (not allowed_private_hosts): ZeroClaw's
+			// http_request struct uses "allow_private_hosts" while the web_fetch
+			// struct uses "allowed_private_hosts". Different field names.
+			"allow_private_hosts": []string{"localhost"},
 		},
 	}
 
-	// Copy API key from parent ZeroClaw installation so provisioned instances
-	// can use the same provider without manual onboarding.
+	// WHY copy secret key: ZeroClaw encrypts api_key in its config using a
+	// per-install .secret_key. Copying both lets provisioned instances decrypt
+	// the key at startup. This is a legacy path — vault env var injection
+	// (ANTHROPIC_API_KEY etc.) supersedes it for providers the vault knows
+	// about, but encrypted config keys remain needed for providers not in
+	// the vault's env var map or when the vault has no key for this provider.
 	parentConfigDir := config.ExpandHome("~/.zeroclaw")
 	parentConfigPath := filepath.Join(parentConfigDir, "config.toml")
 	if apiKey := readTOMLField(parentConfigPath, "api_key"); apiKey != "" {
@@ -291,18 +326,54 @@ func (p *Provisioner) generateZeroClawConfig(inst *Instance, provider, model str
 	return config.WriteTOMLAtomic(inst.ConfigPath, cfg)
 }
 
-// readTOMLField reads a single top-level string field from a TOML file.
-func readTOMLField(path, field string) string {
-	var raw map[string]any
-	if err := config.ParseTOMLFile(path, &raw); err != nil {
-		return ""
+// parentProviderDefaults reads the parent framework's default_provider and
+// default_model from its config file. Falls back to sensible defaults if
+// the parent config can't be read.
+func parentProviderDefaults(framework string) (model, provider string) {
+	// Fallbacks if parent config is unreadable
+	model = "claude-sonnet-4"
+	provider = "openrouter"
+
+	var parentConfigPath string
+	switch framework {
+	case "zeroclaw":
+		parentConfigPath = config.ExpandHome("~/.zeroclaw/config.toml")
+	default:
+		// Other frameworks: use fallback defaults for now.
+		// TODO: read parent config for openclaw, picoclaw, hermes
+		return
 	}
+
+	var raw map[string]any
+	if err := config.ParseTOMLFile(parentConfigPath, &raw); err != nil {
+		return
+	}
+	if p := tomlString(raw, "default_provider"); p != "" {
+		provider = p
+	}
+	if m := tomlString(raw, "default_model"); m != "" {
+		model = m
+	}
+	return
+}
+
+// tomlString extracts a top-level string field from a parsed TOML map.
+func tomlString(raw map[string]any, field string) string {
 	if val, ok := raw[field]; ok {
 		if s, ok := val.(string); ok {
 			return s
 		}
 	}
 	return ""
+}
+
+// readTOMLField reads a single top-level string field from a TOML file.
+func readTOMLField(path, field string) string {
+	var raw map[string]any
+	if err := config.ParseTOMLFile(path, &raw); err != nil {
+		return ""
+	}
+	return tomlString(raw, field)
 }
 
 func (p *Provisioner) generateOpenClawConfig(inst *Instance, provider, model string) error {

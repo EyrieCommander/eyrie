@@ -21,6 +21,23 @@ func (r HierarchyRole) Valid() bool {
 	return false
 }
 
+// defaultAllowedCommands is the minimum set of shell commands for provisioned
+// ZeroClaw agents. Unexported to prevent mutation — use DefaultAllowedCommands().
+var defaultAllowedCommands = []string{
+	"git", "npm", "cargo", "make",
+	"ls", "cat", "grep", "find", "echo", "pwd",
+	"wc", "head", "tail", "date", "curl",
+	"sleep", "mkdir", "cp", "mv", "rm", "touch",
+	"sed", "awk", "sort", "uniq", "diff",
+}
+
+// DefaultAllowedCommands returns a copy of the default command allowlist.
+func DefaultAllowedCommands() []string {
+	cp := make([]string, len(defaultAllowedCommands))
+	copy(cp, defaultAllowedCommands)
+	return cp
+}
+
 // InstanceStatus represents the lifecycle state of an instance.
 type InstanceStatus string
 

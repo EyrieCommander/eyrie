@@ -1,5 +1,6 @@
 import type { ChatPart } from "../../lib/types";
 import { ToolRunCard, groupPartsIntoRuns } from "./ToolCallCard";
+import { roleLabel, roleColor } from "./MessageHeader";
 
 export interface MessageRowProps {
   msg: {
@@ -7,6 +8,8 @@ export interface MessageRowProps {
     role: string;
     content: string;
     parts?: ChatPart[];
+    sender?: string;
+    display_name?: string;
   };
   expanded: boolean;
   onToggle?: () => void;
@@ -53,10 +56,8 @@ export function MessageRow({ msg, expanded, onToggle }: MessageRowProps) {
       <span className="text-text-muted">
         {(() => { const d = new Date(msg.timestamp); return isNaN(d.getTime()) ? "-" : d.toLocaleTimeString(); })()}
       </span>{" "}
-      <span
-        className={`font-medium ${msg.role === "user" ? "text-green" : "text-purple"}`}
-      >
-        {msg.role}:
+      <span className={`font-medium ${roleColor(msg.role)}`}>
+        {roleLabel(msg.role, msg.display_name, msg.sender)}:
       </span>{" "}
       {!expanded && (
         <>

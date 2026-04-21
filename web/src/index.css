@@ -16,6 +16,7 @@
   --color-green: #00d084;
   --color-red: #ef4444;
   --color-yellow: #eab308;
+  --color-blue: #60a5fa;
   --color-purple: #a78bfa;
 }
 
@@ -34,6 +35,7 @@ html.light {
   --color-green: #00b06e;
   --color-red: #dc2626;
   --color-yellow: #ca8a04;
+  --color-blue: #3b82f6;
   --color-purple: #7c5cbf;
 }
 

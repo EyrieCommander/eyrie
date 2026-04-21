@@ -18,17 +18,50 @@ function classifyOutput(output: string | undefined): OutputStatus {
     return "error";
   }
 
+  // JSON responses with a truthy "error" key (e.g., API error responses).
+  // Try to parse when it looks like JSON so `{"error": false}` or
+  // `{"error": null}` isn't miscategorised. Fall back to the cheap
+  // substring heuristic only if parsing fails.
+  if (lower.startsWith("{")) {
+    try {
+      const parsed = JSON.parse(output!);
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        Object.prototype.hasOwnProperty.call(parsed, "error") &&
+        parsed.error != null &&
+        parsed.error !== false &&
+        parsed.error !== ""
+      ) {
+        return "error";
+      }
+    } catch {
+      if (lower.includes('"error"')) return "error";
+    }
+  }
+
+  // HTTP error status codes in output
+  if (/\b(4\d{2}|5\d{2})\b/.test(lower) && (lower.includes("not found") || lower.includes("internal server") || lower.includes("bad request"))) {
+    return "error";
+  }
+
   // Permission / approval / security blocks
   if (lower.includes("requires approval") || lower.includes("command not allowed") ||
       lower.includes("not allowed by security") || lower.includes("permission denied") ||
       lower.includes("not permitted") || lower.includes("access denied") ||
-      lower.includes("forbidden") || lower.includes("unauthorized")) {
+      lower.includes("forbidden") || lower.includes("unauthorized") ||
+      lower.includes("haven't granted") || lower.includes("requested permissions")) {
     return "blocked";
   }
 
   // Connection / timeout failures
   if (lower.startsWith("connect econnrefused") || lower.startsWith("etimedout") ||
       lower.startsWith("enotfound") || lower.startsWith("econnreset")) {
+    return "error";
+  }
+
+  // Tool use errors (cancelled, errored, etc.)
+  if (lower.includes("tool_use_error") || (lower.includes("cancelled") && lower.includes("errored"))) {
     return "error";
   }
 
@@ -65,7 +98,7 @@ function HtmlCanvasArgs({ args, output }: { args: Record<string, any>; output?: 
         <div>
           <span className="text-text-muted">args: </span>
           <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-            {JSON.stringify(meta, null, 2)}
+            {formatArgs(meta)}
           </pre>
         </div>
       )}
@@ -129,6 +162,16 @@ function HtmlPreview({ html }: { html: string }) {
       </div>
     </div>
   );
+}
+
+/** Format args JSON with literal newlines rendered inside string values.
+ *  Only unescape JSON-level escape sequences (\\n → newline). A preceding
+ *  backslash means the n/t is literal data, not an escape — preserve it
+ *  (so "\\\\n" in the source stays as \n in the output). */
+function formatArgs(args: Record<string, any>): string {
+  return JSON.stringify(args, null, 2)
+    .replace(/(^|[^\\])\\n/g, "$1\n")
+    .replace(/(^|[^\\])\\t/g, "$1\t");
 }
 
 export function toolCallSummary(
@@ -236,7 +279,7 @@ export function PartToolCallCard({
                 <div>
                   <span className="text-text-muted">args: </span>
                   <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                    {JSON.stringify(part.args, null, 2)}
+                    {formatArgs(part.args)}
                   </pre>
                 </div>
               )}
@@ -302,7 +345,7 @@ export function ToolCallCard({ tc }: ToolCallCardProps) {
                 <div>
                   <span className="text-text-muted">args: </span>
                   <pre className="mt-0.5 overflow-x-auto whitespace-pre-wrap text-[10px] text-text-secondary">
-                    {JSON.stringify(tc.args, null, 2)}
+                    {formatArgs(tc.args)}
                   </pre>
                 </div>
               )}
@@ -377,7 +420,6 @@ export function ToolRunCard({ tools }: { tools: ChatPart[] }) {
             <PartToolCallCard
               key={part.id || `tc-${i}`}
               part={part}
-              defaultExpanded
             />
           ))}
         </div>

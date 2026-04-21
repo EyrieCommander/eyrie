@@ -152,6 +152,11 @@ export interface InstallProgress {
   error?: string;
   started_at: string;
   completed_at?: string;
+  /** Kind of operation this progress represents. Consumed by
+   *  frameworkStatus.ts to reliably distinguish install from uninstall
+   *  instead of substring-matching `message`. Optional for backward
+   *  compatibility; legacy consumers fall back to the message check. */
+  operation?: "install" | "uninstall";
 }
 
 export interface InstallLogEvent {
@@ -243,14 +248,10 @@ export interface CreateProjectRequest {
 // --- Hierarchy types ---
 
 export interface CommanderInfo {
-  id: string;
   name: string;
   display_name: string;
-  framework: string;
-  port: number;
   status: string;
-  hierarchy_role: HierarchyRole;
-  legacy: boolean;
+  hierarchy_role: string;
 }
 
 export interface HierarchyTree {
@@ -272,6 +273,58 @@ export interface ProjectChatMessage {
   timestamp: string;
   mention?: string;
   parts?: ChatPart[];
+  detail?: string; // expandable content (e.g., full briefing text)
+}
+
+// --- Key vault types ---
+
+export interface KeyEntry {
+  provider: string;
+  masked_key: string;
+  has_key: boolean;
+}
+
+export interface SetKeyResponse {
+  provider: string;
+  masked_key: string;
+  valid: boolean;
+  verified: boolean;
+}
+
+export interface ValidateKeyResponse {
+  valid: boolean;
+  error?: string;
+}
+
+// --- Commander chat types ---
+
+export interface CommanderDelta          { type: "delta"; text: string }
+export interface CommanderToolCall       { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
+export interface CommanderToolResult     { type: "tool_result"; id: string; name: string; output: string; error?: boolean }
+export interface CommanderMessage        { type: "message"; role: string; content: string }
+export interface CommanderDone           { type: "done"; input_tokens?: number; output_tokens?: number; context_tokens?: number; context_window?: number }
+export interface CommanderError          { type: "error"; error: string }
+export interface CommanderConfirmRequired { type: "confirm_required"; id: string; tool: string; args: Record<string, unknown>; summary: string }
+
+export type CommanderEvent =
+  | CommanderDelta
+  | CommanderToolCall
+  | CommanderToolResult
+  | CommanderMessage
+  | CommanderDone
+  | CommanderError
+  | CommanderConfirmRequired;
+
+export interface CommanderHistoryMessage {
+  role: string;
+  content: string;
+}
+
+export interface MemoryEntry {
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export const FRAMEWORK_EMOJI: Record<string, string> = {

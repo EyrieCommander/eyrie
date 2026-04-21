@@ -15,6 +15,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"gopkg.in/yaml.v3"
 	_ "modernc.org/sqlite" // SQLite driver
 )
@@ -41,6 +42,27 @@ func NewHermesAdapter(id, name, configPath, binaryPath string) *HermesAdapter {
 		configDir:  filepath.Dir(expandedPath),
 		binaryPath: binaryPath,
 	}
+}
+
+// openStateDB opens the Hermes state.db and verifies it has the sessions table.
+// Returns an error if the DB doesn't exist or is empty (instance never used).
+func (h *HermesAdapter) openStateDB() (*sql.DB, error) {
+	dbPath := filepath.Join(h.configDir, "state.db")
+	if _, err := os.Stat(dbPath); err != nil {
+		return nil, err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return nil, err
+	}
+	// Check if the sessions table exists — empty DBs created by
+	// SQLite auto-open won't have it.
+	var count int
+	if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='sessions'").Scan(&count); err != nil || count == 0 {
+		db.Close()
+		return nil, fmt.Errorf("no sessions table")
+	}
+	return db, nil
 }
 
 // expandHome expands ~ in paths
@@ -222,6 +244,7 @@ func (h *HermesAdapter) Config(ctx context.Context) (*AgentConfig, error) {
 // Start starts the Hermes gateway
 func (h *HermesAdapter) Start(ctx context.Context) error {
 	cmd := exec.CommandContext(ctx, h.binaryPath, "gateway", "start")
+	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()
@@ -555,15 +578,12 @@ func extractErrorSummary(msg string) string {
 
 // Sessions returns conversation sessions
 func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
-	// Open Hermes SQLite database
-	dbPath := filepath.Join(h.configDir, "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := h.openStateDB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return []Session{}, nil // DB missing or empty — not an error
 	}
 	defer db.Close()
 
-	// Query sessions ordered by most recent
 	rows, err := db.QueryContext(ctx, `
 		SELECT id, source, title, started_at, message_count
 		FROM sessions
@@ -571,7 +591,7 @@ func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
 		LIMIT 50
 	`)
 	if err != nil {
-		return nil, fmt.Errorf("failed to query sessions: %w", err)
+		return nil, fmt.Errorf("querying hermes sessions: %w", err)
 	}
 	defer rows.Close()
 
@@ -611,11 +631,9 @@ func (h *HermesAdapter) Sessions(ctx context.Context) ([]Session, error) {
 
 // ChatHistory returns chat messages for a session
 func (h *HermesAdapter) ChatHistory(ctx context.Context, sessionKey string, limit int) ([]ChatMessage, error) {
-	// Open Hermes SQLite database
-	dbPath := filepath.Join(h.configDir, "state.db")
-	db, err := sql.Open("sqlite", dbPath)
+	db, err := h.openStateDB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return []ChatMessage{}, nil
 	}
 	defer db.Close()
 
@@ -690,6 +708,7 @@ func (h *HermesAdapter) SendMessage(ctx context.Context, message, sessionKey str
 	}
 
 	cmd := exec.CommandContext(ctx, h.binaryPath, args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("hermes chat failed: %w\nOutput: %s", err, string(output))
@@ -718,6 +737,7 @@ func (h *HermesAdapter) StreamMessage(ctx context.Context, message, sessionKey s
 	}
 
 	cmd := exec.CommandContext(ctx, h.binaryPath, args...)
+	cmd.Env = config.EnrichedEnv()
 
 	// Create pipes for stdin/stdout
 	stdin, err := cmd.StdinPipe()
@@ -807,6 +827,7 @@ func (h *HermesAdapter) CreateSession(ctx context.Context, name string) (*Sessio
 // ResetSession deletes a conversation session
 func (h *HermesAdapter) ResetSession(ctx context.Context, sessionKey string) error {
 	cmd := exec.CommandContext(ctx, h.binaryPath, "sessions", "delete", sessionKey)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("failed to delete session: %w (output: %s)", err, string(output))

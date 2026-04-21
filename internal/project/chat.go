@@ -9,31 +9,16 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/fileutil"
 )
 
-// ChatPart is an ordered content element (text or tool call) within a message.
-type ChatPart struct {
-	Type   string         `json:"type"`             // "text" or "tool_call"
-	Text   string         `json:"text,omitempty"`
-	ID     string         `json:"id,omitempty"`
-	Name   string         `json:"name,omitempty"`
-	Args   map[string]any `json:"args,omitempty"`
-	Output string         `json:"output,omitempty"`
-	Error  bool           `json:"error,omitempty"`
-}
-
-// ChatMessage is a single message in a project's shared conversation.
-// Unlike adapter.ChatMessage, this includes sender attribution for
-// multi-participant conversations.
-type ChatMessage struct {
-	ID        string     `json:"id"`
-	Sender    string     `json:"sender"`              // "user", agent name, or instance name
-	Role      string     `json:"role"`                // "user", "commander", "captain", "talon"
-	Content   string     `json:"content"`
-	Timestamp time.Time  `json:"timestamp"`
-	Mention   string     `json:"mention,omitempty"`   // "@captain", "@commander", etc.
-	Parts     []ChatPart `json:"parts,omitempty"`     // tool calls + text parts
-}
+// ChatMessage is now a unified type defined in adapter package.
+// Type alias preserves backward compatibility — existing code that
+// references project.ChatMessage or project.ChatPart continues to work.
+type ChatMessage = adapter.ChatMessage
+type ChatPart = adapter.ChatPart
 
 // ChatStore manages the shared conversation for a project.
 //
@@ -180,10 +165,93 @@ func (cs *ChatStore) Messages(projectID string, limit int) ([]ChatMessage, error
 		return nil, fmt.Errorf("reading chat file: %w", err)
 	}
 
+	messages = dedupMessages(messages)
+
 	if limit > 0 && len(messages) > limit {
 		messages = messages[len(messages)-limit:]
 	}
 	return messages, nil
+}
+
+// Compact rewrites the chat JSONL file without duplicate IDs.
+// WHY: Incremental persistence appends partial snapshots during streaming
+// (same ID, growing content) for crash recovery. After the final message is
+// written, compaction removes the partials so the file stays clean and
+// Messages() doesn't need to dedup on every read.
+func (cs *ChatStore) Compact(projectID string) error {
+	if err := validateProjectID(projectID); err != nil {
+		return err
+	}
+	cs.mu.Lock()
+	defer cs.mu.Unlock()
+
+	path := cs.chatPath(projectID)
+	f, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("opening chat file for compaction: %w", err)
+	}
+
+	var messages []ChatMessage
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var msg ChatMessage
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		messages = append(messages, msg)
+	}
+	f.Close()
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("reading chat file for compaction: %w", err)
+	}
+
+	deduped := dedupMessages(messages)
+	if len(deduped) == len(messages) {
+		return nil // Already clean, nothing to compact
+	}
+
+	// Rewrite atomically
+	var buf []byte
+	for _, m := range deduped {
+		line, err := json.Marshal(m)
+		if err != nil {
+			return fmt.Errorf("marshaling during compaction: %w", err)
+		}
+		buf = append(buf, line...)
+		buf = append(buf, '\n')
+	}
+
+	return fileutil.AtomicWrite(path, buf, 0o600)
+}
+
+// dedupMessages keeps only the last occurrence of each message ID.
+// WHY: Incremental persistence appends partial snapshots with the same ID.
+// Keeping the last occurrence ensures the most complete version is returned.
+func dedupMessages(messages []ChatMessage) []ChatMessage {
+	if len(messages) == 0 {
+		return messages
+	}
+	seen := make(map[string]int, len(messages))
+	for i, m := range messages {
+		if m.ID == "" {
+			continue // skip empty IDs — they aren't duplicates
+		}
+		seen[m.ID] = i
+	}
+	if len(seen) == len(messages) {
+		return messages // No duplicates
+	}
+	deduped := make([]ChatMessage, 0, len(messages))
+	for i, m := range messages {
+		if m.ID == "" || seen[m.ID] == i {
+			deduped = append(deduped, m)
+		}
+	}
+	return deduped
 }
 
 // FormatForAgent formats the conversation history as a text block suitable

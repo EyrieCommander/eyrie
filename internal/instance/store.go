@@ -69,7 +69,14 @@ func (s *Store) listLocked() ([]Instance, error) {
 		metaPath := filepath.Join(s.dir, entry.Name(), "instance.json")
 		data, err := os.ReadFile(metaPath)
 		if err != nil {
-			slog.Warn("skipping instance: failed to read metadata", "id", entry.Name(), "error", err)
+			if os.IsNotExist(err) {
+				// WHY Debug not Warn: During provisioning, the directory is created
+				// before instance.json is written. Polling List() may see the
+				// directory in between — this is transient and self-healing.
+				slog.Debug("skipping instance: metadata not ready yet", "id", entry.Name())
+			} else {
+				slog.Warn("skipping instance: failed to read metadata", "id", entry.Name(), "error", err)
+			}
 			continue
 		}
 		var inst Instance

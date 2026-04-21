@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/embedded"
 	"github.com/google/uuid"
 )
@@ -62,7 +63,7 @@ type EmbeddedAdapter struct {
 	sessions     *embedded.SessionStore
 	logBuf       *embedded.LogBuffer
 	loop         *embedded.AgentLoop
-	keyStore     *embedded.KeyStore
+	vault        *config.KeyVault
 
 	// Cached identity files to avoid re-reading disk on every message
 	idCache identityCache
@@ -85,7 +86,6 @@ func NewEmbeddedAdapter(id, name, configPath, workspacePath string) *EmbeddedAda
 		configPath:    configPath,
 		workspacePath: workspacePath,
 		logBuf:        embedded.NewLogBuffer(500),
-		keyStore:      embedded.NewKeyStore(),
 	}
 
 	// Read config to populate provider, model, tools, and capability flags
@@ -191,10 +191,29 @@ func (a *EmbeddedAdapter) Start(_ context.Context) error {
 		return nil // Already running
 	}
 
-	// Resolve API key from the central key store
-	apiKey := a.keyStore.Get(a.provider)
+	// Resolve API key from the centralized vault. Falls back to env vars
+	// if vault is nil (e.g., SetVault wasn't called before Start).
+	var apiKey string
+	if a.vault != nil {
+		apiKey = a.vault.Get(a.provider)
+	} else {
+		// Direct env-var fallback when vault is unavailable. Sanitize the
+		// provider name so values like "azure-openai" or "anthropic.vertex"
+		// produce valid env var names (AZURE_OPENAI_API_KEY etc).
+		sanitized := strings.Map(func(r rune) rune {
+			switch {
+			case r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+				return r
+			case r >= 'a' && r <= 'z':
+				return r - ('a' - 'A')
+			default:
+				return '_'
+			}
+		}, a.provider)
+		apiKey = os.Getenv(sanitized + "_API_KEY")
+	}
 	if apiKey == "" {
-		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q", a.provider))
+		a.logBuf.Add("warn", fmt.Sprintf("no API key found for provider %q (checked vault and env)", a.provider))
 	}
 
 	// Resolve base URL from provider name (using adapter's exported function
@@ -572,6 +591,15 @@ func (a *EmbeddedAdapter) Personality(_ context.Context) (*Personality, error) {
 
 func (a *EmbeddedAdapter) Capabilities() AgentCapabilities {
 	return AgentCapabilities{CommanderCapable: a.commanderCapable}
+}
+
+// SetVault injects the centralized key vault after construction. Called by
+// discovery after creating the adapter singleton, avoiding import cycles
+// between adapter and config packages at construction time.
+func (a *EmbeddedAdapter) SetVault(v *config.KeyVault) {
+	a.mu.Lock()
+	a.vault = v
+	a.mu.Unlock()
 }
 
 // IsRunning returns whether the embedded agent is currently active.

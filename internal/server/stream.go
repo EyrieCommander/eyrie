@@ -32,6 +32,22 @@ func NewSSEWriter(w http.ResponseWriter) (*SSEWriter, error) {
 	return &SSEWriter{w: w, f: flusher}, nil
 }
 
+// nopFlusher satisfies http.Flusher as a no-op. Used only by
+// NewDiscardSSEWriter so the orchestrator can be invoked without a
+// real HTTP response (e.g. fire-and-forget from the commander).
+type nopFlusher struct{}
+
+func (nopFlusher) Flush() {}
+
+// NewDiscardSSEWriter returns an SSEWriter that discards all output.
+// Used when the orchestrator must run without a client connection —
+// for example, when the commander sends a message into a project chat
+// via its send_to_project tool. The captain still needs to be invoked,
+// but there is no SSE consumer for its stream.
+func NewDiscardSSEWriter() *SSEWriter {
+	return &SSEWriter{w: io.Discard, f: nopFlusher{}}
+}
+
 // WriteEvent marshals v as JSON and writes it as an SSE data frame.
 func (s *SSEWriter) WriteEvent(v any) error {
 	data, err := json.Marshal(v)

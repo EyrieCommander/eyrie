@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -24,11 +25,7 @@ import (
 )
 
 func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	projects, err := store.List()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -42,11 +39,7 @@ func (s *Server) handleListProjects(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	p, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -70,11 +63,7 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	p, err := store.Create(req)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -89,18 +78,14 @@ func (s *Server) handleCreateProject(w http.ResponseWriter, r *http.Request) {
 	if p.Description != "" {
 		detail += fmt.Sprintf("\ndescription: %s", p.Description)
 	}
-	injectSystemMessage(p.ID, detail)
+	s.injectSystemMessage(p.ID, detail)
 
 	writeJSON(w, http.StatusCreated, p)
 }
 
 func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	p, err := store.Get(id)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -155,12 +140,17 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 		// Inject system message when captain is assigned/changed
 		if *update.OrchestratorID != "" && *update.OrchestratorID != oldCaptain {
 			captainName := *update.OrchestratorID
-			if is, err := instance.NewStore(); err == nil {
+			if is := s.instanceStore; is != nil {
 				if inst, err := is.Get(*update.OrchestratorID); err == nil {
 					captainName = inst.Name
 				}
 			}
-			injectSystemMessage(id, fmt.Sprintf("captain assigned: %s", captainName))
+			s.injectSystemMessage(id, fmt.Sprintf("captain assigned: %s", captainName))
+			// WHY brief on assignment: The general briefing teaches the captain
+			// to use ZeroClaw's native shell tool and the Eyrie API. Without it,
+			// the LLM defaults to Claude Code tools (Bash, Read) which have a
+			// separate permission system that blocks headless agents.
+			go s.ensureCaptainBriefing(p)
 		}
 	}
 	if update.Progress != nil {
@@ -207,18 +197,14 @@ func (s *Server) handleUpdateProject(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteProject(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 
 	// Before deleting, clean up agent sessions for this project
 	proj, _ := store.Get(id)
 	if proj != nil {
 		sessionKey := proj.ID
 		disc := s.runDiscovery(r.Context())
-		participants := resolveProjectParticipants(proj, disc)
+		participants := resolveProjectParticipants(proj, disc, s.instanceStore)
 		for _, p := range participants {
 			agent := discovery.NewAgent(p.agent)
 			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -254,11 +240,7 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	if err := store.AddAgent(projectID, body.InstanceID); err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -272,7 +254,7 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 	agentName := body.InstanceID
 	agentFramework := ""
 	agentPort := 0
-	if is, err := instance.NewStore(); err == nil {
+	if is := s.instanceStore; is != nil {
 		if inst, err := is.Get(body.InstanceID); err == nil {
 			agentName = inst.Name
 			agentFramework = inst.Framework
@@ -285,7 +267,7 @@ func (s *Server) handleAddProjectAgent(w http.ResponseWriter, r *http.Request) {
 	if agentFramework != "" {
 		detail = fmt.Sprintf("user added %s (%s, :%d)", agentName, agentFramework, agentPort)
 	}
-	injectSystemMessage(projectID, detail)
+	s.injectSystemMessage(projectID, detail)
 	s.refreshProjectContext(projectID)
 
 	s.events.Publish(ProjectEvent{
@@ -304,11 +286,7 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 	projectID := r.PathValue("id")
 	instanceID := r.PathValue("instanceId")
 
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	if err := store.RemoveAgent(projectID, instanceID); err != nil {
 		if errors.Is(err, project.ErrNotFound) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
@@ -320,12 +298,12 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 
 	// Resolve instance name for the event + system message
 	agentName := instanceID
-	if is, err := instance.NewStore(); err == nil {
+	if is := s.instanceStore; is != nil {
 		if inst, err := is.Get(instanceID); err == nil {
 			agentName = inst.Name
 		}
 	}
-	injectSystemMessage(projectID, fmt.Sprintf("%s removed from project", agentName))
+	s.injectSystemMessage(projectID, fmt.Sprintf("%s removed from project", agentName))
 	s.refreshProjectContext(projectID)
 	s.events.Publish(ProjectEvent{
 		Type:      "agent_removed",
@@ -342,9 +320,14 @@ func (s *Server) handleRemoveProjectAgent(w http.ResponseWriter, r *http.Request
 // GET /api/projects/{id}/chat
 func (s *Server) handleProjectChatMessages(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
+	cs := s.chatStore
+	if cs == nil {
+		// Misconfiguration: pretending there are zero messages would silently
+		// hide a real problem. Surface it so the operator knows to look.
+		slog.Warn("project chat requested but chatStore is nil — server misconfigured", "project", projectID)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "chat store is unavailable; see server logs",
+		})
 		return
 	}
 	messages, err := cs.Messages(projectID, 0)
@@ -377,11 +360,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Load project
-	pStore, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open project store"})
-		return
-	}
+	pStore := s.projectStore
 	proj, err := pStore.Get(projectID)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -393,11 +372,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to open chat store"})
-		return
-	}
+	cs := s.chatStore
 
 	sse, err := NewSSEWriter(w)
 	if err != nil {
@@ -406,9 +381,10 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 	}
 
 	orch := &ChatOrchestrator{
-		cfg:         s.runDiscovery,
-		chatStore:   cs,
-		activeChats: &s.activeChats,
+		cfg:           s.runDiscovery,
+		chatStore:     cs,
+		instanceStore: s.instanceStore,
+		activeChats:   &s.activeChats,
 	}
 	if err := orch.RunProjectChat(r.Context(), proj, body.Message, sse); err != nil {
 		if sse.Sent() {
@@ -417,6 +393,14 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 	}
+}
+
+// handleProjectChatStatus returns whether a project chat response is in-flight.
+// GET /api/projects/{id}/chat/status
+func (s *Server) handleProjectChatStatus(w http.ResponseWriter, r *http.Request) {
+	projectID := r.PathValue("id")
+	_, active := s.activeChats.Load(projectID)
+	writeJSON(w, http.StatusOK, map[string]any{"streaming": active})
 }
 
 // handleProjectChatStop cancels an in-flight project chat orchestration.
@@ -447,7 +431,7 @@ type projectParticipant struct {
 }
 
 // resolveInstanceName maps an instance ID or agent name to the discovered agent name.
-func resolveInstanceName(id string, disc discovery.Result) string {
+func resolveInstanceName(id string, disc discovery.Result, instStore *instance.Store) string {
 	// Direct match by name
 	for _, ar := range disc.Agents {
 		if ar.Agent.Name == id {
@@ -455,21 +439,21 @@ func resolveInstanceName(id string, disc discovery.Result) string {
 		}
 	}
 	// Try instance store lookup (UUID → name)
-	if store, err := instance.NewStore(); err == nil {
-		if inst, err := store.Get(id); err == nil {
+	if instStore != nil {
+		if inst, err := instStore.Get(id); err == nil {
 			return inst.Name
 		}
 	}
 	return id
 }
 
-func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []projectParticipant {
+func resolveProjectParticipants(proj *project.Project, disc discovery.Result, instStore *instance.Store) []projectParticipant {
 	var participants []projectParticipant
 	seen := make(map[string]bool)
 
 	// Captain first (project lead, responds by default)
 	if proj.OrchestratorID != "" {
-		captainName := resolveInstanceName(proj.OrchestratorID, disc)
+		captainName := resolveInstanceName(proj.OrchestratorID, disc, instStore)
 		for _, ar := range disc.Agents {
 			if ar.Agent.Name == captainName {
 				if ar.Alive && !seen[ar.Agent.Name] {
@@ -483,25 +467,10 @@ func resolveProjectParticipants(proj *project.Project, disc discovery.Result) []
 		}
 	}
 
-	// Commander
-	ref := loadCommanderRef()
-	commanderName := ref.AgentName
-	if commanderName == "" {
-		commanderName = ref.InstanceID
-	}
-	if commanderName != "" {
-		for _, ar := range disc.Agents {
-			if ar.Agent.Name == commanderName {
-				if ar.Alive && !seen[ar.Agent.Name] {
-					seen[ar.Agent.Name] = true
-					participants = append(participants, projectParticipant{
-						name: ar.Agent.Name, role: "commander", agent: ar.Agent,
-					})
-				}
-				break
-			}
-		}
-	}
+	// WHY no commander: The commander is a system-level agent for cross-project
+	// oversight, not a project chat participant. Users can still @mention the
+	// commander by name if needed — the fallback lookup in the forwarding chain
+	// will find them. But they're not in the default participant list.
 
 	// Talons
 	for _, agentID := range proj.RoleAgentIDs {
@@ -532,11 +501,7 @@ type ProjectActivityEvent struct {
 // GET /api/projects/{id}/activity?limit=50&type=tool_call
 func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	store, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	store := s.projectStore
 	proj, err := store.Get(projectID)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -559,7 +524,7 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 
 	// Resolve all project agents
 	disc := s.runDiscovery(r.Context())
-	participants := resolveProjectParticipants(proj, disc)
+	participants := resolveProjectParticipants(proj, disc, s.instanceStore)
 
 	// Collect activity from each agent (historical snapshot only)
 	var allEvents []ProjectActivityEvent
@@ -603,39 +568,46 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, allEvents)
 }
 
-// parseMention extracts an @mention from a message (e.g., "@captain" → "captain")
+// parseMention extracts the first @mention from a message (e.g., "@captain" → "captain").
+// Used for user message routing where only one respondent is selected.
 func parseMention(msg string) string {
+	mentions := parseMentions(msg)
+	if len(mentions) > 0 {
+		return mentions[0]
+	}
+	return ""
+}
+
+// parseMentions extracts all unique @mentions from a message, in order of appearance.
+// Used for agent-to-agent forwarding where a response may mention multiple agents
+// (e.g., "@talon-code do X" and "@talon-research do Y" in the same message).
+func parseMentions(msg string) []string {
+	seen := make(map[string]bool)
+	var mentions []string
 	for _, word := range strings.Fields(msg) {
 		if strings.HasPrefix(word, "@") {
 			mention := strings.TrimPrefix(word, "@")
 			mention = strings.TrimRight(mention, ".,!?;:")
-			if mention != "" {
-				return mention
+			if mention != "" && !seen[strings.ToLower(mention)] {
+				seen[strings.ToLower(mention)] = true
+				mentions = append(mentions, mention)
 			}
 		}
 	}
-	return ""
+	return mentions
 }
 
 // refreshProjectContext regenerates PROJECT.md for every agent in the given
 // project. Called whenever the team roster or project details change so that
 // all agents have up-to-date context about their project and teammates.
 func (s *Server) refreshProjectContext(projectID string) {
-	projStore, err := project.NewStore()
-	if err != nil {
-		slog.Warn("refreshProjectContext: project store", "error", err)
-		return
-	}
+	projStore := s.projectStore
 	proj, err := projStore.Get(projectID)
 	if err != nil {
 		slog.Warn("refreshProjectContext: load project", "project", projectID, "error", err)
 		return
 	}
-	instStore, err := instance.NewStore()
-	if err != nil {
-		slog.Warn("refreshProjectContext: instance store", "error", err)
-		return
-	}
+	instStore := s.instanceStore
 	instances, err := instStore.List()
 	if err != nil {
 		slog.Warn("refreshProjectContext: list instances", "error", err)
@@ -686,16 +658,93 @@ func (s *Server) refreshProjectContext(projectID string) {
 	slog.Debug("refreshProjectContext: updated", "project", projectID, "agents", len(workspaces))
 }
 
+// ensureCaptainBriefing sends a briefing to the captain if it doesn't have
+// one (or if force=true, e.g., after a project reset). Runs in the background
+// (goroutine) so it doesn't block the HTTP response.
+func (s *Server) ensureCaptainBriefing(proj *project.Project, force ...bool) {
+	// WHY 5s delay: The captain may have just been started or reset. Give
+	// the agent a moment to stabilize before attempting the briefing.
+	time.Sleep(5 * time.Second)
+
+	// WHY 3 minutes: The briefing triggers an LLM call + tool execution
+	// (curl API reference, save TOOLS.md). 60s was too short — the agent
+	// needs time for inference + tool calls + streaming the response back.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+
+	// Re-fetch the project after the sleep — it may have been deleted, had
+	// its captain swapped, or had its goal/description edited. Using the
+	// stale pointer would brief against the wrong context (or a captain
+	// the project no longer owns).
+	if s.projectStore != nil && proj != nil {
+		fresh, err := s.projectStore.Get(proj.ID)
+		if err != nil || fresh == nil {
+			slog.Debug("ensureCaptainBriefing: project gone after delay, skipping", "project", proj.ID, "error", err)
+			return
+		}
+		proj = fresh
+	}
+	if proj == nil || proj.OrchestratorID == "" {
+		slog.Debug("ensureCaptainBriefing: project has no captain, skipping")
+		return
+	}
+
+	disc := s.runDiscovery(ctx)
+	var found *discovery.AgentResult
+	for i := range disc.Agents {
+		a := disc.Agents[i].Agent
+		if a.Name == proj.OrchestratorID || a.InstanceID == proj.OrchestratorID {
+			found = &disc.Agents[i]
+			break
+		}
+	}
+	if found == nil || !found.Alive {
+		slog.Debug("ensureCaptainBriefing: captain not found or not running", "orchestrator", proj.OrchestratorID)
+		return
+	}
+
+	agent := discovery.NewAgent(found.Agent)
+	if len(force) == 0 || !force[0] {
+		sessions, err := agent.Sessions(ctx)
+		if err != nil {
+			slog.Debug("ensureCaptainBriefing: failed to list sessions", "error", err)
+			return
+		}
+		for _, sess := range sessions {
+			if sess.Key == "eyrie-captain-briefing" {
+				return // already briefed
+			}
+		}
+	}
+
+	// Reset the briefing session before re-sending so the captain gets
+	// a clean context with fresh project info (not stale + fresh mixed).
+	resetCtx, resetCancel := context.WithTimeout(ctx, 5*time.Second)
+	if resetErr := agent.ResetSession(resetCtx, "eyrie-captain-briefing"); resetErr != nil {
+		slog.Debug("ensureCaptainBriefing: could not reset old briefing session", "error", resetErr)
+	}
+	resetCancel()
+
+	briefing := composeCaptainBriefing(proj)
+	agentName := proj.OrchestratorID
+	if _, err := agent.SendMessage(ctx, briefing, "eyrie-captain-briefing"); err != nil {
+		// Keep the full error in logs but don't leak backend details into
+		// the project chat — users see a generic message and operators
+		// check the server logs for diagnostics.
+		slog.Warn("ensureCaptainBriefing: briefing failed", "captain", agentName, "error", err)
+		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing failed for %s (see server logs for details)", agentName))
+	} else {
+		slog.Info("ensureCaptainBriefing: captain briefed", "captain", agentName, "project", proj.ID)
+		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing sent to %s", agentName))
+	}
+}
+
 // injectSystemMessage appends a system message to a project's chat log.
 // Used to surface structural changes (agent created, removed, project
 // updated) in the project chat regardless of whether the change was made
 // by a user or an agent.
-func injectSystemMessage(projectID, content string) {
-	cs, err := project.NewChatStore()
-	if err != nil {
-		slog.Warn("injectSystemMessage: chat store", "error", err)
-		return
-	}
+func (s *Server) injectSystemMessage(projectID, content string) {
+	cs := s.chatStore
 	msg := project.ChatMessage{
 		ID:        uuid.New().String(),
 		Sender:    "eyrie",
@@ -712,11 +761,7 @@ func injectSystemMessage(projectID, content string) {
 // DELETE /api/projects/{id}/chat
 func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
-	cs, err := project.NewChatStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	cs := s.chatStore
 	if err := cs.ClearChat(projectID); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		return
@@ -742,11 +787,7 @@ func (s *Server) handleProjectChatClear(w http.ResponseWriter, r *http.Request) 
 func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	projectID := r.PathValue("id")
 
-	projStore, err := project.NewStore()
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
-	}
+	projStore := s.projectStore
 	proj, err := projStore.Get(projectID)
 	if err != nil {
 		if errors.Is(err, project.ErrNotFound) {
@@ -758,35 +799,49 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 1. Clear project chat history and listening state
-	if cs, csErr := project.NewChatStore(); csErr == nil {
+	if cs := s.chatStore; cs != nil {
 		if clrErr := cs.ClearChat(projectID); clrErr != nil {
 			slog.Warn("reset: failed to clear chat", "project", projectID, "error", clrErr)
 		}
 		cs.ClearListening(projectID)
 	}
 
-	// 2. Reset sessions for commander and captain (keep instances alive)
+	// 2. Reset sessions for captain: project chat session + briefing session
 	sessionKey := proj.ID
 	disc := s.runDiscovery(r.Context())
-	for _, p := range resolveProjectParticipants(proj, disc) {
+	for _, p := range resolveProjectParticipants(proj, disc, s.instanceStore) {
 		if p.role == "talon" {
 			continue // talons are destroyed below, not just reset
 		}
 		agent := discovery.NewAgent(p.agent)
+		// Reset the project chat session
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		if err := agent.ResetSession(ctx, sessionKey); err != nil {
-			slog.Debug("reset: could not reset session", "agent", p.name, "role", p.role, "error", err)
+			slog.Debug("reset: could not reset project session", "agent", p.name, "error", err)
 		}
 		cancel()
+		// Reset the briefing session so the captain gets a fresh briefing
+		ctx2, cancel2 := context.WithTimeout(r.Context(), 5*time.Second)
+		if err := agent.ResetSession(ctx2, "eyrie-captain-briefing"); err != nil {
+			slog.Debug("reset: could not reset briefing session", "agent", p.name, "error", err)
+		}
+		cancel2()
+		// Unhide the briefing session if it was hidden
+		if s.hidden != nil {
+			_ = s.hidden.Unhide(p.name, "eyrie-captain-briefing")
+		}
 	}
 
-	// 3. Destroy talon instances: stop, delete from instance store, remove
-	//    from project roster. Talons are disposable — a reset means fresh start.
-	instStore, instErr := instance.NewStore()
-	if instErr != nil {
-		slog.Warn("reset: failed to open instance store", "error", instErr)
+	// 3. Destroy talon instances in parallel: stop, delete from instance
+	//    store, remove from project roster. Talons are disposable — a reset
+	//    means fresh start. Parallel stop avoids 30s×N sequential timeout.
+	instStore := s.instanceStore
+	type destroyResult struct {
+		name string
+		ok   bool
 	}
-	var destroyed []string
+	resultCh := make(chan destroyResult, len(proj.RoleAgentIDs))
+	var wg sync.WaitGroup
 	for _, agentID := range proj.RoleAgentIDs {
 		if instStore == nil {
 			break
@@ -796,20 +851,27 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 			slog.Debug("reset: talon instance not found, skipping", "id", agentID, "error", getErr)
 			continue
 		}
-
-		// Stop the instance (best effort, detached context so it completes
-		// even if the HTTP client disconnects)
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		if stopErr := manager.ExecuteWithConfig(stopCtx, inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
-			slog.Debug("reset: failed to stop talon", "instance", inst.Name, "error", stopErr)
-		}
-		stopCancel()
-
-		// Delete instance from disk
-		if delErr := instStore.Delete(agentID); delErr != nil {
-			slog.Warn("reset: failed to delete talon instance", "instance", inst.Name, "error", delErr)
-		} else {
-			destroyed = append(destroyed, inst.Name)
+		wg.Add(1)
+		go func(inst *instance.Instance, id string) {
+			defer wg.Done()
+			stopCtx, stopCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if stopErr := manager.ExecuteWithConfig(stopCtx, inst.Framework, inst.ConfigPath, manager.ActionStop); stopErr != nil {
+				slog.Debug("reset: failed to stop talon", "instance", inst.Name, "error", stopErr)
+			}
+			stopCancel()
+			if delErr := instStore.Delete(id); delErr != nil {
+				slog.Warn("reset: failed to delete talon instance", "instance", inst.Name, "error", delErr)
+				resultCh <- destroyResult{inst.Name, false}
+			} else {
+				resultCh <- destroyResult{inst.Name, true}
+			}
+		}(inst, agentID)
+	}
+	go func() { wg.Wait(); close(resultCh) }()
+	var destroyed []string
+	for res := range resultCh {
+		if res.ok {
+			destroyed = append(destroyed, res.name)
 		}
 	}
 
@@ -820,7 +882,13 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 		slog.Warn("reset: failed to save project after clearing talons", "error", saveErr)
 	}
 
-	// 5. Publish event for real-time UI
+	// 5. Re-brief the captain (force=true: always re-brief on reset, even
+	//    if the old briefing session exists — project context may have changed).
+	if proj.OrchestratorID != "" {
+		go s.ensureCaptainBriefing(proj, true)
+	}
+
+	// 6. Publish event for real-time UI
 	s.events.Publish(ProjectEvent{
 		Type:      "project_reset",
 		ProjectID: projectID,

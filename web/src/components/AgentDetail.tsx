@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
+import { useAutoScroll } from "../lib/useAutoScroll";
 import { useParams, Link } from "react-router-dom";
 import {
   Play,
@@ -280,6 +281,7 @@ function OverviewTab({
   onConfigChange: () => void;
   onConfigSaved: () => void;
 }) {
+  const logScrollRef = useAutoScroll([logs.length]);
   const health = agent.health;
   const status = agent.status;
   const [configEditing, setConfigEditing] = useState(false);
@@ -401,7 +403,7 @@ function OverviewTab({
           <span className="text-text-muted group-open:rotate-90 transition-transform">▶</span>
         </summary>
         <div className="px-4 pb-4">
-          <div className="max-h-48 overflow-y-auto rounded border border-border bg-bg p-3 text-xs">
+          <div ref={logScrollRef} className="max-h-48 overflow-y-auto rounded border border-border bg-bg p-3 text-xs">
             {logs.length === 0 ? (
               <p className="text-text-muted">
                 {agent.alive ? "waiting for log entries..." : "no log history available."}
@@ -658,6 +660,11 @@ function EditableInfoCard({
       } else if (config.format === "toml") {
         // TOML: targeted string replacement to preserve formatting and types
         updated = replaceTomlValue(config.content, field.key, editValue, field.type);
+      } else if (config.format === "yaml") {
+        // YAML: targeted string replacement similar to TOML. Pass the
+        // field type so numbers/booleans stay unquoted and strings get
+        // properly escaped.
+        updated = replaceYamlValue(config.content, field.key, editValue, field.type);
       } else {
         throw new Error(`Unsupported config format: ${config.format}`);
       }
@@ -877,6 +884,155 @@ function escapeTomlString(s: string): string {
     .replace(/\n/g, "\\n")
     .replace(/\r/g, "\\r")
     .replace(/\t/g, "\\t");
+}
+
+/** Format a value for YAML based on its field type. Strings are quoted and
+ *  escaped to avoid corruption when they contain special YAML characters
+ *  (colons, hashes, leading dashes, etc). Numbers and booleans are emitted
+ *  unquoted. Unknown types default to strings for safety. */
+function formatYamlValue(value: string, fieldType?: string): string {
+  if (fieldType === "number") {
+    const n = Number(value);
+    if (!Number.isFinite(n)) throw new Error("Invalid number");
+    return String(n);
+  }
+  if (fieldType === "boolean") {
+    return value === "true" ? "true" : "false";
+  }
+  // String: always double-quote + escape. This sidesteps every edge case
+  // with special characters like ":", "#", leading "-", "!", etc.
+  const escaped = value
+    .replace(/\\/g, "\\\\")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, "\\n")
+    .replace(/\r/g, "\\r")
+    .replace(/\t/g, "\\t");
+  return `"${escaped}"`;
+}
+
+/** Replace a value in YAML content. Supports nested keys like "gateway.port".
+ *  Only enters a parent block when the parent line ends with a colon and has
+ *  no inline value (i.e., it's actually a block parent, not a scalar). */
+function replaceYamlValue(content: string, fieldKey: string, newValue: string, fieldType?: string): string {
+  const parts = fieldKey.split(".");
+  const lines = content.split("\n");
+  const key = parts[parts.length - 1];
+  const parentPath = parts.slice(0, -1);
+  const formatted = formatYamlValue(newValue, fieldType);
+
+  // Find the line matching the key at the correct indentation depth.
+  // YAML nesting uses 2-space indentation per level.
+  const expectedIndent = parentPath.length * 2;
+  const re = new RegExp(`^(\\s{${expectedIndent}}${escapeRegex(key)}:\\s*)(.*)$`);
+
+  // A line qualifies as a block parent only when it's "key:" or "key: # comment"
+  // (i.e., the colon is followed by nothing but whitespace and/or a comment).
+  const isBlockParent = (trimmed: string, parentKey: string): boolean => {
+    const prefix = parentKey + ":";
+    if (!trimmed.startsWith(prefix)) return false;
+    const rest = trimmed.slice(prefix.length).trim();
+    return rest === "" || rest.startsWith("#");
+  };
+
+  // Track which parent keys we've entered.
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const indent = line.length - trimmed.length;
+
+    // Exit ancestor blocks when indentation decreases so we don't keep
+    // thinking we're inside a block we've already left.
+    while (depth > 0 && trimmed !== "" && !trimmed.startsWith("#") && indent < depth * 2) {
+      depth--;
+    }
+
+    // Descend into the next parent block when we see it.
+    if (depth < parentPath.length) {
+      const parentKey = parentPath[depth];
+      if (indent === depth * 2 && isBlockParent(trimmed, parentKey)) {
+        depth++;
+        continue;
+      }
+    }
+
+    // Found our target key at the right depth
+    if (depth === parentPath.length && re.test(line)) {
+      const match = line.match(re);
+      const existingValue = match?.[2]?.trim() ?? "";
+      // Detect block scalar indicators (| or >) — the value spans multiple
+      // lines with greater indentation. Remove the header + all continuation
+      // lines before inserting the new inline value.
+      if (existingValue.startsWith("|") || existingValue.startsWith(">")) {
+        const blockIndent = indent + 2; // continuation lines have at least this indent
+        let endOfBlock = i + 1;
+        while (endOfBlock < lines.length) {
+          const nextLine = lines[endOfBlock];
+          const nextTrimmed = nextLine.trimStart();
+          const nextIndent = nextLine.length - nextTrimmed.length;
+          // Blank lines are part of the block; non-blank lines with
+          // less indentation terminate it.
+          if (nextTrimmed !== "" && nextIndent < blockIndent) break;
+          endOfBlock++;
+        }
+        // Replace header + continuation range with a single inline value
+        lines.splice(i, endOfBlock - i, line.replace(re, `$1${formatted}`));
+      } else {
+        lines[i] = line.replace(re, `$1${formatted}`);
+      }
+      return lines.join("\n");
+    }
+  }
+
+  // Key not found — find the deepest existing ancestor and insert under it.
+  // Blindly appending every parent would duplicate sections; refusing to do
+  // anything would leave the value unset. Compromise: walk existing lines to
+  // locate the deepest prefix of parentPath that's already present, then
+  // append the remaining nested blocks below that.
+  if (parentPath.length === 0) {
+    lines.push(`${key}: ${formatted}`);
+    return lines.join("\n");
+  }
+
+  let deepestMatchedDepth = 0; // how many of parentPath[] were found in order
+  let deepestMatchedLine = -1; // last line index inside the matched block
+  {
+    let d = 0;
+    for (let i = 0; i < lines.length; i++) {
+      if (d >= parentPath.length) break;
+      const line = lines[i];
+      const trimmed = line.trimStart();
+      const indent = line.length - trimmed.length;
+      if (indent !== d * 2) continue;
+      // Require "key:" with nothing else on the line (a block parent)
+      const expected = parentPath[d] + ":";
+      if (trimmed === expected || trimmed.startsWith(expected + " ") || trimmed.startsWith(expected + "\t")) {
+        const rest = trimmed.slice(expected.length).trim();
+        if (rest === "" || rest.startsWith("#")) {
+          d++;
+          deepestMatchedDepth = d;
+          deepestMatchedLine = i;
+        }
+      }
+    }
+  }
+
+  if (deepestMatchedDepth === 0) {
+    // Not even the top-level parent is present. Rather than silently
+    // fabricating the whole hierarchy (which risks corrupting the file),
+    // throw — the caller should decide whether to create the section.
+    throw new Error(`cannot locate YAML parent "${parentPath[0]}" for key "${fieldKey}"`);
+  }
+
+  // Insert after the last line of the matched block. Append any remaining
+  // parents (those we couldn't match) as nested blocks under it.
+  const insertLines: string[] = [];
+  for (let d = deepestMatchedDepth; d < parentPath.length; d++) {
+    insertLines.push(`${"  ".repeat(d)}${parentPath[d]}:`);
+  }
+  insertLines.push(`${"  ".repeat(parentPath.length)}${key}: ${formatted}`);
+  lines.splice(deepestMatchedLine + 1, 0, ...insertLines);
+  return lines.join("\n");
 }
 
 function escapeRegex(s: string): string {

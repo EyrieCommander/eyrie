@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 	"nhooyr.io/websocket"
@@ -543,6 +544,14 @@ func (z *ZeroClawAdapter) parseActivityEvent(eventType, data string) *ActivityEv
 func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 	body, err := z.getRaw(ctx, "/api/sessions")
 	if err != nil {
+		// WHY SQLite fallback: When the agent is stopped, the gateway is
+		// unreachable but the session database on disk is still readable.
+		// This lets the user browse chat history for stopped agents.
+		if sessions, dbErr := z.sessionsFromDB(); dbErr == nil && len(sessions) > 0 {
+			return sessions, nil
+		} else if dbErr != nil {
+			slog.Debug("sessionsFromDB fallback failed", "agent", z.name, "error", dbErr)
+		}
 		return z.sessionsLegacy(ctx)
 	}
 
@@ -575,7 +584,10 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 			}
 			sessions = append(sessions, sess)
 		}
-		return sessions, nil
+		// WHY merge with SQLite: The gateway API only returns sessions loaded
+		// in the current runtime. Older sessions (e.g., briefings from before
+		// a restart) are persisted in SQLite but not listed by the API.
+		return z.mergeDBSessions(sessions), nil
 	}
 
 	// Try older named-session format: {"sessions": [{"id": "...", "name": "...", ...}]}
@@ -602,10 +614,80 @@ func (z *ZeroClawAdapter) Sessions(ctx context.Context) ([]Session, error) {
 			}
 			sessions = append(sessions, sess)
 		}
-		return sessions, nil
+		return z.mergeDBSessions(sessions), nil
 	}
 
 	return z.sessionsLegacy(ctx)
+}
+
+// mergeDBSessions supplements gateway sessions with any additional sessions
+// found in the SQLite database. Gateway sessions take precedence (fresher data).
+func (z *ZeroClawAdapter) mergeDBSessions(gateway []Session) []Session {
+	dbSessions, err := z.sessionsFromDB()
+	if err != nil || len(dbSessions) == 0 {
+		return gateway
+	}
+	seen := make(map[string]bool, len(gateway))
+	for _, s := range gateway {
+		seen[s.Key] = true
+	}
+	for _, s := range dbSessions {
+		if !seen[s.Key] {
+			gateway = append(gateway, s)
+		}
+	}
+	return gateway
+}
+
+// sessionsFromDB reads session metadata directly from ZeroClaw's SQLite
+// database on disk. Used when the gateway is unreachable (agent stopped).
+func (z *ZeroClawAdapter) sessionsFromDB() ([]Session, error) {
+	dbPath := z.sessionDBPath()
+	if dbPath == "" {
+		return nil, fmt.Errorf("no session DB path")
+	}
+	db, err := sql.Open("sqlite", dbPath+"?mode=ro")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+
+	rows, err := db.Query(`SELECT session_key, name, last_activity, message_count FROM session_metadata ORDER BY last_activity DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var sessions []Session
+	for rows.Next() {
+		var key, lastActivity string
+		var name sql.NullString
+		var count int
+		if err := rows.Scan(&key, &name, &lastActivity, &count); err != nil {
+			continue
+		}
+		// WHY strip gw_ prefix: ChatHistory() prepends "gw_" when querying
+		// the sessions table. The gateway API returns keys without the prefix,
+		// so we must match that convention to avoid double-prefixing.
+		displayKey := strings.TrimPrefix(key, "gw_")
+		sess := Session{
+			Key:   displayKey,
+			Title: displayKey,
+		}
+		if name.Valid && name.String != "" {
+			sess.Title = name.String
+		}
+		if t, err := time.Parse(time.RFC3339Nano, lastActivity); err == nil {
+			sess.LastMsg = &t
+		} else if t, err := time.Parse(time.RFC3339, lastActivity); err == nil {
+			sess.LastMsg = &t
+		}
+		sessions = append(sessions, sess)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterating sessions rows: %w", err)
+	}
+	return sessions, nil
 }
 
 func (z *ZeroClawAdapter) sessionsLegacy(ctx context.Context) ([]Session, error) {
@@ -1185,6 +1267,7 @@ func (z *ZeroClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 
 func runCLI(ctx context.Context, command string, args ...string) error {
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, string(output))

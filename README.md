@@ -5,7 +5,7 @@ An agentic factory and control room for the Claw family of AI agent frameworks.
 
 Eyrie orchestrates teams of AI agents into project hierarchies — commanders create projects, captains manage execution, talons specialize — while giving you a real-time dashboard to see everything happening and intervene at any level. Works with ZeroClaw, OpenClaw, Hermes, PicoClaw, and others to come.
 
-> **v0.1.1** — This is an early alpha release intended for local development and experimentation. It binds to localhost only and has no authentication. Known security limitations:
+> **v0.2.0** — This is an early alpha release intended for local development and experimentation. It binds to localhost only and has no authentication. Known security limitations:
 > - No request body size limits (large payloads can consume memory)
 > - No authentication or authorization (anyone on localhost can access the API)
 > - Agent-generated HTML previews are sandboxed but not sanitized
@@ -23,6 +23,7 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 - **Agent hierarchy**: three-tier structure (commander → captain → talons) for organizing agents into project teams
 - **Dual control**: agents and users can both create projects, assign agents, and manage lifecycle — same API, same result
 - **Real-time visibility**: SSE event streaming so the dashboard updates live whether changes come from the user or an agent
+- **Reliable connections** — SSE streaming per-request instead of persistent WebSockets. Survives sleep/wake, network drops, and browser tab restores without losing messages or state. Agent responses are persisted incrementally so nothing is lost even if the connection drops mid-stream.
 - **Extensible adapter system** — adding new Claw frameworks requires only a new adapter
 
 ### Project Orchestration
@@ -41,21 +42,36 @@ Eyrie orchestrates teams of AI agents into project hierarchies — commanders cr
 
 <img width="1324" height="759" alt="Screen Shot 2026-03-29 at 2 19 34 PM" src="https://github.com/user-attachments/assets/ad151ea2-0195-472f-be07-bf694f0413a5" />
 
+## Prerequisites
+
+- **Go 1.21+** — [install instructions](https://go.dev/doc/install) or `brew install go`
+- **Node.js 22+** — required for the web UI (`nvm install 22` or [nodejs.org](https://nodejs.org))
+- **tmux** — persistent terminal sessions (`brew install tmux` or `apt install tmux`)
+
+Depending on which frameworks you install, you may also need:
+- **Rust** — for ZeroClaw (`curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh`)
+- **Python 3.11+** — for Hermes (`brew install python` or [python.org](https://python.org))
+
 ## Install
-
-```bash
-go install github.com/Audacity88/eyrie/cmd/eyrie@latest
-```
-
-Or build from source:
 
 ```bash
 git clone https://github.com/Audacity88/eyrie.git
 cd eyrie
-make build
+cd web && npm install && cd ..   # install frontend dependencies
+make build                       # builds React frontend + Go binary
+make install                     # adds to PATH; installs to ~/.local/bin/
 ```
 
 ## Quick Start
+
+Using web dashboard (recommended):
+
+```bash
+# Start the web dashboard
+eyrie dashboard
+```
+
+Using terminal:
 
 ```bash
 # See all discovered agents and their status
@@ -67,14 +83,11 @@ eyrie status zeroclaw
 # Tail logs from an agent
 eyrie logs zeroclaw
 
-# Start the web dashboard
-eyrie dashboard
-
 # Install a new framework
 eyrie install hermes
 ```
 
-## CLI Commands
+## Additional CLI Commands
 
 | Command | Description |
 |---------|-------------|
@@ -153,7 +166,7 @@ Installation proceeds through five phases:
 
 The web dashboard shows real-time progress via SSE streaming. Installed frameworks show a purple "already installed" badge; available ones show a white install button.
 
-The framework registry (`registry.example.json`) defines available frameworks with their install method, config format, default ports, and binary paths. For production, host the registry at a stable URL; Eyrie caches it locally at `~/.eyrie/cache/registry.json` (24h TTL).
+The framework registry (`registry.json`) defines available frameworks with their install method, config format, default ports, and binary paths. `make install` copies it to `~/.eyrie/registry.json`. For production, host the registry at a stable URL; Eyrie caches it locally at `~/.eyrie/cache/registry.json` (24h TTL).
 
 ## Development
 
@@ -173,6 +186,26 @@ make build
 # Install to ~/.local/bin
 make install
 ```
+
+### Testing the commander from the terminal
+
+The commander is the built-in LLM-driven orchestrator you chat with to manage projects and agents. It exposes a streaming SSE endpoint at `POST /api/commander/chat`. For quick terminal testing without the UI, use the `commander-test` CLI:
+
+```bash
+# Install to a directory on your PATH
+go build -o ~/.local/bin/commander-test ./cmd/commander-test
+
+# Send a prompt and stream the reply
+commander-test "what projects do I have?"
+
+# Print the saved conversation
+commander-test -history
+
+# Start a fresh conversation
+commander-test -clear
+```
+
+Requires an `openrouter` key in the Eyrie vault (`~/.eyrie/keys.json`) or the `OPENROUTER_API_KEY` environment variable. The default model is `anthropic/claude-sonnet-4.6`.
 
 <img width="1334" height="772" alt="Screen Shot 2026-03-29 at 2 19 12 PM" src="https://github.com/user-attachments/assets/0cde0fdf-a030-434f-828a-0fa9dd03fa9a" />
 
@@ -195,6 +228,13 @@ All services use different ports and can run simultaneously:
 - ZeroClaw: `~/.zeroclaw/config.toml` (TOML syntax)
 - OpenClaw: `~/.openclaw/openclaw.json` (JSON syntax)
 - Eyrie: `~/.eyrie/config.toml` (optional — auto-discovery works without it)
+
+## Uninstall
+
+```bash
+make uninstall          # remove the binary from ~/.local/bin/
+rm -rf ~/.eyrie         # optional: remove config and data
+```
 
 ## Contributing
 

@@ -11,8 +11,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/commander"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/instance"
+	"github.com/Audacity88/eyrie/internal/project"
 )
 
 //go:embed all:static
@@ -25,6 +28,27 @@ type Server struct {
 	server *http.Server
 	hidden *config.HiddenStore
 	events *EventBus
+	vault  *config.KeyVault
+
+	// WHY cached stores: Handlers previously called NewStore() per request
+	// (38 call sites across projects.go, instances.go, hierarchy.go). Each
+	// call does os.UserHomeDir() + os.MkdirAll(). These are initialized
+	// once in New() and shared across all requests. Thread safety is handled
+	// by each store's internal RWMutex.
+	projectStore  *project.Store
+	chatStore     *project.ChatStore
+	instanceStore *instance.Store
+
+	// commander is the built-in LLM-driven orchestrator. The user chats
+	// with it directly via /api/commander/chat. It has direct access to
+	// the project store via its tool registry.
+	//
+	// May be nil at startup if no API key is configured. The handler
+	// guard (commanderAvailable) attempts lazy initialization on each
+	// request so the user can add a key via the Settings page and the
+	// commander comes online without a server restart.
+	commander   *commander.Commander
+	commanderMu sync.Mutex
 
 	// activeChats stores cancel functions for in-flight project chat
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
@@ -32,13 +56,57 @@ type Server struct {
 	activeChats sync.Map // map[string]context.CancelFunc
 }
 
-func New(cfg config.Config) *Server {
+func New(cfg config.Config) (*Server, error) {
 	hidden, err := config.NewHiddenStore()
 	if err != nil {
 		slog.Warn("failed to load hidden sessions store", "error", err)
 		hidden = nil
 	}
-	s := &Server{cfg: cfg, hidden: hidden, events: NewEventBus()}
+	vault, err := config.NewKeyVault()
+	if err != nil {
+		slog.Warn("failed to load key vault", "error", err)
+		vault = config.GetKeyVault() // fallback to singleton (empty if both fail)
+	}
+	projStore, err := project.NewStore()
+	if err != nil {
+		return nil, fmt.Errorf("project store: %w", err)
+	}
+	chatSt, err := project.NewChatStore()
+	if err != nil {
+		return nil, fmt.Errorf("chat store: %w", err)
+	}
+	instStore, err := instance.NewStore()
+	if err != nil {
+		return nil, fmt.Errorf("instance store: %w", err)
+	}
+	s := &Server{
+		cfg:           cfg,
+		hidden:        hidden,
+		vault:         vault,
+		events:        NewEventBus(),
+		projectStore:  projStore,
+		chatStore:     chatSt,
+		instanceStore: instStore,
+	}
+	// Commander is constructed AFTER s is populated so its tools can
+	// receive method values of server methods (runDiscovery, send, etc.).
+	// Method values close over the receiver pointer, so the callbacks
+	// will have access to the fully-initialized server when invoked.
+	cmd, err := commander.NewDefault(commander.DefaultConfig{
+		Projects:      projStore,
+		Chat:          chatSt,
+		Discovery:     s.runDiscovery,
+		SendToProject: s.sendCommanderMessageToProject,
+		RestartAgent:  s.restartAgentByName,
+		Vault:         vault,
+	})
+	if err != nil {
+		// Non-fatal: the server runs without a commander. The chat
+		// endpoints return 503 and the UI shows a "configure API key"
+		// card. The user can set a key via the Settings page and restart.
+		slog.Warn("commander unavailable (set OPENROUTER_API_KEY or ANTHROPIC_API_KEY)", "error", err)
+	}
+	s.commander = cmd // may be nil
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
@@ -47,7 +115,7 @@ func New(cfg config.Config) *Server {
 		WriteTimeout: 0, // SSE streams need unbounded writes
 		IdleTimeout:  60 * time.Second,
 	}
-	return s
+	return s, nil
 }
 
 func (s *Server) registerRoutes() {
@@ -77,6 +145,8 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/registry/frameworks/{id}", s.handleFrameworkDetail)
 	s.mux.HandleFunc("POST /api/registry/install", s.handleInstallFramework)
 	s.mux.HandleFunc("GET /api/registry/install/status", s.handleInstallStatus)
+	s.mux.HandleFunc("GET /api/registry/install/{id}/logs", s.handleInstallLogs)
+	s.mux.HandleFunc("POST /api/registry/uninstall", s.handleUninstallFramework)
 
 	// API reference (self-documenting, consumed by agents)
 	s.mux.HandleFunc("GET /api/reference", s.handleAPIReference)
@@ -87,6 +157,7 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/instances/{id}", s.handleGetInstance)
 	s.mux.HandleFunc("PUT /api/instances/{id}", s.handleUpdateInstance)
 	s.mux.HandleFunc("DELETE /api/instances/{id}", s.handleDeleteInstance)
+	s.mux.HandleFunc("POST /api/instances/migrate", s.handleMigrateInstances)
 	s.mux.HandleFunc("POST /api/instances/{id}/{action}", s.handleInstanceAction)
 
 	// Project endpoints
@@ -99,11 +170,19 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("DELETE /api/projects/{id}/agents/{instanceId}", s.handleRemoveProjectAgent)
 	s.mux.HandleFunc("GET /api/projects/{id}/chat", s.handleProjectChatMessages)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat", s.handleProjectChatSend)
+	s.mux.HandleFunc("GET /api/projects/{id}/chat/status", s.handleProjectChatStatus)
 	s.mux.HandleFunc("POST /api/projects/{id}/chat/stop", s.handleProjectChatStop)
 	s.mux.HandleFunc("DELETE /api/projects/{id}/chat", s.handleProjectChatClear)
 	s.mux.HandleFunc("POST /api/projects/{id}/reset", s.handleProjectReset)
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
 	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)
+
+	// Commander (built-in LLM orchestrator — the user's chat surface)
+	s.mux.HandleFunc("POST /api/commander/chat", s.handleCommanderChat)
+	s.mux.HandleFunc("GET /api/commander/history", s.handleCommanderHistory)
+	s.mux.HandleFunc("DELETE /api/commander/history", s.handleCommanderClear)
+	s.mux.HandleFunc("POST /api/commander/confirm/{id}", s.handleCommanderConfirm)
+	s.mux.HandleFunc("GET /api/commander/memory", s.handleCommanderMemory)
 
 	// Metrics
 	s.mux.HandleFunc("GET /api/metrics", s.handleMetrics)
@@ -111,9 +190,13 @@ func (s *Server) registerRoutes() {
 	// Hierarchy endpoints
 	s.mux.HandleFunc("GET /api/hierarchy", s.handleGetHierarchy)
 	s.mux.HandleFunc("GET /api/hierarchy/commander", s.handleGetCommander)
-	s.mux.HandleFunc("POST /api/hierarchy/commander", s.handleSetCommander)
-	s.mux.HandleFunc("POST /api/hierarchy/commander/brief", s.handleBriefCommander)
 	s.mux.HandleFunc("POST /api/projects/{id}/captain/brief", s.handleBriefCaptain)
+
+	// Key vault endpoints
+	s.mux.HandleFunc("GET /api/keys", s.handleListKeys)
+	s.mux.HandleFunc("PUT /api/keys/{provider}", s.handleSetKey)
+	s.mux.HandleFunc("DELETE /api/keys/{provider}", s.handleDeleteKey)
+	s.mux.HandleFunc("POST /api/keys/{provider}/validate", s.handleValidateKey)
 
 	// Persona endpoints (also aliased under /api/registry/ for consistency)
 	s.mux.HandleFunc("GET /api/registry/personas", s.handleListPersonas)
