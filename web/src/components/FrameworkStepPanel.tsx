@@ -9,12 +9,13 @@
 // markers to auto-advance the timeline.
 
 import { useEffect, useState } from "react";
-import { Download, Terminal as TerminalIcon, FileEdit, Play, Check } from "lucide-react";
+import { Download, Terminal as TerminalIcon, FileEdit, Play, Check, MessageSquare } from "lucide-react";
 import FrameworkCard from "./FrameworkCard";
 import ApiKeyForm from "./ApiKeyForm";
 import type { Framework } from "../lib/types";
 import type { ApiKeyState } from "../lib/frameworkStatus";
 import type { InnerStepId } from "./FrameworkProgressTimeline";
+import { shellQuote } from "../lib/shell";
 
 interface Props {
   step: InnerStepId;
@@ -61,6 +62,7 @@ function ChooseStep({ frameworks, onChooseFramework }: Props) {
           <FrameworkCard key={fw.id} framework={fw} onSelect={onChooseFramework} />
         ))}
       </div>
+      <AskCommander question="what framework should I pick?" label="not sure which to pick?" />
     </div>
   );
 }
@@ -116,13 +118,6 @@ function InstallStep({ framework, safeId, onRun }: Props) {
       )}
     </div>
   );
-}
-
-// Wrap a shell argument in single quotes so it survives spaces and special
-// characters. Single-quote escaping for POSIX sh: close-quote, backslash-quote,
-// re-open-quote around each literal `'` in the input.
-function shellQuote(s: string): string {
-  return `'${s.replace(/'/g, `'\\''`)}'`;
 }
 
 // ── step 3: configure ───────────────────────────────────────────────────
@@ -265,7 +260,17 @@ function LaunchStep({ framework, safeId, onRun }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;
 
   const handleGateway = () => {
-    if (framework.start_cmd) onRun(framework.start_cmd);
+    if (!framework.start_cmd) return;
+    // start_cmd may use the bare binary name (e.g. "picoclaw gateway").
+    // Rewrite it to use the full binary_path so it works even when the
+    // binary isn't in $PATH.
+    const binary = framework.binary_path;
+    if (binary) {
+      const args = framework.start_cmd.split(" ").slice(1).join(" ");
+      onRun(`${shellQuote(binary)}${args ? " " + args : ""}`);
+    } else {
+      onRun(framework.start_cmd);
+    }
   };
 
   // Pre-compute whether we can actually produce a chat command. If not,
@@ -438,6 +443,24 @@ function TabButton({
       }`}
     >
       {children}
+    </button>
+  );
+}
+
+/** Pre-fill a question in the commander chat panel. */
+function askCommander(question: string) {
+  const prefill = (window as any).__commanderPrefill;
+  if (typeof prefill === "function") prefill(question);
+}
+
+function AskCommander({ question, label }: { question: string; label: string }) {
+  return (
+    <button
+      onClick={() => askCommander(question)}
+      className="flex items-center gap-1.5 text-[10px] text-purple hover:text-purple/80 transition-colors"
+    >
+      <MessageSquare className="h-3 w-3" />
+      {label}
     </button>
   );
 }

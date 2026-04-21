@@ -7,6 +7,7 @@
 // the timeline without waiting on the 5-second filesystem polling loop.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { AlertTriangle, MessageSquare, RotateCcw } from "lucide-react";
 import type { Framework, InstallProgress, KeyEntry } from "../../lib/types";
 import { fetchFrameworks, getFrameworkDetail, fetchAgentConfig, fetchKeys } from "../../lib/api";
 import {
@@ -72,6 +73,9 @@ export default function FrameworksPhase() {
   // installProgress stays unused for now — SSE is not re-wired here. Filesystem
   // polling + tmux output parsing are the two signals that drive transitions.
   const [installProgress] = useState<InstallProgress | null>(null);
+
+  // Last error line captured from terminal output (for the error banner).
+  const [lastError, setLastError] = useState<string | null>(null);
 
   // Manual override: user clicked a specific step. Cleared automatically when
   // that step transitions to "complete" (so auto-advance resumes).
@@ -176,51 +180,71 @@ export default function FrameworksPhase() {
       };
     }
 
-    const install: InnerStepState = status.isInstalled
+    // Steps are sequential: a step can only be "complete" or "current" if
+    // all prior steps are done. This prevents api_key showing green when
+    // configure isn't finished (e.g., key already exists from commander setup).
+    const installDone = status.isInstalled;
+    const configureDone = installDone && status.isConfigured;
+    const apiKeyDone = configureDone && (status.hasApiKey || status.skipApiKey);
+
+    const install: InnerStepState = installDone
       ? "complete"
       : status.isError
         ? "error"
         : "current";
-    const configure: InnerStepState = status.isConfigured
+    const configure: InnerStepState = configureDone
       ? "complete"
-      : status.isInstalled
+      : installDone
         ? "current"
         : "pending";
-    const apiKey: InnerStepState = status.skipApiKey
-      ? "skipped"
-      : status.hasApiKey
-        ? "complete"
-        : status.isConfigured
-          ? "current"
-          : "pending";
-    const launch: InnerStepState = status.isReady
+    const apiKey: InnerStepState = !configureDone
+      ? "pending"
+      : status.skipApiKey
+        ? "skipped"
+        : apiKeyDone
+          ? "complete"
+          : "current";
+    const launch: InnerStepState = status.isReady && apiKeyDone
       ? "complete"
-      : status.isConfigured && (status.hasApiKey || status.skipApiKey)
+      : apiKeyDone
         ? "current"
         : "pending";
 
     return { choose: "complete", install, configure, api_key: apiKey, launch };
   }, [chosenId, status]);
 
-  // If user manually selected a step that has since become complete, clear
-  // the override so auto-advance kicks in.
+  // If the user is watching a step that just transitioned to complete
+  // (e.g., install finished while they were on the install panel), clear
+  // the override so auto-advance kicks in. But don't clear it if the
+  // user navigated to an already-complete step to review it.
+  const prevStepStatus = useRef(stepStatus);
   useEffect(() => {
-    if (manualActive && stepStatus[manualActive] === "complete") {
+    if (
+      manualActive &&
+      stepStatus[manualActive] === "complete" &&
+      prevStepStatus.current[manualActive] !== "complete"
+    ) {
       setManualActive(null);
     }
+    prevStepStatus.current = stepStatus;
   }, [manualActive, stepStatus]);
 
   const active: InnerStepId = manualActive ?? firstIncomplete(stepStatus);
 
-  // Terminal output parser → refetch on match
+  // Terminal output parser → refetch on match + capture errors
   const activeRef = useRef(active);
   activeRef.current = active;
   const handleOutput = useCallback(
     (line: string) => {
+      // Capture error lines for the error banner
+      if (/^error[\s:[]/i.test(line) || /^ERROR\b/.test(line)) {
+        setLastError(line.length > 200 ? line.slice(0, 200) + "…" : line);
+      }
       const step = activeRef.current;
       if (step === "choose" || step === "api_key") return;
       const m = matchLine(line, step);
       if (m) {
+        setLastError(null); // Clear error on success
         loadChosen();
         refreshKeys();
       }
@@ -303,24 +327,68 @@ export default function FrameworksPhase() {
         safeId={safeId}
       />
 
-      {/* "ready" affordance */}
-      {showReadyActions && (
-        <div className="rounded border border-green/30 bg-green/5 px-4 py-3 flex items-center justify-between">
-          <div className="text-xs text-text">
-            <span className="font-medium text-green">&#10003; all set</span> &mdash; {framework!.name} is ready.
+      {/* Error banner */}
+      {status?.isError && lastError && (
+        <div className="rounded border border-red/30 bg-red/5 px-4 py-3 space-y-2">
+          <div className="flex items-center gap-2 text-xs">
+            <AlertTriangle className="h-3.5 w-3.5 text-red shrink-0" />
+            <span className="font-medium text-red">install failed</span>
+            <span className="text-text-muted truncate">&mdash; {lastError}</span>
           </div>
-          <button
-            onClick={handleAddAnother}
-            className="text-xs text-text-muted hover:text-text transition-colors"
-          >
-            set up another framework &rarr;
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => {
+                const prefill = (window as any).__commanderPrefill;
+                if (typeof prefill === "function")
+                  prefill(`Help me resolve this install error for ${framework?.name}: ${lastError}`);
+              }}
+              className="flex items-center gap-1.5 rounded bg-purple px-3 py-1.5 text-xs font-medium text-white hover:bg-purple/80 transition-colors"
+            >
+              <MessageSquare className="h-3 w-3" />
+              ask the commander
+            </button>
+            <button
+              onClick={() => safeId && runInTerminal(`eyrie install ${safeId} -y`)}
+              className="flex items-center gap-1 rounded border border-red/30 px-3 py-1.5 text-xs font-medium text-red hover:bg-red/5 transition-colors"
+            >
+              <RotateCcw className="h-3 w-3" />
+              retry install
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Persistent tmux terminal. Keyed on framework id so switching
+      {/* "ready" affordance */}
+      {showReadyActions && (
+        <div className="rounded border border-green/30 bg-green/5 px-4 py-3 space-y-2">
+          <div className="text-xs text-text">
+            <span className="font-medium text-green">&#10003; all set</span> &mdash; {framework!.name} is ready.
+          </div>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleAddAnother}
+              className="text-xs text-text-muted hover:text-text transition-colors"
+            >
+              set up another framework
+            </button>
+            <span className="text-border">|</span>
+            <button
+              onClick={() => {
+                const timeline = document.querySelector("[data-phase='projects']") as HTMLElement;
+                timeline?.click();
+              }}
+              className="text-xs font-medium text-accent hover:text-accent/80 transition-colors"
+            >
+              continue to projects &rarr;
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Persistent tmux terminal — hidden on "choose" since there's
+          nothing to run yet. Keyed on framework id so switching
           frameworks re-connects to that framework's dedicated session. */}
-      <div className="h-[320px]">
+      {active !== "choose" && <div className="h-[320px]">
         <Terminal
           key={`fw-shell-${safeId ?? "none"}`}
           ref={termRef}
@@ -330,7 +398,7 @@ export default function FrameworksPhase() {
           session={safeId ? `eyrie-${safeId}` : undefined}
           onOutput={handleOutput}
         />
-      </div>
+      </div>}
     </div>
   );
 }

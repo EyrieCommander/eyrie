@@ -35,6 +35,7 @@ export default function MacroTimeline({ active, status, onSelect }: Props) {
           <div key={phase.id} className="flex items-center gap-3 flex-1">
             <button
               type="button"
+              data-phase={phase.id}
               disabled={!clickable}
               onClick={() => clickable && onSelect(phase.id)}
               title={isPending ? "complete previous steps first" : undefined}

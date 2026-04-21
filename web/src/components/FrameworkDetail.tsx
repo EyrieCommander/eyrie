@@ -13,6 +13,7 @@ import { getFrameworkDetail } from "../lib/api";
 import { getFrameworkStatus } from "../lib/frameworkStatus";
 import { useData } from "../lib/DataContext";
 import Terminal, { TerminalHandle } from "./Terminal";
+import { shellQuote } from "../lib/shell";
 
 const CHAT_COMMANDS: Record<string, string> = {
   zeroclaw: "zeroclaw agent",
@@ -98,22 +99,8 @@ export default function FrameworkDetail() {
   const emoji = FRAMEWORK_EMOJI[id || ""] || "";
   const status = framework ? getFrameworkStatus(framework) : null;
 
-  // binary_path comes from the registry, which is trusted but not infallible
-  // (local registry.json edits, custom registries, etc). Validate against an
-  // allowlist so nothing interpolated into the tmux shell can smuggle shell
-  // metacharacters (`;`, backticks, `&&`, `$(...)`, quotes, etc).
-  // Absolute POSIX paths (e.g. /Users/foo/.cargo/bin/zeroclaw) match — anything
-  // with a space, `;`, `$`, backtick, or quote does not.
-  const SAFE_PATH_RE = /^[A-Za-z0-9_./~-]+$/;
+  // Binary name for locate/which commands (basename only, no path).
   const SAFE_BASENAME_RE = /^[A-Za-z0-9._-]+$/;
-  const safePath = (p: string | undefined | null): string | null => {
-    if (!p) return null;
-    return SAFE_PATH_RE.test(p) ? p : null;
-  };
-  const safeBinaryPath = safePath(framework?.binary_path);
-  // binaryName is derived from binary_path's basename and used in the locate
-  // command. Even if binary_path is nulled out by sanitization, we still want
-  // a usable name — fall back to the validated id, which is already safe.
   const rawBinaryName = framework?.binary_path?.split("/").pop() || id || "";
   const safeBinaryName = SAFE_BASENAME_RE.test(rawBinaryName) ? rawBinaryName : safeId;
 
@@ -252,13 +239,12 @@ export default function FrameworkDetail() {
         {status?.needsSetup && (
           <button
             onClick={() => {
-              // Prefer the validated registry path; fall back to safeId so a
-              // bad binary_path (fails allowlist) doesn't leave the button dead.
-              const cmdPrefix = safeBinaryPath || safeId;
-              if (!cmdPrefix) return;
-              sendToTerminal(`${cmdPrefix} onboard`);
+              const bin = framework?.binary_path;
+              const cmd = bin ? shellQuote(bin) : safeId;
+              if (!cmd) return;
+              sendToTerminal(`${cmd} onboard`);
             }}
-            disabled={!safeBinaryPath && !safeId}
+            disabled={!framework?.binary_path && !safeId}
             className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors disabled:opacity-50"
           >
             <Settings className="h-3 w-3" /> set up
@@ -270,10 +256,9 @@ export default function FrameworkDetail() {
               onClick={() => {
                 if (!safeId) return;
                 const sub = CHAT_COMMANDS[safeId]?.split(" ").slice(1).join(" ") || "";
-                // Use the validated binary_path if available; otherwise fall
-                // back to the hard-coded chat command for this framework.
-                const cmd = safeBinaryPath
-                  ? `${safeBinaryPath}${sub ? " " + sub : ""}`
+                const bin = framework?.binary_path;
+                const cmd = bin
+                  ? `${shellQuote(bin)}${sub ? " " + sub : ""}`
                   : CHAT_COMMANDS[safeId];
                 if (cmd) sendToTerminal(cmd);
               }}
