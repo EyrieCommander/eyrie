@@ -18,6 +18,9 @@ import type {
   KeyEntry,
   SetKeyResponse,
   ValidateKeyResponse,
+  CommanderEvent,
+  CommanderHistoryMessage,
+  MemoryEntry,
 } from "./types";
 
 const BASE = "";
@@ -517,6 +520,89 @@ export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
   if (!res.ok) throw new Error(`Failed to fetch commander: ${res.statusText}`);
   const data = await res.json();
   return data.commander ?? null;
+}
+
+// --- Commander chat endpoints ---
+
+/** Stream a commander chat turn. POST body is {"message": "..."}.
+ *  The response is SSE with typed events (delta, tool_call, tool_result,
+ *  message, done, error, confirm_required). Returns an AbortController
+ *  so the caller can cancel the stream. */
+export function streamCommanderChat(
+  message: string,
+  onEvent: (event: CommanderEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/commander/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: body.error || res.statusText });
+        return;
+      }
+      await readSSEStream(res.body!, onEvent);
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({ type: "error", error: e instanceof Error ? e.message : "Chat request failed" });
+      }
+    }
+  })();
+  return controller;
+}
+
+/** Approve or deny a pending confirm-tier tool call, then stream the
+ *  continuation turn. Returns an AbortController. */
+export function confirmCommanderAction(
+  id: string,
+  approved: boolean,
+  onEvent: (event: CommanderEvent) => void,
+  reason?: string,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetch(`${BASE}/api/commander/confirm/${id}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ approved, reason }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({ type: "error", error: body.error || res.statusText });
+        return;
+      }
+      await readSSEStream(res.body!, onEvent);
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({ type: "error", error: e instanceof Error ? e.message : "Confirm request failed" });
+      }
+    }
+  })();
+  return controller;
+}
+
+export async function fetchCommanderHistory(): Promise<CommanderHistoryMessage[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/commander/history`);
+  if (!res.ok) throw new Error(`Failed to fetch commander history: ${res.statusText}`);
+  return res.json();
+}
+
+export async function clearCommanderHistory(): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/commander/history`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to clear commander history: ${res.statusText}`);
+}
+
+export async function fetchCommanderMemory(): Promise<MemoryEntry[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/commander/memory`);
+  if (!res.ok) throw new Error(`Failed to fetch commander memory: ${res.statusText}`);
+  return res.json();
 }
 
 export function streamCaptainBriefing(

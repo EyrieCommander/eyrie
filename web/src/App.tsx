@@ -15,6 +15,7 @@ import SettingsPage from "./components/SettingsPage";
 import FrameworkDetail from "./components/FrameworkDetail";
 import AgentCompare from "./components/AgentCompare";
 import FrameworkCompare from "./components/FrameworkCompare";
+import CommanderChat from "./components/CommanderChat";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
 
@@ -35,7 +36,7 @@ function AppContent() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden min-w-0">
         {/* Persistent banner when backend is unreachable — shown across all
             routes so the user always knows why data isn't updating. */}
         {backendDown && (
@@ -88,6 +89,8 @@ function AppContent() {
           } />
         </Routes>
       </main>
+
+      <CommanderChat />
     </div>
   );
 }

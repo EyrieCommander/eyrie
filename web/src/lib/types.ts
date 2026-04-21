@@ -296,6 +296,37 @@ export interface ValidateKeyResponse {
   error?: string;
 }
 
+// --- Commander chat types ---
+
+export interface CommanderDelta          { type: "delta"; text: string }
+export interface CommanderToolCall       { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
+export interface CommanderToolResult     { type: "tool_result"; id: string; name: string; output: string; error?: boolean }
+export interface CommanderMessage        { type: "message"; role: string; content: string }
+export interface CommanderDone           { type: "done"; input_tokens?: number; output_tokens?: number; context_tokens?: number; context_window?: number }
+export interface CommanderError          { type: "error"; error: string }
+export interface CommanderConfirmRequired { type: "confirm_required"; id: string; tool: string; args: Record<string, unknown>; summary: string }
+
+export type CommanderEvent =
+  | CommanderDelta
+  | CommanderToolCall
+  | CommanderToolResult
+  | CommanderMessage
+  | CommanderDone
+  | CommanderError
+  | CommanderConfirmRequired;
+
+export interface CommanderHistoryMessage {
+  role: string;
+  content: string;
+}
+
+export interface MemoryEntry {
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export const FRAMEWORK_EMOJI: Record<string, string> = {
   zeroclaw: "🌀",
   openclaw: "🦞",
