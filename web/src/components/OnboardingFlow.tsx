@@ -15,7 +15,7 @@ import CommanderPhase from "./phases/CommanderPhase";
 import FrameworksPhase from "./phases/FrameworksPhase";
 import ProjectsPhase from "./phases/ProjectsPhase";
 import { useData } from "../lib/DataContext";
-import { fetchFrameworks, fetchKeys } from "../lib/api";
+import { fetchFrameworks, fetchKeys, fetchCommanderHistory } from "../lib/api";
 import {
   deriveApiKeyState,
   findProviderField,
@@ -90,42 +90,65 @@ export default function OnboardingFlow() {
   const { projects } = useData();
   const { frameworks, keys } = useFrameworksSummary();
 
+  // Commander health: polls continuously so adding or deleting a key
+  // is reflected promptly. Fast (3s) while unhealthy, slow (15s) once up.
+  const [commanderHealthy, setCommanderHealthy] = useState<boolean | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const interval = commanderHealthy === true ? 15_000 : 3_000;
+    const check = () => {
+      fetchCommanderHistory()
+        .then(() => { if (!cancelled) setCommanderHealthy(true); })
+        .catch(() => { if (!cancelled) setCommanderHealthy(false); });
+    };
+    check();
+    const id = setInterval(check, interval);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [commanderHealthy]);
+
   const frameworksReady = useMemo(
     () => anyFrameworkReady(frameworks, keys),
     [frameworks, keys],
   );
   const projectsComplete = projects.length > 0;
 
-  // Default-land on frameworks until at least one is ready; otherwise stay
-  // on the projects phase (whether or not a project has been created — it
-  // doubles as the home base once frameworks are done).
-  const defaultActive: PhaseId = frameworksReady ? "projects" : "frameworks";
+  // Land on the first phase that needs attention: commander if unconfigured,
+  // then frameworks until one is ready, then projects.
+  const defaultActive: PhaseId =
+    commanderHealthy === false ? "commander"
+      : frameworksReady ? "projects"
+        : "frameworks";
   const [active, setActive] = useState<PhaseId>(defaultActive);
-  // Only auto-reposition the user if they haven't picked a phase manually.
+  // Only auto-reposition the user if they haven't picked a phase manually
+  // AND they're not currently on the commander phase (so saving a key
+  // doesn't yank them away before they see the success state).
   const [touched, setTouched] = useState(false);
   useEffect(() => {
-    if (!touched) setActive(defaultActive);
-  }, [defaultActive, touched]);
+    if (!touched && active !== "commander") setActive(defaultActive);
+  }, [defaultActive, touched, active]);
 
   const status = useMemo<PhaseStatus>(() => {
-    // Commander is always complete for now (backend merges in step 4).
-    const commander: PhaseState = "complete";
+    // Commander is complete once the health check passes.
+    const commanderDone = commanderHealthy === true;
+    const commander: PhaseState =
+      commanderDone ? "complete"
+        : commanderHealthy === false ? "current"
+          : "pending";
+    // Frameworks: reachable once commander is done. "current" when the
+    // user is on it or it's the next phase to work on.
     const frameworks: PhaseState = frameworksReady
       ? "complete"
-      : active === "frameworks"
+      : commanderDone
         ? "current"
         : "pending";
-    // Projects: complete once at least one exists. Once frameworks are
-    // ready it's the "current" focus regardless of which phase button the
-    // user happens to have clicked — that's why both branches of the
-    // previous triple-nested ternary collapsed to "current".
+    // Projects: reachable once at least one framework is ready.
     const projects: PhaseState = projectsComplete
       ? "complete"
       : frameworksReady
         ? "current"
         : "pending";
     return { commander, frameworks, projects };
-  }, [active, frameworksReady, projectsComplete]);
+  }, [commanderHealthy, frameworksReady, projectsComplete]);
 
   const handleSelect = (id: PhaseId) => {
     setTouched(true);
@@ -147,7 +170,7 @@ export default function OnboardingFlow() {
 
       <MacroTimeline active={active} status={status} onSelect={handleSelect} />
 
-      {active === "commander" && <CommanderPhase />}
+      {active === "commander" && <CommanderPhase onContinue={() => handleSelect("frameworks")} />}
       {active === "frameworks" && <FrameworksPhase />}
       {active === "projects" && <ProjectsPhase />}
     </div>
