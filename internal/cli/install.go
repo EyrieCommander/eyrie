@@ -203,7 +203,7 @@ func runInstallScript(ctx context.Context, scriptURL string) error {
 }
 
 func runCommand(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, config.LookPathEnriched(name), args...)
 	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

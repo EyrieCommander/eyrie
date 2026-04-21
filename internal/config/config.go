@@ -122,6 +122,39 @@ func ExpandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
+// LookPathEnriched resolves a command name against the enriched PATH
+// (the same dirs added by EnrichedEnv). Use this before exec.Command so
+// binaries in ~/go/bin, ~/.cargo/bin, etc. are found even when the Eyrie
+// process's own PATH doesn't include them.
+func LookPathEnriched(command string) string {
+	// If it's already an absolute path, return as-is.
+	if filepath.IsAbs(command) {
+		return command
+	}
+	// Check the enriched dirs first, then fall back to the original command
+	// (let exec.Command try the system PATH).
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return command
+	}
+	dirs := []string{
+		filepath.Join(home, ".cargo", "bin"),
+		filepath.Join(home, "go", "bin"),
+		filepath.Join(home, ".local", "bin"),
+		"/usr/local/bin",
+	}
+	if runtime.GOOS == "darwin" {
+		dirs = append(dirs, "/opt/homebrew/bin")
+	}
+	for _, d := range dirs {
+		p := filepath.Join(d, command)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return command
+}
+
 // ParseJSONFile reads and unmarshals a JSON file into the given target.
 func ParseJSONFile(path string, target any) error {
 	data, err := os.ReadFile(path)

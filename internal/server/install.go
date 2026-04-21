@@ -433,15 +433,15 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 
 	case "cargo":
 		progress.addLog(fmt.Sprintf("Running: cargo install %s", fw.ID))
-		cmd = exec.CommandContext(ctx, "cargo", "install", fw.ID)
+		cmd = exec.CommandContext(ctx, config.LookPathEnriched("cargo"), "install", fw.ID)
 
 	case "npm":
 		progress.addLog(fmt.Sprintf("Running: npm install -g %s", fw.ID))
-		cmd = exec.CommandContext(ctx, "npm", "install", "-g", fw.ID)
+		cmd = exec.CommandContext(ctx, config.LookPathEnriched("npm"), "install", "-g", fw.ID)
 
 	case "pip":
 		progress.addLog(fmt.Sprintf("Running: pip install %s", fw.ID))
-		cmd = exec.CommandContext(ctx, "pip", "install", fw.ID)
+		cmd = exec.CommandContext(ctx, config.LookPathEnriched("pip"), "install", fw.ID)
 
 	case "manual":
 		progress.addLog("This framework requires manual installation:")
@@ -743,7 +743,7 @@ func uninstallBinary(ctx context.Context, fw *registry.Framework, log func(strin
 	switch fw.InstallMethod {
 	case "cargo":
 		log(fmt.Sprintf("Running: cargo uninstall %s", fw.ID))
-		cmd := exec.CommandContext(ctx, "cargo", "uninstall", fw.ID)
+		cmd := exec.CommandContext(ctx, config.LookPathEnriched("cargo"), "uninstall", fw.ID)
 		cmd.Env = config.EnrichedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log(fmt.Sprintf("cargo uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
@@ -753,7 +753,7 @@ func uninstallBinary(ctx context.Context, fw *registry.Framework, log func(strin
 
 	case "npm":
 		log(fmt.Sprintf("Running: npm uninstall -g %s", fw.ID))
-		cmd := exec.CommandContext(ctx, "npm", "uninstall", "-g", fw.ID)
+		cmd := exec.CommandContext(ctx, config.LookPathEnriched("npm"), "uninstall", "-g", fw.ID)
 		cmd.Env = config.EnrichedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log(fmt.Sprintf("npm uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))
@@ -763,7 +763,7 @@ func uninstallBinary(ctx context.Context, fw *registry.Framework, log func(strin
 
 	case "pip":
 		log(fmt.Sprintf("Running: pip uninstall -y %s", fw.ID))
-		cmd := exec.CommandContext(ctx, "pip", "uninstall", "-y", fw.ID)
+		cmd := exec.CommandContext(ctx, config.LookPathEnriched("pip"), "uninstall", "-y", fw.ID)
 		cmd.Env = config.EnrichedEnv()
 		if out, err := cmd.CombinedOutput(); err != nil {
 			log(fmt.Sprintf("pip uninstall failed: %s, removing binary directly", strings.TrimSpace(string(out))))

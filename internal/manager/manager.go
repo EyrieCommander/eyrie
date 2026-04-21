@@ -151,7 +151,7 @@ func node22Env() []string {
 // runWithNode22 runs a command with Node.js v22 at the front of PATH.
 // Falls back to the default PATH if no v22 installation is found.
 func runWithNode22(ctx context.Context, command string, args ...string) error {
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, config.LookPathEnriched(command), args...)
 	if env := node22Env(); env != nil {
 		cmd.Env = env
 	}
@@ -206,7 +206,7 @@ func hermesServiceInstalled(ctx context.Context) bool {
 func serviceInstalled(ctx context.Context, framework string) bool {
 	switch framework {
 	case "zeroclaw":
-		statusCmd := exec.CommandContext(ctx, "zeroclaw", "service", "status")
+		statusCmd := exec.CommandContext(ctx, config.LookPathEnriched("zeroclaw"), "service", "status")
 		statusCmd.Env = config.EnrichedEnv()
 		out, err := statusCmd.CombinedOutput()
 		if err != nil {
@@ -221,7 +221,7 @@ func serviceInstalled(ctx context.Context, framework string) bool {
 }
 
 func run(ctx context.Context, command string, args ...string) error {
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, config.LookPathEnriched(command), args...)
 	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
@@ -245,7 +245,7 @@ func runDetached(ctx context.Context, logDir string, command string, args ...str
 // runDetachedWithEnv starts a detached daemon process. The context parameter is
 // intentionally unused because the process must outlive the caller's context.
 func runDetachedWithEnv(_ context.Context, logDir string, env []string, command string, args ...string) error {
-	cmd := exec.Command(command, args...)
+	cmd := exec.Command(config.LookPathEnriched(command), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if env != nil {
 		cmd.Env = env
