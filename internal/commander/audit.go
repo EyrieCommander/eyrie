@@ -84,10 +84,13 @@ func (a *AuditLog) Append(entry AuditEntry) error {
 	if err != nil {
 		return fmt.Errorf("opening audit log: %w", err)
 	}
-	defer f.Close()
 
 	if _, err := f.Write(append(data, '\n')); err != nil {
+		f.Close()
 		return fmt.Errorf("writing audit entry: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("closing audit log: %w", err)
 	}
 	return nil
 }

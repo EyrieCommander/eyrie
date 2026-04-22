@@ -49,7 +49,7 @@ export default function FrameworkCard({
           <p className="text-[10px] text-text-muted">{framework.id}</p>
         </div>
         {status.badge && (
-          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badgeColors[status.badge.color!] || ""}`}>
+          <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${badgeColors[status.badge.color ?? ""] || ""}`}>
             {status.badge.label}
           </span>
         )}

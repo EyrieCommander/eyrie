@@ -64,10 +64,15 @@ export default function ApiKeyForm({ provider, onSaved, placeholder }: Props) {
       setValue("");
       setShow(false);
       setSaved(true);
-      // Refresh masked display
-      const keys = await fetchKeys();
-      setExisting(keys.find((k) => k.provider === provider) ?? null);
       onSaved?.();
+      // Refresh masked display separately — failure here should not
+      // override the save-success state.
+      try {
+        const keys = await fetchKeys();
+        setExisting(keys.find((k) => k.provider === provider) ?? null);
+      } catch {
+        /* best effort — key is saved, masked display just stale */
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to save key");
     } finally {

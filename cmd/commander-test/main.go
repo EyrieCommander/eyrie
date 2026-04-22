@@ -70,7 +70,7 @@ func runChat(baseURL string) {
 	msg := strings.Join(flag.Args(), " ")
 	if msg == "" {
 		// Read from stdin if no args given.
-		b, err := io.ReadAll(os.Stdin)
+		b, err := io.ReadAll(stdinReader)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "%serror reading stdin: %v%s\n", red, err, reset)
 			os.Exit(1)

@@ -411,6 +411,7 @@ func (s *Server) handleInstallLogs(w http.ResponseWriter, r *http.Request) {
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"framework_id": progress.FrameworkID,
+		"operation":    progress.Operation,
 		"phase":        progress.Phase,
 		"status":       progress.Status,
 		"progress":     progress.Progress,

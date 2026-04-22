@@ -39,7 +39,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
   const wsRef = useRef<WebSocket | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const initializedRef = useRef(false);
-  const cleanupCountRef = useRef(0);
+  const setupDoneRef = useRef(false);
   const onCloseRef = useRef(onClose);
   const onOutputRef = useRef(onOutput);
   const [status, setStatus] = useState<"connecting" | "connected" | "closed">("connecting");
@@ -177,10 +177,10 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       }
     };
     window.addEventListener("resize", handleResize);
+    setupDoneRef.current = true;
 
     return () => {
-      cleanupCountRef.current++;
-      if (cleanupCountRef.current === 1) return; // Skip Strict Mode first cleanup
+      if (!setupDoneRef.current) return; // Not yet initialized — nothing to tear down
 
       window.removeEventListener("resize", handleResize);
       if (wsRef.current) {
@@ -189,7 +189,11 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
         else if (w.readyState === WebSocket.CONNECTING) w.close();
       }
       if (xtermRef.current) xtermRef.current.dispose();
+      setupDoneRef.current = false;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- useShell, session,
+    // inline, and initialCommand are structurally stable (parent remounts via
+    // key= on change), so they are intentionally omitted from deps.
   }, [agentName]);
 
   // ── Inline mode: render directly in parent container ────────────────

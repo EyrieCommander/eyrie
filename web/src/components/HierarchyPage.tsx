@@ -399,7 +399,7 @@ function GuideView({ hierarchy }: {
             </Link>
           ) : (
             <Link to="/" className="text-[10px] text-accent hover:text-accent/80 transition-colors">
-              set up a project &rarr;
+              get started &rarr;
             </Link>
           )}
         </div>

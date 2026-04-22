@@ -443,7 +443,7 @@ func (c *Commander) ResumeAfterConfirm(ctx context.Context, pa *PendingAction, a
 
 	if unresolved := findUnresolvedToolCalls(history); len(unresolved) > 0 {
 		if c.processToolCalls(ctx, unresolved, &history, emit) {
-			_ = emit.WriteEvent(doneEvent{Type: EventDone})
+			_ = emit.WriteEvent(c.makeDoneEvent(0, 0, 0))
 			return nil
 		}
 	}

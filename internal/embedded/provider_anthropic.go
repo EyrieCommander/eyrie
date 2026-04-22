@@ -149,12 +149,13 @@ type anthropicTool struct {
 
 // anthropicRequest is the JSON body for POST /v1/messages.
 type anthropicRequest struct {
-	Model     string             `json:"model"`
-	MaxTokens int                `json:"max_tokens"` // required by Anthropic
-	System    string             `json:"system,omitempty"`
-	Messages  []anthropicMessage `json:"messages"`
-	Tools     []anthropicTool    `json:"tools,omitempty"`
-	Stream    bool               `json:"stream,omitempty"`
+	Model       string             `json:"model"`
+	MaxTokens   int                `json:"max_tokens"` // required by Anthropic
+	Temperature *float64           `json:"temperature,omitempty"`
+	System      string             `json:"system,omitempty"`
+	Messages    []anthropicMessage `json:"messages"`
+	Tools       []anthropicTool    `json:"tools,omitempty"`
+	Stream      bool               `json:"stream,omitempty"`
 }
 
 // --- Translation: our types → Anthropic wire types --------------------
@@ -196,6 +197,10 @@ func translateMessages(msgs []Message) (system string, out []anthropicMessage) {
 			if len(out) > 0 && out[len(out)-1].Role == "assistant" {
 				out[len(out)-1].Content = append(out[len(out)-1].Content,
 					anthropicBlock{Type: "text", Text: m.Content})
+			} else {
+				// No prior assistant — append the system content as the first
+				// line of a new user message so Anthropic receives it.
+				system += "\n\n" + m.Content
 			}
 
 		case "user":
@@ -281,6 +286,15 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []ToolDef, mo
 			req.MaxTokens = v
 		case float64:
 			req.MaxTokens = int(v)
+		}
+	}
+	if t, ok := opts["temperature"]; ok {
+		switch v := t.(type) {
+		case float64:
+			req.Temperature = &v
+		case int:
+			f := float64(v)
+			req.Temperature = &f
 		}
 	}
 	return req
@@ -443,10 +457,11 @@ func parseAnthropicStream(ctx context.Context, reader io.Reader, onDelta func(de
 	blocks := map[int]*blockAccum{}
 
 	var (
-		stopReason   string
-		inputTokens  int
-		outputTokens int
-		textAll      strings.Builder
+		stopReason       string
+		inputTokens      int
+		outputTokens     int
+		textAll          strings.Builder
+		foundMessageStop bool
 	)
 
 	scanner := bufio.NewScanner(reader)
@@ -555,6 +570,7 @@ func parseAnthropicStream(ctx context.Context, reader io.Reader, onDelta func(de
 		case "message_stop":
 			// Terminator — break out. `break` alone only exits the
 			// switch; we need a labeled break or fallthrough via flag.
+			foundMessageStop = true
 			goto done
 
 		case "ping":
@@ -566,6 +582,9 @@ done:
 
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("streaming read error: %w", err)
+	}
+	if !foundMessageStop && scanner.Err() == nil {
+		return nil, fmt.Errorf("stream ended without message_stop event")
 	}
 
 	// Assemble final tool calls in deterministic index order so resume

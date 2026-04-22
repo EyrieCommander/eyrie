@@ -36,9 +36,9 @@ func (s *Server) sendCommanderMessageToProject(ctx context.Context, projectID, m
 		return fmt.Errorf("loading project: %w", err)
 	}
 
-	// Run the orchestrator in the background. The caller gets control
-	// back after the message is persisted; the captain's streaming
-	// response accumulates into chat.jsonl.
+	// Launch the orchestrator in a background goroutine. Control returns
+	// to the caller immediately — message persistence and the captain's
+	// streaming response both happen asynchronously inside the goroutine.
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {

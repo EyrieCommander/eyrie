@@ -39,14 +39,17 @@ export default function ProjectsPhase() {
 
   // Installed/ready frameworks (for the dropdowns)
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
+  const [fwLoading, setFwLoading] = useState(true);
   useEffect(() => {
+    setFwLoading(true);
     fetchFrameworks()
       .then((list) => {
         // Only offer frameworks that are installed — can't provision from a
         // framework we haven't set up.
         setFrameworks(list.filter((fw) => getFrameworkStatus(fw).isInstalled));
       })
-      .catch(() => setFrameworks([]));
+      .catch(() => setFrameworks([]))
+      .finally(() => setFwLoading(false));
   }, []);
 
   const defaultFramework = frameworks[0]?.id || "zeroclaw";
@@ -187,7 +190,15 @@ export default function ProjectsPhase() {
     }
   };
 
-  if (frameworks.length === 0) {
+  if (fwLoading) {
+    return (
+      <div className="rounded border border-border bg-bg-secondary px-4 py-4 text-xs text-text-muted">
+        Loading frameworks…
+      </div>
+    );
+  }
+
+  if (!fwLoading && frameworks.length === 0) {
     return (
       <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-4 text-xs text-text-secondary">
         Install a framework first — you need an agent runtime before creating a

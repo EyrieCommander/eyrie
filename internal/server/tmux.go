@@ -37,8 +37,10 @@ func eyrieHomeDir() (string, error) {
 	if err != nil || home == "" {
 		if env := os.Getenv("HOME"); env != "" {
 			home = env
-		} else {
+		} else if err != nil {
 			return "", fmt.Errorf("cannot resolve home directory: %w", err)
+		} else {
+			return "", fmt.Errorf("cannot resolve home directory: home is empty")
 		}
 	}
 	return filepath.Join(home, ".eyrie"), nil

@@ -170,8 +170,8 @@ function HtmlPreview({ html }: { html: string }) {
  *  (so "\\\\n" in the source stays as \n in the output). */
 function formatArgs(args: Record<string, any>): string {
   return JSON.stringify(args, null, 2)
-    .replace(/(^|[^\\])\\n/g, "$1\n")
-    .replace(/(^|[^\\])\\t/g, "$1\t");
+    .replace(/(?<!\\)\\n/g, "\n")
+    .replace(/(?<!\\)\\t/g, "\t");
 }
 
 export function toolCallSummary(

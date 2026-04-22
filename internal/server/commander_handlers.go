@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/commander"
@@ -174,6 +175,14 @@ func (s *Server) handleCommanderConfirm(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Obtain the SSE writer BEFORE approving/denying. If SSE setup fails
+	// we haven't mutated any state yet, so the client can retry cleanly.
+	sse, sseErr := NewSSEWriter(w)
+	if sseErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": sseErr.Error()})
+		return
+	}
+
 	var (
 		pa  *commander.PendingAction
 		err error
@@ -184,13 +193,15 @@ func (s *Server) handleCommanderConfirm(w http.ResponseWriter, r *http.Request) 
 		pa, err = s.commander.Pending().Deny(id, body.Reason)
 	}
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	sse, err := NewSSEWriter(w)
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		// Distinguish "not found / expired" from "already processed".
+		// Both are returned as plain errors by the pending store; check
+		// the message to pick the right HTTP status.
+		status := http.StatusNotFound
+		errMsg := err.Error()
+		if strings.Contains(errMsg, "already") {
+			status = http.StatusConflict
+		}
+		writeJSON(w, status, map[string]string{"error": errMsg})
 		return
 	}
 

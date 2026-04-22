@@ -129,7 +129,7 @@ func NewRegistry(deps RegistryDeps) *Registry {
 	if deps.Projects != nil {
 		r.register(createProjectTool(deps.Projects))
 	}
-	if deps.SendToProject != nil {
+	if deps.SendToProject != nil && deps.Projects != nil {
 		r.register(sendToProjectTool(deps.SendToProject, deps.Projects))
 	}
 	if deps.RestartAgent != nil {
@@ -382,9 +382,13 @@ func readProjectChatTool(store *project.ChatStore) Tool {
 			if projectID == "" {
 				return "", fmt.Errorf("project_id is required")
 			}
+			const maxChatLimit = 200
 			limit := 20
 			if l, ok := args["limit"].(float64); ok && l > 0 {
 				limit = int(l)
+			}
+			if limit > maxChatLimit {
+				limit = maxChatLimit
 			}
 			messages, err := store.Messages(projectID, limit)
 			if err != nil {

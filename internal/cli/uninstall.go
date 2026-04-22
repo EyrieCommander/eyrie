@@ -77,7 +77,11 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 		fmt.Printf("  Binary: %s\n", fw.BinaryPath)
 	}
 	if uninstallFlags.purge && configExists {
-		fmt.Printf("  Config: %s\n", fw.ConfigDir)
+		if configFileExists && !configDirExists {
+			fmt.Printf("  Config: %s\n", fw.ConfigPath)
+		} else {
+			fmt.Printf("  Config: %s\n", fw.ConfigDir)
+		}
 	}
 
 	// Confirm
@@ -241,7 +245,10 @@ func clearInstallStatus(frameworkID string) {
 
 	delete(statuses, frameworkID)
 
-	out, _ := json.MarshalIndent(statuses, "", "  ")
+	out, err := json.MarshalIndent(statuses, "", "  ")
+	if err != nil {
+		return
+	}
 	os.WriteFile(statusFile, out, 0644)
 }
 
