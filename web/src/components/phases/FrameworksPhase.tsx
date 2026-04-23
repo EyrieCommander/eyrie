@@ -10,8 +10,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, MessageSquare, RotateCcw } from "lucide-react";
 import type { PhaseId } from "../OnboardingFlow";
-import type { Framework, InstallProgress, KeyEntry } from "../../lib/types";
-import { fetchFrameworks, getFrameworkDetail, fetchAgentConfig, fetchKeys } from "../../lib/api";
+import type { Framework, KeyEntry } from "../../lib/types";
+import { fetchFrameworks, getFrameworkDetail, fetchFrameworkConfig, fetchKeys } from "../../lib/api";
 import {
   deriveApiKeyState,
   findProviderField,
@@ -25,7 +25,7 @@ import FrameworkProgressTimeline, {
   InnerStepState,
 } from "../FrameworkProgressTimeline";
 import FrameworkStepPanel, { askCommander } from "../FrameworkStepPanel";
-import { loadSaved, saveSubStep } from "../../lib/onboardingStorage";
+import { loadSaved, saveSubStep, isApiKeyConfirmed, setApiKeyConfirmedFor } from "../../lib/onboardingStorage";
 
 /**
  * Pull a provider value out of a raw config string. We don't try to fully
@@ -87,17 +87,21 @@ export default function FrameworksPhase({ onNavigate }: Props) {
   const [framework, setFramework] = useState<Framework | null>(null);
   const [rawConfig, setRawConfig] = useState<string>("");
   const [keys, setKeys] = useState<KeyEntry[]>([]);
-  // installProgress stays unused for now — SSE is not re-wired here. Filesystem
-  // polling + tmux output parsing are the two signals that drive transitions.
-  const [installProgress] = useState<InstallProgress | null>(null);
-
   // Last error line captured from terminal output (for the error banner).
   const [lastError, setLastError] = useState<string | null>(null);
 
   // The api_key step requires explicit confirmation even when a key already
   // exists in the vault (it may be from a different framework's setup).
   // Keyed per framework so switching frameworks resets the confirmation.
-  const [apiKeyConfirmed, setApiKeyConfirmed] = useState(false);
+  const [apiKeyConfirmed, setApiKeyConfirmed] = useState(() => {
+    const id = isSafeId(chosenId) ? chosenId : null;
+    return id ? isApiKeyConfirmed(id) : false;
+  });
+
+  // Gateway health status — fed back from the HealthCheck component in
+  // LaunchStep. The launch step is only "complete" when the gateway is
+  // healthy (or when the framework has no health_url).
+  const [gatewayHealthy, setGatewayHealthy] = useState(false);
 
   // Which step the user is viewing — initialized from ?step= param.
   // Auto-advances when the current step transitions to "complete" (the
@@ -168,7 +172,7 @@ export default function FrameworksPhase({ onNavigate }: Props) {
     // Before that, the config endpoint 404s every poll cycle.
     if (fw?.installed && fw?.configured) {
       try {
-        const cfg = await fetchAgentConfig(safeId);
+        const cfg = await fetchFrameworkConfig(safeId);
         setRawConfig(cfg.content);
       } catch {
         setRawConfig("");
@@ -208,7 +212,7 @@ export default function FrameworksPhase({ onNavigate }: Props) {
     : null;
   const apiKeyState = deriveApiKeyState(providerValue, keys);
   const status = framework
-    ? getFrameworkStatus(framework, installProgress, apiKeyState)
+    ? getFrameworkStatus(framework, null, apiKeyState)
     : null;
 
   // Derive sub-step statuses
@@ -259,14 +263,19 @@ export default function FrameworksPhase({ onNavigate }: Props) {
         : apiKeyDone
           ? "complete"
           : "current";
-    const launch: InnerStepState = status.isReady && apiKeyDone
+    // Launch is "complete" only when the gateway is actually healthy (or
+    // the framework has no health_url to check). This prevents "all set"
+    // from showing when start gateway fails.
+    const noHealthCheck = !framework?.health_url;
+    const launchDone = status.isReady && apiKeyDone && (gatewayHealthy || noHealthCheck);
+    const launch: InnerStepState = launchDone
       ? "complete"
       : apiKeyDone
         ? "current"
         : "pending";
 
     return { choose: "complete", install, configure, api_key: apiKey, launch };
-  }, [chosenId, status, apiKeyConfirmed]);
+  }, [chosenId, status, apiKeyConfirmed, gatewayHealthy, framework?.health_url]);
 
   // Auto-advance: when the current step completes or becomes unreachable,
   // clear the manual override so `firstIncomplete` picks the next step.
@@ -320,15 +329,17 @@ export default function FrameworksPhase({ onNavigate }: Props) {
 
   const handleChoose = (id: string) => {
     setChosenId(id);
-    setManualActive("install");
-    setApiKeyConfirmed(false);
-    syncParams(id, "install");
+    setManualActive(null);
+    setApiKeyConfirmed(isApiKeyConfirmed(id));
+    setGatewayHealthy(false);
+    syncParams(id, null);
   };
 
   const handleAddAnother = () => {
     setChosenId(null);
     setManualActive(null);
     setApiKeyConfirmed(false);
+    setGatewayHealthy(false);
     syncParams(null, null);
   };
 
@@ -393,12 +404,13 @@ export default function FrameworksPhase({ onNavigate }: Props) {
           loadChosen();
           refreshKeys();
         }}
-        onApiKeyConfirm={() => setApiKeyConfirmed(true)}
+        onApiKeyConfirm={() => { setApiKeyConfirmed(true); if (safeId) setApiKeyConfirmedFor(safeId, true); }}
         apiKeyConfirmed={apiKeyConfirmed}
         onNavigateStep={(step) => {
           setManualActive(step);
           syncParams(chosenId, step);
         }}
+        onHealthChange={setGatewayHealthy}
         safeId={safeId}
       />
 

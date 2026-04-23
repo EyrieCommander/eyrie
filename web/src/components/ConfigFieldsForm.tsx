@@ -5,20 +5,17 @@
 // to PUT /api/registry/frameworks/{id}/config, which patches the framework's
 // config file without replacing the rest of the content.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import type { ConfigField, Framework } from "../lib/types";
 import { fetchFrameworkConfig, patchFrameworkConfig } from "../lib/api";
-import { shellQuote } from "../lib/shell";
 
 interface Props {
   framework: Framework;
   onSaved?: () => void;
-  /** Echo a message into the tmux terminal (for visual confirmation). */
-  onEcho?: (msg: string) => void;
 }
 
-export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) {
+export default function ConfigFieldsForm({ framework, onSaved }: Props) {
   const fields = framework.config_schema?.common_fields;
   const [values, setValues] = useState<Record<string, unknown>>({});
   const [saving, setSaving] = useState(false);
@@ -71,8 +68,21 @@ export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) 
   }, [saved]);
 
   const setValue = useCallback((key: string, val: unknown) => {
-    setValues((prev) => ({ ...prev, [key]: val }));
-  }, []);
+    setValues((prev) => {
+      const next = { ...prev, [key]: val };
+      // When a field that other fields depend on via suggestions_key changes,
+      // reset dependents to the first suggestion for the new value.
+      if (fields) {
+        for (const f of fields) {
+          if (f.suggestions_key === key && f.suggestions && !Array.isArray(f.suggestions)) {
+            const newList = (f.suggestions as Record<string, string[]>)[String(val)];
+            if (newList?.[0]) next[f.key] = newList[0];
+          }
+        }
+      }
+      return next;
+    });
+  }, [fields]);
 
   const handleSave = async () => {
     if (saving) return;
@@ -81,7 +91,6 @@ export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) 
     try {
       await patchFrameworkConfig(framework.id, values);
       setSaved(true);
-      onEcho?.(`echo "✓ Config saved to " ${shellQuote(framework.config_path)}`);
       onSaved?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to save");
@@ -105,14 +114,7 @@ export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) 
 
   return (
     <div className="space-y-3">
-      {essentialFields.map((field) => (
-        <FieldInput
-          key={field.key}
-          field={field}
-          value={values[field.key]}
-          onChange={(val) => setValue(field.key, val)}
-        />
-      ))}
+      <FieldList fields={essentialFields} values={values} setValue={setValue} />
 
       {advancedFields.length > 0 && (
         <>
@@ -123,14 +125,7 @@ export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) 
           >
             {showAdvanced ? "hide" : "show"} advanced settings ({advancedFields.length})
           </button>
-          {showAdvanced && advancedFields.map((field) => (
-            <FieldInput
-              key={field.key}
-              field={field}
-              value={values[field.key]}
-              onChange={(val) => setValue(field.key, val)}
-            />
-          ))}
+          {showAdvanced && <FieldList fields={advancedFields} values={values} setValue={setValue} />}
         </>
       )}
 
@@ -156,19 +151,93 @@ export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) 
   );
 }
 
+/** Renders a list of fields, grouping same-group fields side-by-side. */
+function FieldList({
+  fields,
+  values,
+  setValue,
+}: {
+  fields: ConfigField[];
+  values: Record<string, unknown>;
+  setValue: (key: string, val: unknown) => void;
+}) {
+  const rows: ConfigField[][] = [];
+  let i = 0;
+  while (i < fields.length) {
+    const f = fields[i];
+    // Collect consecutive fields with the same group
+    if (f.group) {
+      const group: ConfigField[] = [f];
+      while (i + 1 < fields.length && fields[i + 1].group === f.group) {
+        group.push(fields[++i]);
+      }
+      rows.push(group);
+    } else {
+      rows.push([f]);
+    }
+    i++;
+  }
+
+  return (
+    <>
+      {rows.map((row) =>
+        row.length > 1 ? (
+          <div key={row[0].key} className="grid gap-3" style={{ gridTemplateColumns: `repeat(${row.length}, 1fr)` }}>
+            {row.map((field) => (
+              <FieldInput
+                key={field.key}
+                field={field}
+                value={values[field.key]}
+                allValues={values}
+                onChange={(val) => setValue(field.key, val)}
+              />
+            ))}
+          </div>
+        ) : (
+          <FieldInput
+            key={row[0].key}
+            field={row[0]}
+            value={values[row[0].key]}
+            allValues={values}
+            onChange={(val) => setValue(row[0].key, val)}
+          />
+        ),
+      )}
+    </>
+  );
+}
+
 function FieldInput({
   field,
   value,
+  allValues,
   onChange,
 }: {
   field: ConfigField;
   value: unknown;
+  allValues: Record<string, unknown>;
   onChange: (val: unknown) => void;
 }) {
   const id = `cfg-${field.key}`;
+  const strVal = String(value ?? field.default ?? "");
+
+  const resolvedSuggestions = resolveSuggestions(field, allValues);
+
+  const hasSuggestions = field.type === "text" && resolvedSuggestions && resolvedSuggestions.length > 0;
+  const isCustom = hasSuggestions && !resolvedSuggestions!.includes(strVal) && strVal !== "";
+  const [showCustom, setShowCustom] = useState(isCustom);
+
+  // Reset to dropdown when the suggestions list changes (e.g., provider switched)
+  const prevSuggestionsRef = useRef(resolvedSuggestions);
+  useEffect(() => {
+    if (prevSuggestionsRef.current !== resolvedSuggestions) {
+      prevSuggestionsRef.current = resolvedSuggestions;
+      setShowCustom(false);
+    }
+  }, [resolvedSuggestions]);
 
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 min-w-0">
       {field.type === "checkbox" ? (
         <div className="block text-[10px] font-medium text-text-muted uppercase tracking-wider">
           {field.label}
@@ -184,7 +253,7 @@ function FieldInput({
       {field.type === "select" && field.options ? (
         <select
           id={id}
-          value={String(value ?? field.default ?? "")}
+          value={strVal}
           onChange={(e) => onChange(e.target.value)}
           className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
         >
@@ -192,6 +261,43 @@ function FieldInput({
             <option key={opt} value={opt}>{opt}</option>
           ))}
         </select>
+      ) : hasSuggestions && !showCustom ? (
+        <select
+          id={id}
+          value={resolvedSuggestions!.includes(strVal) ? strVal : "__custom__"}
+          onChange={(e) => {
+            if (e.target.value === "__custom__") {
+              setShowCustom(true);
+              onChange("");
+            } else {
+              onChange(e.target.value);
+            }
+          }}
+          className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
+        >
+          {resolvedSuggestions!.map((opt) => (
+            <option key={opt} value={opt}>{opt}</option>
+          ))}
+          <option value="__custom__">custom...</option>
+        </select>
+      ) : hasSuggestions && showCustom ? (
+        <div className="flex gap-1">
+          <input
+            id={id}
+            type="text"
+            value={strVal}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={field.description}
+            className="flex-1 min-w-0 rounded border border-border bg-bg px-2 py-1.5 text-xs text-text font-mono focus:border-accent focus:outline-none"
+          />
+          <button
+            type="button"
+            onClick={() => { setShowCustom(false); onChange(resolvedSuggestions![0]); }}
+            className="shrink-0 rounded border border-border px-2 py-1.5 text-[10px] text-text-muted hover:text-text transition-colors"
+          >
+            list
+          </button>
+        </div>
       ) : field.type === "checkbox" ? (
         <div className="flex items-center gap-2 text-xs text-text">
           <input
@@ -241,18 +347,32 @@ function FieldInput({
         <input
           id={id}
           type="text"
-          value={String(value ?? field.default ?? "")}
+          value={strVal}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.description}
           className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text font-mono focus:border-accent focus:outline-none"
         />
       )}
 
-      {field.type !== "checkbox" && (
+      {field.type !== "checkbox" && !field.group && (
         <p className="text-[10px] text-text-muted">{field.description}</p>
       )}
     </div>
   );
+}
+
+/** Resolve suggestions for a field: flat array or map keyed by another field's value. */
+function resolveSuggestions(
+  field: ConfigField,
+  allValues: Record<string, unknown>,
+): string[] | undefined {
+  if (!field.suggestions) return undefined;
+  if (Array.isArray(field.suggestions)) return field.suggestions;
+  if (field.suggestions_key) {
+    const keyVal = String(allValues[field.suggestions_key] ?? "");
+    return (field.suggestions as Record<string, string[]>)[keyVal];
+  }
+  return undefined;
 }
 
 /** Read a dot-separated path from a nested object. */

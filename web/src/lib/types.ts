@@ -104,10 +104,17 @@ export interface ConfigField {
   required: boolean;
   description: string;
   options?: string[];
+  /** Suggested values for text fields — renders as a dropdown with a custom option.
+   *  Can be a flat array or a map keyed by another field's value (e.g., provider → models). */
+  suggestions?: string[] | Record<string, string[]>;
+  /** When suggestions is a map, this is the key of the field whose value selects the list. */
+  suggestions_key?: string;
   min?: number;
   max?: number;
   /** Hide behind an "advanced" toggle in the quick setup form. */
   advanced?: boolean;
+  /** Layout group name — fields with the same group render side-by-side. */
+  group?: string;
 }
 
 export interface ConfigSchema {
@@ -143,6 +150,7 @@ export interface Framework {
   config_schema?: ConfigSchema;
   installed?: boolean;   // binary exists on disk
   configured?: boolean;  // config file exists (onboarding complete)
+  version?: string;      // installed binary version (from --version)
 }
 
 export interface InstallProgress {

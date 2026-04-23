@@ -158,6 +158,9 @@ export default function FrameworkDetail() {
         <h1 className="text-xl font-bold">
           <span className="text-accent">&gt;</span> {framework.name} {emoji}
         </h1>
+        {framework.version && (
+          <span className="text-xs text-text-muted font-mono">{framework.version}</span>
+        )}
         {status?.badge && (
           <span className={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
             status.badge.color === "green" ? "bg-green/10 text-green" :

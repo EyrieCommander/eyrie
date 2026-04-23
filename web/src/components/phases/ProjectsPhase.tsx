@@ -34,7 +34,7 @@ function newSlot(framework: string): TeamSlot {
 }
 
 export default function ProjectsPhase() {
-  const { projects, instances, refresh: refreshData } = useData();
+  const { projects, instances, backendDown, refresh: refreshData } = useData();
   const navigate = useNavigate();
 
   // Installed/ready frameworks (for the dropdowns)
@@ -114,14 +114,11 @@ export default function ProjectsPhase() {
 
   const handleSubmit = async () => {
     setError(null);
-    const projectName = name.trim();
-    if (!projectName) {
-      setError("project name is required");
-      return;
-    }
+    const projectName = name.trim() || "finance tracker";
     const projectDesc = description.trim();
+    const defaultCaptainName = projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") + "-captain";
     const captainName = captain.kind === "new"
-      ? (captain.name.trim() || "captain")
+      ? (captain.name.trim() || defaultCaptainName)
       : "";
     if (captain.kind === "existing" && !captain.instanceId)
       return setError("pick a captain");
@@ -198,7 +195,7 @@ export default function ProjectsPhase() {
     );
   }
 
-  if (!fwLoading && frameworks.length === 0) {
+  if (!fwLoading && frameworks.length === 0 && !backendDown) {
     return (
       <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-4 text-xs text-text-secondary">
         Install a framework first — you need an agent runtime before creating a
@@ -294,6 +291,7 @@ export default function ProjectsPhase() {
                 setSlot={setCaptain}
                 existing={existingCaptains}
                 frameworks={frameworks}
+                projectName={name.trim() || "finance tracker"}
               />
               {talons.map((t, i) => (
                 <TeamSlotEditor
@@ -417,6 +415,7 @@ function TeamSlotEditor({
   existing,
   frameworks,
   onRemove,
+  projectName,
 }: {
   role: "captain" | "talon";
   slot: TeamSlot;
@@ -424,6 +423,7 @@ function TeamSlotEditor({
   existing: AgentInstance[];
   frameworks: Framework[];
   onRemove?: () => void;
+  projectName?: string;
 }) {
   const Icon = role === "captain" ? Crown : Feather;
   const hasExisting = existing.length > 0;
@@ -492,7 +492,7 @@ function TeamSlotEditor({
           <input
             value={slot.name}
             onChange={(e) => setSlot({ ...slot, name: e.target.value })}
-            placeholder={`${role}-name`}
+            placeholder={projectName ? `${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-${role}` : `${role}-name`}
             className="rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
           />
           <select

@@ -1,6 +1,9 @@
 package registry
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Registry represents the complete Claw frameworks registry
 type Registry struct {
@@ -59,14 +62,17 @@ type ConfigSchema struct {
 
 // ConfigField represents a single editable configuration field
 type ConfigField struct {
-	Key         string   `json:"key"`         // Config key (dot notation for nested: "gateway.port")
-	Label       string   `json:"label"`       // Display label
-	Type        string   `json:"type"`        // "text", "number", "select", "checkbox", "multiselect"
-	Default     any      `json:"default,omitempty"` // Default value
-	Required    bool     `json:"required"`    // Whether field is required
-	Description string   `json:"description"` // Help text
-	Options     []string `json:"options,omitempty"` // For select/multiselect types
-	Min         *int     `json:"min,omitempty"` // For number types
-	Max         *int     `json:"max,omitempty"` // For number types
-	Advanced    bool     `json:"advanced,omitempty"` // Hide behind "advanced" toggle in quick setup
+	Key         string   `json:"key"`                    // Config key (dot notation for nested: "gateway.port")
+	Label       string   `json:"label"`                  // Display label
+	Type        string   `json:"type"`                   // "text", "number", "select", "checkbox", "multiselect"
+	Default     any      `json:"default,omitempty"`       // Default value
+	Required    bool     `json:"required"`               // Whether field is required
+	Description string   `json:"description"`            // Help text
+	Options     []string `json:"options,omitempty"`       // For select/multiselect types
+	Suggestions     json.RawMessage `json:"suggestions,omitempty"`      // string[] or map[string]string[] for provider-keyed models
+	SuggestionsKey  string          `json:"suggestions_key,omitempty"`  // field key to select from suggestions map
+	Min         *int     `json:"min,omitempty"`           // For number types
+	Max         *int     `json:"max,omitempty"`           // For number types
+	Advanced    bool     `json:"advanced,omitempty"`      // Hide behind "advanced" toggle in quick setup
+	Group       string   `json:"group,omitempty"`         // Layout group: same-group fields render side-by-side
 }

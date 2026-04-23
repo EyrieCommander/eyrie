@@ -173,33 +173,22 @@ func migrateZeroClaw(configPath string) ([]string, error) {
 // setNestedValue sets a dot-path key in a nested map. Returns true if the
 // value was changed (i.e., it was different or missing).
 func setNestedValue(m map[string]any, path string, value any) bool {
+	// Read existing value for change detection before writing.
 	parts := strings.Split(path, ".")
-	current := m
-	for i := 0; i < len(parts)-1; i++ {
-		existing, exists := current[parts[i]]
-		if !exists {
-			// Create missing intermediate maps
-			next := make(map[string]any)
-			current[parts[i]] = next
-			current = next
-			continue
-		}
-		next, ok := existing.(map[string]any)
+	existing := m
+	for _, p := range parts[:len(parts)-1] {
+		next, ok := existing[p].(map[string]any)
 		if !ok {
-			// Key exists but is not a map — log and abort to avoid data loss
-			slog.Warn("migration: key exists but is not a map, skipping", "path", path, "key", parts[i])
+			break
+		}
+		existing = next
+	}
+	if len(parts) > 0 {
+		if old := existing[parts[len(parts)-1]]; fmt.Sprintf("%v", old) == fmt.Sprintf("%v", value) {
 			return false
 		}
-		current = next
 	}
-	key := parts[len(parts)-1]
-
-	existing := current[key]
-	if fmt.Sprintf("%v", existing) == fmt.Sprintf("%v", value) {
-		return false // already correct
-	}
-	current[key] = value
-	return true
+	return econfig.SetNestedValue(m, path, value)
 }
 
 // getNestedInt reads an integer from a dot-path in a nested map.

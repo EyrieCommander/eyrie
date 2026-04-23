@@ -8,7 +8,7 @@
 // terminal output appears below the panel and the parser can detect success
 // markers to update step status and auto-advance the timeline.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Download, Terminal as TerminalIcon, FileEdit, Play, Check, MessageSquare } from "lucide-react";
 import FrameworkCard from "./FrameworkCard";
 import ApiKeyForm from "./ApiKeyForm";
@@ -41,6 +41,8 @@ interface Props {
   apiKeyConfirmed?: boolean;
   /** Navigate to a different inner step (e.g. back to configure). */
   onNavigateStep?: (step: InnerStepId) => void;
+  /** Reports gateway health status back to the parent for step gating. */
+  onHealthChange?: (healthy: boolean) => void;
   /** Sanitised framework id safe to interpolate into shell commands. */
   safeId: string | null;
 }
@@ -168,7 +170,7 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
       </div>
 
       {tab === "form" && hasSchema && (
-        <ConfigFieldsForm framework={framework} onSaved={onRefresh} onEcho={onRun} />
+        <ConfigFieldsForm framework={framework} onSaved={onRefresh} />
       )}
 
       {tab === "wizard" && (
@@ -205,7 +207,7 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
 }
 
 // ── step 4: api key ─────────────────────────────────────────────────────
-function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefresh, onApiKeyConfirm, onNavigateStep, onRun }: Props) {
+function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefresh, onApiKeyConfirm, onNavigateStep }: Props) {
   if (!framework) return <WaitingForFramework />;
 
   // Local / no-key providers auto-skip. Show a confirmation card.
@@ -277,7 +279,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { onRun(`echo ${shellQuote("✓ Using existing " + apiKey.provider + " key")}`); onApiKeyConfirm?.(); }}
+              onClick={() => onApiKeyConfirm?.()}
               className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
             >
               use this key
@@ -285,7 +287,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
             <span className="text-[10px] text-text-muted">or replace it below</span>
           </div>
         </div>
-        <ApiKeyForm provider={apiKey.provider} hideSavedStatus onSaved={() => { onRun(`echo ${shellQuote("✓ " + apiKey.provider + " key saved")}`); onRefresh(); onApiKeyConfirm?.(); }} />
+        <ApiKeyForm provider={apiKey.provider} hideSavedStatus onSaved={() => { onRefresh(); onApiKeyConfirm?.(); }} />
       </div>
     );
   }
@@ -309,7 +311,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
           </button>
         )}
       </div>
-      <ApiKeyForm provider={apiKey.provider} onSaved={() => { onRun(`echo ${shellQuote("✓ " + apiKey.provider + " key saved")}`); onRefresh(); onApiKeyConfirm?.(); }} />
+      <ApiKeyForm provider={apiKey.provider} onSaved={() => { onRefresh(); onApiKeyConfirm?.(); }} />
       <p className="text-[10px] text-text-muted">
         or set <code className="font-mono">{apiKey.provider.toUpperCase().replace(/-/g, "_")}_API_KEY</code>{" "}
         as an environment variable and restart Eyrie.
@@ -326,7 +328,7 @@ const CHAT_COMMANDS: Record<string, string> = {
   hermes: "hermes",
 };
 
-function LaunchStep({ framework, safeId, onRun }: Props) {
+function LaunchStep({ framework, safeId, onRun, onHealthChange }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;
 
   const handleGateway = () => {
@@ -391,23 +393,29 @@ function LaunchStep({ framework, safeId, onRun }: Props) {
         </p>
       )}
 
-      {framework.health_url && <HealthCheck url={framework.health_url} />}
+      {framework.health_url && safeId && <HealthCheck url={framework.health_url} frameworkId={safeId} onHealthChange={onHealthChange} />}
     </div>
   );
 }
 
-function HealthCheck({ url }: { url: string }) {
+/** Checks gateway health via Eyrie's backend proxy to avoid CORS issues. */
+function HealthCheck({ url, frameworkId, onHealthChange }: { url: string; frameworkId: string; onHealthChange?: (healthy: boolean) => void }) {
   const [status, setStatus] = useState<"pending" | "ok" | "down">("pending");
+  const onHealthChangeRef = useRef(onHealthChange);
+  onHealthChangeRef.current = onHealthChange;
   useEffect(() => {
     let cancelled = false;
     const check = () => {
-      fetch(url, { method: "GET" })
-        .then((r) => {
+      fetch(`/api/registry/frameworks/${frameworkId}/health`)
+        .then((r) => r.ok ? r.json() : { status: "down" })
+        .then((data: { status: string }) => {
           if (cancelled) return;
-          setStatus(r.ok ? "ok" : "down");
+          const healthy = data.status === "ok";
+          setStatus(healthy ? "ok" : "down");
+          onHealthChangeRef.current?.(healthy);
         })
         .catch(() => {
-          if (!cancelled) setStatus("down");
+          if (!cancelled) { setStatus("down"); onHealthChangeRef.current?.(false); }
         });
     };
     check();
@@ -416,7 +424,7 @@ function HealthCheck({ url }: { url: string }) {
       cancelled = true;
       clearInterval(interval);
     };
-  }, [url]);
+  }, [frameworkId, url]);
 
   const dot =
     status === "ok" ? "bg-green" : status === "down" ? "bg-red" : "bg-yellow animate-pulse";
