@@ -31,13 +31,14 @@ function statusDotClass(alive: boolean, providerStatus?: string): string {
 export default function FrameworkDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { agents } = useData();
+  const { agents, refresh: refreshGlobal } = useData();
   const termRef = useRef<TerminalHandle>(null);
 
   // ── Framework data ──────────────────────────────────────────────────
   const [framework, setFramework] = useState<Framework | null>(null);
   const [error, setError] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [pendingUninstall, setPendingUninstall] = useState(false);
 
   const loadFramework = useCallback(async () => {
     if (!id) return;
@@ -71,10 +72,11 @@ export default function FrameworkDetail() {
   const frameworkRef = useRef(framework);
   frameworkRef.current = framework;
 
-  // Only poll when the framework is in a transitional state where terminal
-  // commands could change installed/configured (e.g., after running onboard
-  // or install). Skip polling when stable (ready or fully uninstalled).
-  const needsPolling = framework && (!framework.installed || !framework.configured);
+  // Poll when the framework is in a transitional state (install/configure
+  // running) OR when the user just clicked uninstall and we're waiting for
+  // it to finish. Skip polling when stable (ready or fully uninstalled).
+  const needsPolling =
+    (framework && (!framework.installed || !framework.configured)) || pendingUninstall;
 
   useEffect(() => {
     if (!id || !needsPolling) return;
@@ -84,11 +86,16 @@ export default function FrameworkDetail() {
         const current = frameworkRef.current;
         if (current && (updated.installed !== current.installed || updated.configured !== current.configured)) {
           setFramework(updated);
+          // Uninstall just completed — refresh the sidebar immediately
+          if (current.installed && !updated.installed) {
+            setPendingUninstall(false);
+            refreshGlobal(false);
+          }
         }
       } catch { /* silent */ }
-    }, 5000);
+    }, 3000);
     return () => clearInterval(interval);
-  }, [id, needsPolling]);
+  }, [id, needsPolling, pendingUninstall, refreshGlobal]);
 
   // ── Uninstall ───────────────────────────────────────────────────────
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false);
@@ -117,6 +124,7 @@ export default function FrameworkDetail() {
   const handleUninstall = () => {
     if (!safeId) return;
     setShowUninstallConfirm(false);
+    setPendingUninstall(true);
     const purgeFlag = uninstallPurge ? " --purge" : "";
     sendToTerminal(`eyrie uninstall ${safeId} -y${purgeFlag}`);
     setUninstallPurge(false);

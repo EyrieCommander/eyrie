@@ -3,10 +3,11 @@
 // Inner 5-step flow: choose → install → configure → api key → launch.
 // Sub-step status is derived from real data (filesystem, KeyVault) not from
 // click-through. Tmux output from the persistent terminal is piped through
-// terminalParser so successful install / configure / launch commands advance
-// the timeline without waiting on the 5-second filesystem polling loop.
+// terminalParser so successful install / configure / launch commands update
+// the step status badges — but the user must click "continue" to advance.
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AlertTriangle, MessageSquare, RotateCcw } from "lucide-react";
 import type { PhaseId } from "../OnboardingFlow";
 import type { Framework, InstallProgress, KeyEntry } from "../../lib/types";
@@ -24,6 +25,7 @@ import FrameworkProgressTimeline, {
   InnerStepState,
 } from "../FrameworkProgressTimeline";
 import FrameworkStepPanel, { askCommander } from "../FrameworkStepPanel";
+import { loadSaved, saveSubStep } from "../../lib/onboardingStorage";
 
 /**
  * Pull a provider value out of a raw config string. We don't try to fully
@@ -65,13 +67,23 @@ interface Props {
   onNavigate?: (phase: PhaseId) => void;
 }
 
+const VALID_STEPS: InnerStepId[] = ["choose", "install", "configure", "api_key", "launch"];
+
 export default function FrameworksPhase({ onNavigate }: Props) {
+  const [searchParams, setSearchParams] = useSearchParams();
+
   // Browseable framework list (for the choose step)
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [frameworksLoading, setFrameworksLoading] = useState(true);
 
-  // The chosen framework's full detail
-  const [chosenId, setChosenId] = useState<string | null>(null);
+  // The chosen framework's full detail — initialized from ?fw= param
+  const [chosenId, setChosenId] = useState<string | null>(() => {
+    const urlFw = searchParams.get("fw");
+    if (urlFw && isSafeId(urlFw)) return urlFw;
+    const saved = loadSaved();
+    if (saved.fw && isSafeId(saved.fw)) return saved.fw;
+    return null;
+  });
   const [framework, setFramework] = useState<Framework | null>(null);
   const [rawConfig, setRawConfig] = useState<string>("");
   const [keys, setKeys] = useState<KeyEntry[]>([]);
@@ -82,9 +94,38 @@ export default function FrameworksPhase({ onNavigate }: Props) {
   // Last error line captured from terminal output (for the error banner).
   const [lastError, setLastError] = useState<string | null>(null);
 
-  // Manual override: user clicked a specific step. Cleared automatically when
-  // that step transitions to "complete" (so auto-advance resumes).
-  const [manualActive, setManualActive] = useState<InnerStepId | null>(null);
+  // The api_key step requires explicit confirmation even when a key already
+  // exists in the vault (it may be from a different framework's setup).
+  // Keyed per framework so switching frameworks resets the confirmation.
+  const [apiKeyConfirmed, setApiKeyConfirmed] = useState(false);
+
+  // Which step the user is viewing — initialized from ?step= param.
+  // Auto-advances when the current step transitions to "complete" (the
+  // prevStepStatus effect below clears manualActive so firstIncomplete
+  // picks the next step). Also advances on explicit timeline clicks.
+  const [manualActive, setManualActive] = useState<InnerStepId | null>(() => {
+    const urlStep = searchParams.get("step");
+    if (urlStep && VALID_STEPS.includes(urlStep as InnerStepId)) return urlStep as InnerStepId;
+    const saved = loadSaved();
+    if (saved.step && VALID_STEPS.includes(saved.step as InnerStepId)) return saved.step as InnerStepId;
+    return null;
+  });
+
+  // Sync fw/step to URL params and localStorage whenever they change.
+  const syncParams = useCallback(
+    (fw: string | null, step: InnerStepId | null) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        if (fw) next.set("fw", fw);
+        else next.delete("fw");
+        if (step) next.set("step", step);
+        else next.delete("step");
+        return next;
+      }, { replace: true });
+      saveSubStep(fw, step);
+    },
+    [setSearchParams],
+  );
 
   const termRef = useRef<TerminalHandle>(null);
   const safeId = isSafeId(chosenId) ? chosenId : null;
@@ -196,7 +237,10 @@ export default function FrameworksPhase({ onNavigate }: Props) {
     // configure isn't finished (e.g., key already exists from commander setup).
     const installDone = status.isInstalled;
     const configureDone = installDone && status.isConfigured;
-    const apiKeyDone = configureDone && (status.hasApiKey || status.skipApiKey);
+    // The api_key step requires both a key in the vault AND explicit user
+    // confirmation. This prevents auto-skipping when a key exists from
+    // commander setup but the framework might need a different provider.
+    const apiKeyDone = configureDone && (status.skipApiKey || (status.hasApiKey && apiKeyConfirmed));
 
     const install: InnerStepState = installDone
       ? "complete"
@@ -222,23 +266,29 @@ export default function FrameworksPhase({ onNavigate }: Props) {
         : "pending";
 
     return { choose: "complete", install, configure, api_key: apiKey, launch };
-  }, [chosenId, status]);
+  }, [chosenId, status, apiKeyConfirmed]);
 
-  // If the user is watching a step that just transitioned to complete
-  // (e.g., install finished while they were on the install panel), clear
-  // the override so auto-advance kicks in. But don't clear it if the
-  // user navigated to an already-complete step to review it.
+  // Auto-advance: when the current step completes or becomes unreachable,
+  // clear the manual override so `firstIncomplete` picks the next step.
+  // Also sync the new position to URL/localStorage.
   const prevStepStatus = useRef(stepStatus);
   useEffect(() => {
-    if (
-      manualActive &&
-      stepStatus[manualActive] === "complete" &&
-      prevStepStatus.current[manualActive] !== "complete"
-    ) {
-      setManualActive(null);
+    if (manualActive) {
+      const cur = stepStatus[manualActive];
+      const prev = prevStepStatus.current[manualActive];
+      // Step just completed → advance to the next incomplete step
+      if (cur === "complete" && prev !== "complete") {
+        setManualActive(null);
+        syncParams(chosenId, null);
+      }
+      // Step is unreachable (e.g., framework was uninstalled) → snap back
+      if (cur === "pending") {
+        setManualActive(null);
+        syncParams(chosenId, null);
+      }
     }
     prevStepStatus.current = stepStatus;
-  }, [manualActive, stepStatus]);
+  }, [manualActive, stepStatus, chosenId, syncParams]);
 
   const active: InnerStepId = manualActive ?? firstIncomplete(stepStatus);
 
@@ -270,17 +320,21 @@ export default function FrameworksPhase({ onNavigate }: Props) {
 
   const handleChoose = (id: string) => {
     setChosenId(id);
-    setManualActive(null); // let auto-advance to install
+    setManualActive("install");
+    setApiKeyConfirmed(false);
+    syncParams(id, "install");
   };
 
   const handleAddAnother = () => {
     setChosenId(null);
     setManualActive(null);
+    setApiKeyConfirmed(false);
+    syncParams(null, null);
   };
 
-  // When the chosen framework reaches ready, offer next-step affordances
+  // When the user is on the launch step and it's complete, show next-phase actions
   const showReadyActions =
-    !!framework && status?.isReady && !manualActive;
+    !!framework && active === "launch" && stepStatus.launch === "complete";
 
   return (
     <div className="space-y-4">
@@ -320,7 +374,10 @@ export default function FrameworksPhase({ onNavigate }: Props) {
       <FrameworkProgressTimeline
         status={stepStatus}
         active={active}
-        onSelect={setManualActive}
+        onSelect={(step) => {
+          setManualActive(step);
+          syncParams(chosenId, step);
+        }}
       />
 
       {/* Step panel */}
@@ -329,11 +386,18 @@ export default function FrameworksPhase({ onNavigate }: Props) {
         framework={framework}
         frameworks={frameworks}
         apiKey={apiKeyState}
+        maskedApiKey={keys.find(k => k.provider === apiKeyState?.provider)?.masked_key}
         onChooseFramework={handleChoose}
         onRun={runInTerminal}
         onRefresh={() => {
           loadChosen();
           refreshKeys();
+        }}
+        onApiKeyConfirm={() => setApiKeyConfirmed(true)}
+        apiKeyConfirmed={apiKeyConfirmed}
+        onNavigateStep={(step) => {
+          setManualActive(step);
+          syncParams(chosenId, step);
         }}
         safeId={safeId}
       />

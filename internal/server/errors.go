@@ -19,13 +19,11 @@ import (
 func writeAdapterError(w http.ResponseWriter, err error) {
 	status := adapterHTTPStatus(err)
 	code := adapterErrorCode(err)
-	// Expose the real error message for known sentinel errors (auth expired,
-	// agent unreachable, etc.) since those are actionable. For unrecognized
-	// errors (500), use a generic message to avoid leaking internal details.
-	msg := "internal server error"
-	if code != "internal_error" {
-		msg = err.Error()
-	}
+	// Expose the real error message for all errors. Eyrie is a local tool
+	// (localhost only, no auth), so showing internal details helps users
+	// debug issues like WebSocket dial failures or session errors instead
+	// of getting an opaque "internal server error".
+	msg := err.Error()
 	writeJSON(w, status, map[string]string{
 		"error": msg,
 		"code":  code,

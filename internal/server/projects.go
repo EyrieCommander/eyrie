@@ -367,7 +367,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
 		} else {
 			slog.Error("failed to load project for chat", "project", projectID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 		return
 	}
@@ -508,7 +508,7 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
 		} else {
 			slog.Error("failed to load project for activity", "project", projectID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 		return
 	}

@@ -72,15 +72,19 @@ func NewClient(registryURL string) (*Client, error) {
 
 // Fetch retrieves the registry, using cache if available and not expired
 func (c *Client) Fetch(ctx context.Context, forceRefresh bool) (*Registry, error) {
-	// Try cache first unless force refresh
-	if !forceRefresh {
+	isLocal := strings.HasPrefix(c.registryURL, "file://")
+
+	// Try cache first unless force refresh. Skip cache for local files —
+	// they're already on disk, and caching them prevents edits to
+	// ~/.eyrie/registry.json from taking effect until the 24h TTL expires.
+	if !forceRefresh && !isLocal {
 		if reg, err := c.loadCache(); err == nil {
 			return reg, nil
 		}
 	}
 
 	// Handle file:// URLs for local registries
-	if strings.HasPrefix(c.registryURL, "file://") {
+	if isLocal {
 		u, parseErr := url.Parse(c.registryURL)
 		if parseErr != nil {
 			return nil, fmt.Errorf("invalid registry URL: %w", parseErr)
@@ -99,11 +103,6 @@ func (c *Client) Fetch(ctx context.Context, forceRefresh bool) (*Registry, error
 		var reg Registry
 		if err := json.Unmarshal(data, &reg); err != nil {
 			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-
-		// Cache it
-		if err := c.saveCache(&reg); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to cache registry: %v\n", err)
 		}
 
 		return &reg, nil

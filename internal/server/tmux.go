@@ -10,7 +10,7 @@ import (
 // tmuxConfContent is a minimal tmux config that makes tmux invisible to the user.
 // No prefix key, no status bar — the user just sees a normal shell that happens
 // to persist across WebSocket reconnections.
-const tmuxConfContent = `# Eyrie managed tmux config v4 — do not edit
+const tmuxConfContent = `# Eyrie managed tmux config v6 — do not edit
 # Minimal tmux: no prefix key, persistent sessions, clean status bar.
 
 set -g prefix None
@@ -26,6 +26,12 @@ set -g window-status-format ""
 set -g history-limit 50000
 set -g mouse on
 set -g default-terminal "xterm-256color"
+
+# Mouse drag selects text in copy mode. On release, pipe the selection to
+# the OS clipboard and exit copy mode. This lets scrollback work (mouse on)
+# while still supporting copy via drag-select.
+bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
 `
 
 // eyrieHomeDir returns ~/.eyrie, preferring os.UserHomeDir and falling back

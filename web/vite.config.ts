@@ -29,25 +29,37 @@ export default defineConfig({
         // each failed request. This handler suppresses ECONNREFUSED errors
         // and returns a quiet 503 so the frontend retries on next poll.
         configure: (proxy, _options, server) => {
-          // Remove Vite's default error listener to prevent double-logging
+          // Replace Vite's default error listener to suppress noisy
+          // ECONNREFUSED logs when the Go backend is restarting.
           proxy.removeAllListeners("error");
           proxy.on("error", (err: any, _req, res) => {
-            // Only suppress connection-refused (backend restarting)
-            if (err?.code !== "ECONNREFUSED") {
+            // Only log non-ECONNREFUSED errors
+            if (err?.code !== "ECONNREFUSED" && err?.code !== "EPIPE") {
               server?.config?.logger?.error(`[proxy] ${err.message}`);
             }
             if (res && "writeHead" in res) {
+              // HTTP response — send 503 so the frontend retries
               try {
                 (res as any).writeHead(503, { "Content-Type": "application/json" });
                 (res as any).end(JSON.stringify({ error: "backend restarting" }));
               } catch {
                 // Response may already be sent
               }
+            } else if (res && "destroy" in res) {
+              // WebSocket socket — clean up so the browser reconnects
+              try { (res as any).destroy(); } catch { /* already closed */ }
             }
           });
         },
       },
-      "/ws": { target: "ws://127.0.0.1:7200", ws: true },
+      "/ws": {
+        target: "ws://127.0.0.1:7200",
+        ws: true,
+        configure: (proxy) => {
+          proxy.removeAllListeners("error");
+          proxy.on("error", () => {}); // suppress EPIPE/ECONNREFUSED noise
+        },
+      },
     },
   },
 });

@@ -9,7 +9,8 @@
 // Phase 1 (frameworks) is the meaty piece — 5-sub-step inner flow.
 // Phase 2 (projects) is a single-page project form — implemented in step 3.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import MacroTimeline from "./MacroTimeline";
 import CommanderPhase from "./phases/CommanderPhase";
 import FrameworksPhase from "./phases/FrameworksPhase";
@@ -21,9 +22,12 @@ import {
   findProviderField,
   getFrameworkStatus,
 } from "../lib/frameworkStatus";
+import { loadSaved, saveCurrent } from "../lib/onboardingStorage";
 import type { Framework, KeyEntry } from "../lib/types";
 
 export type PhaseId = "commander" | "frameworks" | "projects";
+
+const VALID_PHASES: PhaseId[] = ["commander", "frameworks", "projects"];
 
 export type PhaseState = "complete" | "current" | "pending";
 
@@ -89,6 +93,7 @@ function anyFrameworkReady(frameworks: Framework[], keys: KeyEntry[]): boolean {
 export default function OnboardingFlow() {
   const { projects } = useData();
   const { frameworks, keys } = useFrameworksSummary();
+  const [searchParams, setSearchParams] = useSearchParams();
 
   // Commander health: polls continuously so adding or deleting a key
   // is reflected promptly. Fast (3s) while unhealthy, slow (15s) once up.
@@ -125,36 +130,77 @@ export default function OnboardingFlow() {
   );
   const projectsComplete = projects.length > 0;
 
-  // Land on the first phase that needs attention: commander if unconfigured,
-  // then frameworks until one is ready, then projects.
-  const defaultActive: PhaseId =
-    commanderHealthy === false ? "commander"
+  // ── Phase from URL → localStorage → computed default ──────────────
+  // Priority: URL param > localStorage > auto-computed default.
+  // The URL is the source of truth once set; localStorage is the fallback
+  // for when the user navigates away and returns to / with no params.
+  const computeDefault = useCallback((): PhaseId => {
+    return commanderHealthy === false ? "commander"
       : frameworksReady ? "projects"
         : "frameworks";
-  const [active, setActive] = useState<PhaseId>(defaultActive);
-  // Only auto-reposition the user if they haven't picked a phase manually
-  // AND they're not currently on the commander phase (so saving a key
-  // doesn't yank them away before they see the success state).
-  const [touched, setTouched] = useState(false);
+  }, [commanderHealthy, frameworksReady]);
+
+  const [active, setActive] = useState<PhaseId>(() => {
+    const urlPhase = searchParams.get("phase");
+    if (urlPhase && VALID_PHASES.includes(urlPhase as PhaseId)) return urlPhase as PhaseId;
+    const saved = loadSaved();
+    if (saved.phase && VALID_PHASES.includes(saved.phase as PhaseId)) return saved.phase as PhaseId;
+    return computeDefault();
+  });
+
+  // When no URL param AND no saved state, auto-position to the first
+  // phase that needs work. Once the user has interacted (URL param exists
+  // or they clicked a phase), stop auto-repositioning.
+  const hasSavedPhase = useMemo(() => !!loadSaved().phase, []);
+  const hasExplicitPosition = searchParams.has("phase") || hasSavedPhase;
   useEffect(() => {
-    if (!touched && active !== "commander") setActive(defaultActive);
-  }, [defaultActive, touched, active]);
+    if (!hasExplicitPosition && active !== "commander") {
+      setActive(computeDefault());
+    }
+  }, [computeDefault, hasExplicitPosition, active]);
+
+  // Sync URL params whenever active phase changes. Uses `replace` so
+  // each step doesn't add a browser-history entry.
+  const updateParams = useCallback(
+    (updates: Record<string, string | null>) => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev);
+        for (const [k, v] of Object.entries(updates)) {
+          if (v === null) next.delete(k);
+          else next.set(k, v);
+        }
+        return next;
+      }, { replace: true });
+    },
+    [setSearchParams],
+  );
+
+  const handleSelect = useCallback(
+    (id: PhaseId) => {
+      setActive(id);
+      // Switching phases: keep fw/step if going to frameworks, clear otherwise
+      if (id !== "frameworks") {
+        updateParams({ phase: id, fw: null, step: null });
+        saveCurrent(id);
+      } else {
+        updateParams({ phase: id });
+        saveCurrent(id, searchParams.get("fw"), searchParams.get("step"));
+      }
+    },
+    [updateParams, searchParams],
+  );
 
   const status = useMemo<PhaseStatus>(() => {
-    // Commander is complete once the health check passes.
     const commanderDone = commanderHealthy === true;
     const commander: PhaseState =
       commanderDone ? "complete"
         : commanderHealthy === false ? "current"
           : "pending";
-    // Frameworks: reachable once commander is done. "current" when the
-    // user is on it or it's the next phase to work on.
     const frameworks: PhaseState = frameworksReady
       ? "complete"
       : commanderDone
         ? "current"
         : "pending";
-    // Projects: reachable once at least one framework is ready.
     const projects: PhaseState = projectsComplete
       ? "complete"
       : frameworksReady
@@ -162,11 +208,6 @@ export default function OnboardingFlow() {
         : "pending";
     return { commander, frameworks, projects };
   }, [commanderHealthy, frameworksReady, projectsComplete]);
-
-  const handleSelect = (id: PhaseId) => {
-    setTouched(true);
-    setActive(id);
-  };
 
   return (
     <div className="space-y-6">

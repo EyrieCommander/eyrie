@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sync"
+	"time"
 
 	"github.com/Audacity88/eyrie/internal/fileutil"
 )
@@ -166,6 +167,7 @@ func (s *Store) UpdateStatus(id string, status InstanceStatus) error {
 		return err
 	}
 	inst.Status = status
+	inst.StatusUpdatedAt = time.Now()
 	out, err := json.MarshalIndent(inst, "", "  ")
 	if err != nil {
 		return err

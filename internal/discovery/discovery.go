@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
@@ -86,15 +87,32 @@ func Run(ctx context.Context, cfg config.Config) Result {
 		// Update instance status based on health probe
 		if instStore != nil && agent.InstanceID != "" {
 			if alive {
-				if err := instStore.UpdateStatus(agent.InstanceID, instance.StatusRunning); err != nil {
-					slog.Debug("failed to update instance status to running", "instance", agent.InstanceID, "error", err)
+				// Only write when status actually changes to avoid
+				// disk I/O + StatusUpdatedAt churn on every poll cycle.
+				if inst, err := instStore.Get(agent.InstanceID); err == nil && inst.Status != instance.StatusRunning {
+					if err := instStore.UpdateStatus(agent.InstanceID, instance.StatusRunning); err != nil {
+						slog.Debug("failed to update instance status to running", "instance", agent.InstanceID, "error", err)
+					}
 				}
 			} else {
-				// Don't downgrade "starting" to "stopped" — give it time to come up
 				inst, err := instStore.Get(agent.InstanceID)
 				if err != nil {
 					slog.Debug("failed to get instance for status check", "instance", agent.InstanceID, "error", err)
-				} else if inst.Status != instance.StatusStarting {
+				} else if inst.Status == instance.StatusStarting {
+					// Give newly started instances 30s to come up before
+					// downgrading. Without this grace period, the first
+					// discovery poll after "start" would immediately mark
+					// the instance as stopped.
+					startedAt := inst.StatusUpdatedAt
+					if startedAt.IsZero() {
+						startedAt = inst.CreatedAt // fallback for instances without StatusUpdatedAt
+					}
+					if time.Since(startedAt) > 30*time.Second {
+						if err := instStore.UpdateStatus(agent.InstanceID, instance.StatusStopped); err != nil {
+							slog.Debug("failed to update instance status to stopped", "instance", agent.InstanceID, "error", err)
+						}
+					}
+				} else if inst.Status == instance.StatusRunning {
 					if err := instStore.UpdateStatus(agent.InstanceID, instance.StatusStopped); err != nil {
 						slog.Debug("failed to update instance status to stopped", "instance", agent.InstanceID, "error", err)
 					}
@@ -124,6 +142,13 @@ func scanInstances() []adapter.DiscoveredAgent {
 
 	var agents []adapter.DiscoveredAgent
 	for _, inst := range instances {
+		// Skip instances whose framework binary is no longer installed.
+		// After uninstalling a framework the instance metadata lingers —
+		// without this check the sidebar keeps showing a stale framework.
+		if !frameworkBinaryExists(inst.Framework) {
+			continue
+		}
+
 		// Embedded agents don't have config files that need scanning —
 		// they are discovered directly from the instance metadata.
 		if inst.Framework == adapter.FrameworkEmbedded {
@@ -287,4 +312,31 @@ func NewAgent(d adapter.DiscoveredAgent) adapter.Agent {
 			d.Name, d.Name, d.URL(), d.Token, d.ConfigPath,
 		)
 	}
+}
+
+// frameworkBinaryExists returns true if the framework's binary can be found on
+// disk. Embedded agents always return true (they run in-process).
+func frameworkBinaryExists(framework string) bool {
+	var binaryName string
+	switch framework {
+	case adapter.FrameworkZeroClaw:
+		binaryName = "zeroclaw"
+	case adapter.FrameworkOpenClaw:
+		binaryName = "openclaw"
+	case adapter.FrameworkPicoClaw:
+		binaryName = "picoclaw"
+	case adapter.FrameworkHermes:
+		binaryName = "hermes"
+	case adapter.FrameworkEmbedded:
+		return true // in-process, no binary needed
+	default:
+		return true // unknown framework — don't filter
+	}
+	resolved := config.LookPathEnriched(binaryName)
+	// LookPathEnriched returns the bare name if not found; check for absolute path
+	if !filepath.IsAbs(resolved) {
+		return false
+	}
+	_, err := os.Stat(resolved)
+	return err == nil
 }

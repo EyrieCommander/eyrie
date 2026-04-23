@@ -30,6 +30,8 @@ interface TerminalProps {
   onOutput?: (line: string) => void;
 }
 
+const COPY_HINT = "drag to select + copy \u00b7 Shift+drag to keep selection";
+
 const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
   { agentName, onClose, initialCommand, useShell, inline, session, onOutput },
   ref,
@@ -160,15 +162,36 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
-    if (onClose) {
-      term.attachCustomKeyEventHandler((event) => {
-        if (event.ctrlKey && event.key === "Escape" && event.type === "keydown") {
-          onCloseRef.current?.();
+    term.attachCustomKeyEventHandler((event) => {
+      if (event.type !== "keydown") return true;
+      // Cmd+C (Mac) / Ctrl+Shift+C (Linux): copy selected text via the
+      // clipboard API. xterm.js renders on <canvas>, so native browser
+      // selection doesn't work — we read from xterm's internal selection.
+      if (event.key === "c") {
+        const isMacCopy = event.metaKey && !event.ctrlKey;
+        const isLinuxCopy = event.ctrlKey && event.shiftKey;
+        if ((isMacCopy || isLinuxCopy) && term.hasSelection()) {
+          navigator.clipboard.writeText(term.getSelection()).catch(() => {});
           return false;
         }
-        return true;
-      });
-    }
+      }
+      // Cmd+V (Mac) / Ctrl+Shift+V (Linux): paste from clipboard
+      if (event.key === "v") {
+        const isMacPaste = event.metaKey && !event.ctrlKey;
+        const isLinuxPaste = event.ctrlKey && event.shiftKey;
+        if (isMacPaste || isLinuxPaste) {
+          navigator.clipboard.readText()
+            .then((text) => { if (ws.readyState === WebSocket.OPEN) ws.send(text); })
+            .catch(() => {});
+          return false;
+        }
+      }
+      if (onCloseRef.current && event.ctrlKey && event.key === "Escape") {
+        onCloseRef.current();
+        return false;
+      }
+      return true;
+    });
 
     const handleResize = () => {
       fitAddon.fit();
@@ -177,12 +200,23 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       }
     };
     window.addEventListener("resize", handleResize);
+
+    // Suppress the browser context menu unless the user has a Shift+drag
+    // selection they might want to copy via right-click → Copy.
+    const handleContextMenu = (e: MouseEvent) => {
+      const hasNativeSelection = (window.getSelection()?.toString().length ?? 0) > 0;
+      if (!hasNativeSelection) e.preventDefault();
+    };
+    terminalRef.current?.addEventListener("contextmenu", handleContextMenu);
+    const termEl = terminalRef.current;
+
     setupDoneRef.current = true;
 
     return () => {
       if (!setupDoneRef.current) return; // Not yet initialized — nothing to tear down
 
       window.removeEventListener("resize", handleResize);
+      termEl?.removeEventListener("contextmenu", handleContextMenu);
       if (wsRef.current) {
         const w = wsRef.current;
         if (w.readyState === WebSocket.OPEN) w.close(1000, "user closed terminal");
@@ -190,6 +224,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       }
       if (xtermRef.current) xtermRef.current.dispose();
       setupDoneRef.current = false;
+      initializedRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- useShell, session,
     // inline, and initialCommand are structurally stable (parent remounts via
@@ -210,6 +245,9 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
           )}
           <div ref={terminalRef} className="w-full h-full" />
         </div>
+        <div className="px-2 py-0.5 text-[10px] text-neutral-500 border-t border-neutral-800 select-none">
+          {COPY_HINT}
+        </div>
       </div>
     );
   }
@@ -227,7 +265,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="text-sm font-semibold text-fg">{agentName} terminal</div>
-            <div className="text-xs text-fg-muted">press ctrl+esc to close</div>
+            <div className="text-xs text-fg-muted">ctrl+esc to close · {COPY_HINT}</div>
           </div>
           <button
             onClick={onClose}
