@@ -9,10 +9,12 @@ import (
 	"os"
 	"os/exec"
 	"regexp"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"nhooyr.io/websocket"
 )
@@ -56,8 +58,17 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 			slog.Warn("tmux config/socket unavailable, falling back to plain shell", "confErr", confErr, "sockErr", sockErr)
 			useTmux = false
 		} else {
-			// Use a dedicated socket (-L is socket name) so Eyrie's tmux sessions
-			// are isolated from the user's personal tmux server and use our config.
+			// Push vault env vars into the tmux session so that commands
+			// started later (e.g., "start gateway" in the launch step) see
+			// keys that were added after the session was created.
+			if vault := config.GetKeyVault(); vault != nil {
+				for _, kv := range vault.EnvSlice() {
+					if k, v, ok := strings.Cut(kv, "="); ok {
+						setenvCmd := exec.CommandContext(ctx, "tmux", "-S", socketPath, "setenv", "-t", sessionName, k, v)
+						_ = setenvCmd.Run() // best-effort: fails silently if session doesn't exist yet
+					}
+				}
+			}
 			// -A: attach if session exists, create if not
 			cmd = exec.CommandContext(ctx, "tmux", "-f", confPath, "-S", socketPath, "new-session", "-A", "-s", sessionName)
 			slog.Info("Starting tmux session", "session", sessionName, "socket", socketPath)
@@ -85,7 +96,14 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	env := append(os.Environ(), "TERM=xterm-256color")
+	// Inject vault API keys so frameworks started from the onboarding
+	// terminal can reach their LLM provider without the user having to
+	// manually export env vars.
+	if vault := config.GetKeyVault(); vault != nil {
+		env = append(env, vault.EnvSlice()...)
+	}
+	cmd.Env = env
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {

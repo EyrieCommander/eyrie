@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { FRAMEWORK_EMOJI } from "../lib/types";
+import { fetchFrameworks } from "../lib/api";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
 
@@ -58,6 +59,27 @@ export default function Sidebar() {
   const dragIdRef = useRef<string | null>(null);
   const transparentImg = useRef<HTMLImageElement | null>(null);
   const activeProject = useMemo(() => parseProjectRoute(pathname), [pathname]);
+
+  // Installed frameworks from the registry — shows frameworks in the
+  // sidebar even when no agent is running (discovery only returns running ones).
+  const [installedFrameworks, setInstalledFrameworks] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchFrameworks()
+        .then((fws) => {
+          if (cancelled) return;
+          const ids = fws.filter((fw) => fw.installed).map((fw) => fw.id);
+          setInstalledFrameworks((prev) =>
+            JSON.stringify(prev) === JSON.stringify(ids) ? prev : ids,
+          );
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
 
   // Create a 1x1 transparent image for drag operations to prevent
   // Chrome's split-view suggestion that appears when dragging <a> tags
@@ -178,7 +200,9 @@ export default function Sidebar() {
 
         {/* ── Frameworks ── */}
         {(() => {
-          const frameworks = [...new Set(agents.map((a) => a.framework))];
+          // Merge frameworks with running agents + installed frameworks from registry
+          const fromAgents = agents.map((a) => a.framework);
+          const frameworks = [...new Set([...installedFrameworks, ...fromAgents])];
           return (
             <>
               <div className={`flex items-center rounded text-xs transition-colors ${
@@ -211,6 +235,8 @@ export default function Sidebar() {
                 <div id="frameworks-list" className="ml-4 border-l border-border pl-2 space-y-px">
                   {frameworks.map((fw) => {
                     const fwAgents = agents.filter((a) => a.framework === fw);
+                    const aliveCount = fwAgents.filter((a) => a.alive).length;
+                    const emoji = FRAMEWORK_EMOJI[fw] || "";
                     return (
                       <Link
                         key={fw}
@@ -221,7 +247,8 @@ export default function Sidebar() {
                             : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
                         }`}
                       >
-                        <span className="truncate">{fw} ({fwAgents.length} {FRAMEWORK_EMOJI[fw] || ""})</span>
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${aliveCount > 0 ? "bg-green" : fwAgents.length > 0 ? "bg-red" : "bg-text-muted/30"}`} />
+                        <span className="truncate">{fw} {emoji}</span>
                       </Link>
                     );
                   })}

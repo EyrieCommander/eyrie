@@ -14,6 +14,7 @@ import (
 	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
+	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/manager"
 	"github.com/Audacity88/eyrie/internal/registry"
 )
@@ -167,9 +168,28 @@ func (s *Server) handleAgentConfig(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, cfg)
 }
 
+func parseLifecycleAction(action string) (manager.LifecycleAction, bool) {
+	switch action {
+	case "start":
+		return manager.ActionStart, true
+	case "stop":
+		return manager.ActionStop, true
+	case "restart":
+		return manager.ActionRestart, true
+	default:
+		return "", false
+	}
+}
+
 func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
 	action := r.PathValue("action")
+
+	la, ok := parseLifecycleAction(action)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action: " + action})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
@@ -177,20 +197,6 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	result := s.runDiscovery(ctx)
 	for _, ar := range result.Agents {
 		if ar.Agent.Name == name {
-			var la manager.LifecycleAction
-			switch action {
-			case "start":
-				la = manager.ActionStart
-			case "stop":
-				la = manager.ActionStop
-			case "restart":
-				la = manager.ActionRestart
-			default:
-				writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid action: " + action})
-				return
-			}
-
-			// Use instance-specific config if this is a provisioned instance
 			var execErr error
 			if ar.Agent.ConfigPath != "" && ar.Agent.InstanceID != "" {
 				execErr = manager.ExecuteWithConfig(ctx, ar.Agent.Framework, ar.Agent.ConfigPath, la)
@@ -205,6 +211,36 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 			return
 		}
+	}
+
+	// Agent not in discovery — might be a crashed provisioned instance.
+	// Fall back to the instance store so the user can restart it.
+	if inst := s.findInstanceByName(name); inst != nil {
+		var execErr error
+		if inst.Framework == adapter.FrameworkEmbedded {
+			agent, findErr := s.findAgentAnyState(ctx, inst.Name)
+			if findErr != nil {
+				writeJSON(w, http.StatusInternalServerError, map[string]string{"error": findErr.Error()})
+				return
+			}
+			switch action {
+			case "start":
+				execErr = agent.Start(ctx)
+			case "stop":
+				execErr = agent.Stop(ctx)
+			case "restart":
+				execErr = agent.Restart(ctx)
+			}
+		} else {
+			execErr = manager.ExecuteWithConfigEnv(ctx, inst.Framework, inst.ConfigPath, la, s.vault.EnvSlice())
+		}
+		if execErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": execErr.Error()})
+			return
+		}
+		_ = s.instanceStore.UpdateStatus(inst.ID, instance.StatusStarting)
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
 	}
 
 	writeJSON(w, http.StatusNotFound, map[string]string{"error": fmt.Sprintf("agent %q not found", name)})
@@ -407,14 +443,19 @@ func (s *Server) handleFrameworkDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Find framework and include install status
+	// Find framework and include install status + version
 	for _, fw := range reg.Frameworks {
 		if fw.ID == frameworkID {
 			installed, configured := frameworkStatus(fw)
+			var version string
+			if installed {
+				version = frameworkVersion(fw)
+			}
 			writeJSON(w, http.StatusOK, frameworkWithStatus{
 				Framework:  fw,
 				Installed:  installed,
 				Configured: configured,
+				Version:    version,
 			})
 			return
 		}
@@ -676,6 +717,25 @@ func (s *Server) findDiscoveredAgent(ctx context.Context, name string) (*adapter
 		}
 	}
 	return nil, fmt.Errorf("agent %q not found", name)
+}
+
+// findInstanceByName looks up a provisioned instance by its name (slug).
+// Returns nil if no match is found. Used as a fallback when discovery
+// doesn't find the agent (e.g., it crashed and isn't responding to health probes).
+func (s *Server) findInstanceByName(name string) *instance.Instance {
+	if s.instanceStore == nil {
+		return nil
+	}
+	instances, err := s.instanceStore.List()
+	if err != nil {
+		return nil
+	}
+	for i := range instances {
+		if instances[i].Name == name {
+			return &instances[i]
+		}
+	}
+	return nil
 }
 
 func (s *Server) handleUpdateDisplayName(w http.ResponseWriter, r *http.Request) {

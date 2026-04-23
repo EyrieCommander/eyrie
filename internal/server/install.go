@@ -159,8 +159,9 @@ func isProcessAlive(pid int) bool {
 
 type frameworkWithStatus struct {
 	registry.Framework
-	Installed  bool `json:"installed"`  // binary exists on disk
-	Configured bool `json:"configured"` // config file exists (onboarding complete)
+	Installed  bool   `json:"installed"`            // binary exists on disk
+	Configured bool   `json:"configured"`           // config file exists (onboarding complete)
+	Version    string `json:"version,omitempty"`     // installed binary version (best-effort)
 }
 
 // handleListFrameworks returns all frameworks from the registry with installation status
@@ -184,8 +185,10 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check installation status for each framework
+	// Check installation status + version for each framework.
+	// Version checks run concurrently (each spawns a subprocess with 3s timeout).
 	result := make([]frameworkWithStatus, len(frameworks))
+	var wg sync.WaitGroup
 	for i, fw := range frameworks {
 		installed, configured := frameworkStatus(fw)
 		result[i] = frameworkWithStatus{
@@ -193,7 +196,15 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 			Installed:  installed,
 			Configured: configured,
 		}
+		if installed {
+			wg.Add(1)
+			go func(idx int, f registry.Framework) {
+				defer wg.Done()
+				result[idx].Version = frameworkVersion(f)
+			}(i, fw)
+		}
 	}
+	wg.Wait()
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -215,6 +226,24 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 		configured = true
 	}
 	return
+}
+
+// frameworkVersion runs `<binary> --version` and returns the first line of
+// output, trimmed. Returns "" if the binary doesn't exist, isn't executable,
+// or the command fails. Bounded to 3s to avoid hanging on unresponsive binaries.
+func frameworkVersion(fw registry.Framework) string {
+	binaryPath := config.ExpandHome(fw.BinaryPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	line := strings.TrimSpace(string(out))
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = strings.TrimSpace(line[:i])
+	}
+	return line
 }
 
 // handleInstallFramework installs a framework with SSE progress streaming
@@ -816,24 +845,28 @@ func unwireDiscovery(fw *registry.Framework) error {
 	return config.Save(cfg)
 }
 
-// handleFrameworkConfigPatch patches specific fields in a framework's config file.
-// Used by the onboarding form to set provider, model, etc. without replacing the
-// entire config. Creates the config file if it doesn't exist.
-// PUT /api/registry/frameworks/{id}/config
-func (s *Server) handleFrameworkConfigPatch(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-	defer cancel()
-
+// resolveFramework looks up a framework by ID from the registry and writes
+// an error response if the lookup fails. Returns nil if the caller should return.
+func resolveFramework(w http.ResponseWriter, ctx context.Context, id string) *registry.Framework {
 	client, err := registry.NewClient("")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-		return
+		return nil
 	}
-
 	fw, err := client.GetFramework(ctx, id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return nil
+	}
+	return fw
+}
+
+// PUT /api/registry/frameworks/{id}/config
+func (s *Server) handleFrameworkConfigPatch(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+	fw := resolveFramework(w, ctx, r.PathValue("id"))
+	if fw == nil {
 		return
 	}
 
@@ -857,29 +890,16 @@ func (s *Server) handleFrameworkConfigPatch(w http.ResponseWriter, r *http.Reque
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleFrameworkConfigRead returns the raw config file for a framework.
-// Unlike GET /api/agents/{name}/config, this reads directly from the file
-// path in the registry — no discovery or running agent required.
 // GET /api/registry/frameworks/{id}/config
 func (s *Server) handleFrameworkConfigRead(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-
-	client, err := registry.NewClient("")
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	fw := resolveFramework(w, ctx, r.PathValue("id"))
+	if fw == nil {
 		return
 	}
 
-	fw, err := client.GetFramework(ctx, id)
-	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-
-	absPath := config.ExpandHome(fw.ConfigPath)
-	data, err := os.ReadFile(absPath)
+	data, err := os.ReadFile(config.ExpandHome(fw.ConfigPath))
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "config file not found"})
 		return
@@ -890,6 +910,40 @@ func (s *Server) handleFrameworkConfigRead(w http.ResponseWriter, r *http.Reques
 		"format":  fw.ConfigFormat,
 		"path":    fw.ConfigPath,
 	})
+}
+
+// GET /api/registry/frameworks/{id}/health
+func (s *Server) handleFrameworkHealthProxy(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	fw := resolveFramework(w, ctx, r.PathValue("id"))
+	if fw == nil {
+		return
+	}
+
+	if fw.HealthURL == "" {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "no_health_url"})
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "GET", fw.HealthURL, nil)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "down", "error": err.Error()})
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "down", "error": err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	} else {
+		writeJSON(w, http.StatusOK, map[string]string{"status": "down", "code": fmt.Sprintf("%d", resp.StatusCode)})
+	}
 }
 
 // setupAdapter verifies adapter support

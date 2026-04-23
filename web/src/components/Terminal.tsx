@@ -30,7 +30,7 @@ interface TerminalProps {
   onOutput?: (line: string) => void;
 }
 
-const COPY_HINT = "drag to select + copy \u00b7 Shift+drag to keep selection";
+const COPY_HINT = "drag to select + copy \u00b7 drag+shift to keep selection";
 
 const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
   { agentName, onClose, initialCommand, useShell, inline, session, onOutput },
@@ -108,7 +108,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
       try { fitAddon.fit(); } catch { /* ignore */ }
     }, 50);
 
-    term.focus();
+    try { term.focus(); } catch { /* DOM may be detached in StrictMode */ }
 
     // Connect WebSocket
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -198,7 +198,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
 
     const handleResize = () => {
       if (cancelled) return;
-      fitAddon.fit();
+      try { fitAddon.fit(); } catch { return; }
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(`resize:${term.rows}:${term.cols}`);
       }
