@@ -72,6 +72,12 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     if (initializedRef.current) return;
     initializedRef.current = true;
 
+    // Cancellation flag: set synchronously on cleanup so that async
+    // callbacks (ws.onmessage, ws.onclose, setTimeout) from a previous
+    // mount don't interfere with a fresh mount. This makes the effect
+    // safe under React StrictMode's double-mount cycle.
+    let cancelled = false;
+
     const zoomPct = parseFloat(getComputedStyle(document.documentElement).fontSize) / 16;
     const termFontSize = Math.round(13 * zoomPct);
 
@@ -98,6 +104,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     term.loadAddon(new WebLinksAddon());
 
     setTimeout(() => {
+      if (cancelled) return;
       try { fitAddon.fit(); } catch { /* ignore */ }
     }, 50);
 
@@ -114,21 +121,18 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     ws.binaryType = "arraybuffer";
 
     ws.onopen = () => {
-      // Re-fit after connection to ensure terminal fills container
+      if (cancelled) return;
       try { fitAddon.fit(); } catch { /* ignore */ }
       ws.send(`resize:${term.rows}:${term.cols}`);
     };
 
-    // Line-oriented parser tees the same byte stream that goes into xterm, so
-    // FrameworksPhase can detect install / launch success markers in real time.
-    // Read onOutputRef on each line so parent re-renders with new callbacks
-    // take effect immediately (without resetting the buffer).
     const lineParser = createLineParser((line) => {
       onOutputRef.current?.(line);
     });
 
     let sentInitialCommand = false;
     ws.onmessage = (event) => {
+      if (cancelled) return;
       if (event.data instanceof ArrayBuffer) {
         const bytes = new Uint8Array(event.data);
         term.write(bytes);
@@ -137,7 +141,8 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
         if (initialCommand && !sentInitialCommand) {
           sentInitialCommand = true;
           setTimeout(() => {
-            if (ws.readyState === WebSocket.OPEN) ws.send(initialCommand);
+            if (cancelled || ws.readyState !== WebSocket.OPEN) return;
+            ws.send(initialCommand);
           }, 300);
         }
       }
@@ -146,9 +151,10 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     ws.onerror = () => {};
 
     ws.onclose = (event) => {
+      if (cancelled) return;
       setStatus("closed");
       if (event.code === 1000 && onCloseRef.current) {
-        setTimeout(() => onCloseRef.current?.(), 300);
+        setTimeout(() => { if (!cancelled) onCloseRef.current?.(); }, 300);
         return;
       }
       if (statusRef.current === "connecting") {
@@ -159,14 +165,12 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     };
 
     term.onData((data) => {
+      if (cancelled) return;
       if (ws.readyState === WebSocket.OPEN) ws.send(data);
     });
 
     term.attachCustomKeyEventHandler((event) => {
-      if (event.type !== "keydown") return true;
-      // Cmd+C (Mac) / Ctrl+Shift+C (Linux): copy selected text via the
-      // clipboard API. xterm.js renders on <canvas>, so native browser
-      // selection doesn't work — we read from xterm's internal selection.
+      if (cancelled || event.type !== "keydown") return true;
       if (event.key === "c") {
         const isMacCopy = event.metaKey && !event.ctrlKey;
         const isLinuxCopy = event.ctrlKey && event.shiftKey;
@@ -175,13 +179,12 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
           return false;
         }
       }
-      // Cmd+V (Mac) / Ctrl+Shift+V (Linux): paste from clipboard
       if (event.key === "v") {
         const isMacPaste = event.metaKey && !event.ctrlKey;
         const isLinuxPaste = event.ctrlKey && event.shiftKey;
         if (isMacPaste || isLinuxPaste) {
           navigator.clipboard.readText()
-            .then((text) => { if (ws.readyState === WebSocket.OPEN) ws.send(text); })
+            .then((text) => { if (!cancelled && ws.readyState === WebSocket.OPEN) ws.send(text); })
             .catch(() => {});
           return false;
         }
@@ -194,6 +197,7 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     });
 
     const handleResize = () => {
+      if (cancelled) return;
       fitAddon.fit();
       if (ws.readyState === WebSocket.OPEN) {
         ws.send(`resize:${term.rows}:${term.cols}`);
@@ -201,8 +205,6 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     };
     window.addEventListener("resize", handleResize);
 
-    // Suppress the browser context menu unless the user has a Shift+drag
-    // selection they might want to copy via right-click → Copy.
     const handleContextMenu = (e: MouseEvent) => {
       const hasNativeSelection = (window.getSelection()?.toString().length ?? 0) > 0;
       if (!hasNativeSelection) e.preventDefault();
@@ -213,12 +215,23 @@ const Terminal = forwardRef<TerminalHandle, TerminalProps>(function Terminal(
     setupDoneRef.current = true;
 
     return () => {
-      if (!setupDoneRef.current) return; // Not yet initialized — nothing to tear down
+      if (!setupDoneRef.current) return;
+
+      // Mark cancelled first so async callbacks from this mount bail out
+      // before touching state that the next mount owns.
+      cancelled = true;
 
       window.removeEventListener("resize", handleResize);
       termEl?.removeEventListener("contextmenu", handleContextMenu);
+
+      // Null out WebSocket handlers before closing to prevent onclose
+      // from firing after the flag is set but before GC.
       if (wsRef.current) {
         const w = wsRef.current;
+        w.onopen = null;
+        w.onmessage = null;
+        w.onerror = null;
+        w.onclose = null;
         if (w.readyState === WebSocket.OPEN) w.close(1000, "user closed terminal");
         else if (w.readyState === WebSocket.CONNECTING) w.close();
       }

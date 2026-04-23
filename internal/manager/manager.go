@@ -383,9 +383,9 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 		case ActionStart:
 			return runDetachedWithEnv(ctx, pcLogDir, mergeEnv(extraEnv), "picoclaw", "gateway", "--config", configPath)
 		case ActionStop:
-			return run(ctx, "picoclaw", "gateway", "stop")
+			return run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
 		case ActionRestart:
-			_ = run(ctx, "picoclaw", "gateway", "stop")
+			_ = run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
 			return runDetachedWithEnv(ctx, pcLogDir, mergeEnv(extraEnv), "picoclaw", "gateway", "--config", configPath)
 		default:
 			return fmt.Errorf("unknown action %q for picoclaw", action)
@@ -461,9 +461,9 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 		case ActionStart:
 			return runDetached(ctx, pcLogDir, "picoclaw", "gateway", "--config", configPath)
 		case ActionStop:
-			return run(ctx, "picoclaw", "gateway", "stop")
+			return run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
 		case ActionRestart:
-			_ = run(ctx, "picoclaw", "gateway", "stop")
+			_ = run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
 			return runDetached(ctx, pcLogDir, "picoclaw", "gateway", "--config", configPath)
 		default:
 			return fmt.Errorf("unknown action %q for picoclaw", action)

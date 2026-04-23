@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, Loader2 } from "lucide-react";
 import type { ConfigField, Framework } from "../lib/types";
 import { fetchFrameworkConfig, patchFrameworkConfig } from "../lib/api";
+import { shellQuote } from "../lib/shell";
 
 interface Props {
   framework: Framework;
@@ -80,7 +81,7 @@ export default function ConfigFieldsForm({ framework, onSaved, onEcho }: Props) 
     try {
       await patchFrameworkConfig(framework.id, values);
       setSaved(true);
-      onEcho?.(`echo "✓ Config saved to ${framework.config_path}"`);
+      onEcho?.(`echo "✓ Config saved to " ${shellQuote(framework.config_path)}`);
       onSaved?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : "failed to save");
@@ -168,10 +169,17 @@ function FieldInput({
 
   return (
     <div className="space-y-1">
-      <label htmlFor={id} className="block text-[10px] font-medium text-text-muted uppercase tracking-wider">
-        {field.label}
-        {field.required && <span className="text-red ml-0.5">*</span>}
-      </label>
+      {field.type === "checkbox" ? (
+        <div className="block text-[10px] font-medium text-text-muted uppercase tracking-wider">
+          {field.label}
+          {field.required && <span className="text-red ml-0.5">*</span>}
+        </div>
+      ) : (
+        <label htmlFor={id} className="block text-[10px] font-medium text-text-muted uppercase tracking-wider">
+          {field.label}
+          {field.required && <span className="text-red ml-0.5">*</span>}
+        </label>
+      )}
 
       {field.type === "select" && field.options ? (
         <select
@@ -185,7 +193,7 @@ function FieldInput({
           ))}
         </select>
       ) : field.type === "checkbox" ? (
-        <label className="flex items-center gap-2 text-xs text-text">
+        <div className="flex items-center gap-2 text-xs text-text">
           <input
             id={id}
             type="checkbox"
@@ -193,8 +201,8 @@ function FieldInput({
             onChange={(e) => onChange(e.target.checked)}
             className="rounded border-border"
           />
-          {field.description}
-        </label>
+          <label htmlFor={id}>{field.description}</label>
+        </div>
       ) : field.type === "number" ? (
         <input
           id={id}

@@ -277,7 +277,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
           </div>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { onRun(`echo "✓ Using existing ${apiKey.provider} key"`); onApiKeyConfirm?.(); }}
+              onClick={() => { onRun(`echo ${shellQuote("✓ Using existing " + apiKey.provider + " key")}`); onApiKeyConfirm?.(); }}
               className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
             >
               use this key
@@ -285,7 +285,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
             <span className="text-[10px] text-text-muted">or replace it below</span>
           </div>
         </div>
-        <ApiKeyForm provider={apiKey.provider} hideSavedStatus onSaved={() => { onRun(`echo "✓ ${apiKey.provider} key saved"`); onRefresh(); onApiKeyConfirm?.(); }} />
+        <ApiKeyForm provider={apiKey.provider} hideSavedStatus onSaved={() => { onRun(`echo ${shellQuote("✓ " + apiKey.provider + " key saved")}`); onRefresh(); onApiKeyConfirm?.(); }} />
       </div>
     );
   }
@@ -309,7 +309,7 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
           </button>
         )}
       </div>
-      <ApiKeyForm provider={apiKey.provider} onSaved={() => { onRun(`echo "✓ ${apiKey.provider} key saved"`); onRefresh(); onApiKeyConfirm?.(); }} />
+      <ApiKeyForm provider={apiKey.provider} onSaved={() => { onRun(`echo ${shellQuote("✓ " + apiKey.provider + " key saved")}`); onRefresh(); onApiKeyConfirm?.(); }} />
       <p className="text-[10px] text-text-muted">
         or set <code className="font-mono">{apiKey.provider.toUpperCase().replace(/-/g, "_")}_API_KEY</code>{" "}
         as an environment variable and restart Eyrie.

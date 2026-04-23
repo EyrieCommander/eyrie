@@ -135,9 +135,11 @@ export default function OnboardingFlow() {
   // The URL is the source of truth once set; localStorage is the fallback
   // for when the user navigates away and returns to / with no params.
   const computeDefault = useCallback((): PhaseId => {
-    return commanderHealthy === false ? "commander"
-      : frameworksReady ? "projects"
-        : "frameworks";
+    // When commanderHealthy is null (still loading), default to "commander"
+    // so the UI doesn't flicker to "frameworks" then jump back when the
+    // health check resolves.
+    if (commanderHealthy === null || commanderHealthy === false) return "commander";
+    return frameworksReady ? "projects" : "frameworks";
   }, [commanderHealthy, frameworksReady]);
 
   const [active, setActive] = useState<PhaseId>(() => {

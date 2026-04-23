@@ -686,16 +686,17 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 		sendUpdate()
 
 		configPath := config.ExpandHome(fw.ConfigPath)
-		removed := false
+		configFileFound := false
+		configDirFound := false
 
 		// Remove config file
 		if _, statErr := os.Stat(configPath); statErr == nil {
+			configFileFound = true
 			sendLog(fmt.Sprintf("Removing config file %s", fw.ConfigPath))
 			if err := os.Remove(configPath); err != nil {
 				sendLog(fmt.Sprintf("Warning: could not remove config file: %s", err))
 			} else {
 				sendLog("Config file removed")
-				removed = true
 			}
 		}
 
@@ -704,6 +705,7 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 		// could wipe user files (custom scripts, notes, etc.) that live
 		// alongside the framework config.
 		if _, statErr := os.Stat(configDir); statErr == nil {
+			configDirFound = true
 			entries, readErr := os.ReadDir(configDir)
 			if readErr != nil {
 				sendLog(fmt.Sprintf("Warning: could not read config directory %s: %s", fw.ConfigDir, readErr))
@@ -713,14 +715,13 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 					sendLog(fmt.Sprintf("Warning: could not remove empty config directory: %s", err))
 				} else {
 					sendLog("Config directory removed")
-					removed = true
 				}
 			} else {
 				sendLog(fmt.Sprintf("Config directory %s still has %d entries — leaving in place", fw.ConfigDir, len(entries)))
 			}
 		}
 
-		if !removed {
+		if !configFileFound && !configDirFound {
 			sendLog("Config not found, skipping")
 		}
 	}

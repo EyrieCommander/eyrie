@@ -80,10 +80,16 @@ func (s *PendingStore) Add(tool string, args map[string]any, summary, toolCallID
 
 	id := "pa_" + uuid.New().String()[:8]
 	now := time.Now()
+	// Copy args so the stored action and the returned copy have independent
+	// maps — callers can't mutate what's stored internally.
+	argsCopy := make(map[string]any, len(args))
+	for k, v := range args {
+		argsCopy[k] = v
+	}
 	pa := &PendingAction{
 		ID:         id,
 		Tool:       tool,
-		Args:       args,
+		Args:       argsCopy,
 		Summary:    summary,
 		CreatedAt:  now,
 		ExpiresAt:  now.Add(s.ttl),
@@ -92,6 +98,12 @@ func (s *PendingStore) Add(tool string, args map[string]any, summary, toolCallID
 	}
 	s.actions[id] = pa
 	copy := *pa
+	// Give the returned copy its own Args map too.
+	retArgs := make(map[string]any, len(argsCopy))
+	for k, v := range argsCopy {
+		retArgs[k] = v
+	}
+	copy.Args = retArgs
 	return &copy
 }
 
@@ -107,6 +119,7 @@ func (s *PendingStore) Get(id string) (*PendingAction, error) {
 		return nil, fmt.Errorf("pending action %q not found or expired", id)
 	}
 	copy := *pa
+	copy.Args = copyArgs(pa.Args)
 	return &copy, nil
 }
 
@@ -126,6 +139,7 @@ func (s *PendingStore) Approve(id string) (*PendingAction, error) {
 	}
 	pa.Status = PendingApproved
 	copy := *pa
+	copy.Args = copyArgs(pa.Args)
 	return &copy, nil
 }
 
@@ -145,7 +159,21 @@ func (s *PendingStore) Deny(id, reason string) (*PendingAction, error) {
 	pa.Status = PendingDenied
 	pa.DenialReason = reason
 	copy := *pa
+	copy.Args = copyArgs(pa.Args)
 	return &copy, nil
+}
+
+// copyArgs returns a shallow copy of a map so returned PendingAction copies
+// have independent Args that can't mutate the stored version.
+func copyArgs(src map[string]any) map[string]any {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]any, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // sweepLocked removes expired entries. Caller must hold s.mu.

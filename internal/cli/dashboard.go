@@ -34,6 +34,9 @@ func init() {
 func runDashboard(cmd *cobra.Command, args []string) error {
 	// Check for tmux (required for persistent terminal sessions)
 	if _, err := exec.LookPath("tmux"); err != nil {
+		if runtime.GOOS == "windows" {
+			return fmt.Errorf("tmux is required but not found. On Windows, install WSL and run: apt install tmux")
+		}
 		return fmt.Errorf("tmux is required but not found. Install it with: brew install tmux (macOS) or apt install tmux (Linux)")
 	}
 

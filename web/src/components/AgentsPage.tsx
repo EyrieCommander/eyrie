@@ -109,11 +109,11 @@ export default function AgentsPage() {
           </div>
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
-              <span className="h-1.5 w-1.5 rounded-full shrink-0 bg-green" />
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${backendDown ? "bg-red" : "bg-green"}`} />
               <span className="font-medium text-text">Eyrie</span>
               <span className="rounded px-1.5 py-0.5 text-[9px] font-medium shrink-0 bg-purple-400/10 text-purple-400">commander</span>
             </div>
-            <div className="mt-1 text-text-muted">built-in · chat via panel &rarr;</div>
+            <div className="mt-1 text-text-muted">{backendDown ? "offline" : "built-in"} · chat via panel &rarr;</div>
           </div>
         </div>
       </div>

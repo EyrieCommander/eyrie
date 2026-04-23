@@ -609,7 +609,9 @@ export default function HierarchyPage() {
 
   useEffect(() => {
     if (!hierarchy || backendDown) return;
-    fetch("/api/metrics").then((r) => { if (r.ok) return r.json(); throw new Error(`metrics: ${r.status}`); }).then(setMetrics).catch(() => {});
+    const controller = new AbortController();
+    fetch("/api/metrics", { signal: controller.signal }).then((r) => { if (r.ok) return r.json(); throw new Error(`metrics: ${r.status}`); }).then(setMetrics).catch(() => {});
+    return () => { controller.abort(); };
   }, [hierarchy, backendDown]);
 
   // Show project dashboard when commander is set, guide view otherwise

@@ -199,7 +199,9 @@ export default function FrameworkDetail() {
             <button
               onClick={() => {
                 if (!safeBinaryName) return;
-                sendToTerminal(`which ${safeBinaryName} && ls -la $(which ${safeBinaryName}) || echo "not found in PATH"`);
+                // Use command -v (POSIX) rather than which, and quote the
+                // subshell so paths with spaces are handled correctly.
+                sendToTerminal(`p=$(command -v ${safeBinaryName}) && ls -la "$p" || echo "${safeBinaryName} not found in PATH"`);
               }}
               disabled={!safeBinaryName}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors disabled:opacity-50"

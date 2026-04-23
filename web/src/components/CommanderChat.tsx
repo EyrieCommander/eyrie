@@ -102,49 +102,55 @@ export default function CommanderChat({ phase }: Props) {
 
   /** Fetch history + memory and update state. Shared across mount,
    *  keys-changed, and health-poll paths. */
-  const rehydrate = useCallback(async () => {
+  const rehydrate = useCallback(async (signal?: AbortSignal) => {
     const history = await fetchCommanderHistory();
+    if (signal?.aborted) return;
     setUnavailable(false);
     if (history.length > 0) {
+      if (signal?.aborted) return;
       setItems(history.map((m: CommanderHistoryMessage) => ({
         role: m.role as "user" | "assistant",
         content: m.content,
       })));
     }
-    fetchCommanderMemory().then(setMemories).catch(() => {});
+    fetchCommanderMemory().then((mem) => { if (!signal?.aborted) setMemories(mem); }).catch(() => {});
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    rehydrate().catch(() => { if (!cancelled) setUnavailable(true); });
-    return () => { cancelled = true; };
+    const ac = new AbortController();
+    rehydrate(ac.signal).catch(() => { if (!ac.signal.aborted) setUnavailable(true); });
+    return () => { ac.abort(); };
   }, [rehydrate]);
 
   // Immediately re-check when keys change (add or delete from any page)
   useEffect(() => {
+    let ac: AbortController | null = null;
     const handler = () => {
-      rehydrate().catch(() => setUnavailable(true));
+      ac?.abort();
+      ac = new AbortController();
+      rehydrate(ac.signal).catch(() => { if (!ac?.signal.aborted) setUnavailable(true); });
     };
     window.addEventListener(KEYS_CHANGED_EVENT, handler);
-    return () => window.removeEventListener(KEYS_CHANGED_EVENT, handler);
+    return () => { window.removeEventListener(KEYS_CHANGED_EVENT, handler); ac?.abort(); };
   }, [rehydrate]);
 
   // Continuous health poll — fast (5s) while unavailable, slow (15s) when up.
   // Detects both key addition (becomes available) and key deletion (goes offline).
   useEffect(() => {
+    const ac = new AbortController();
     const interval = unavailable ? 5_000 : 15_000;
     const id = setInterval(async () => {
       try {
         if (unavailable) {
-          await rehydrate();
+          await rehydrate(ac.signal);
         } else {
           await fetchCommanderHistory();
         }
       } catch {
-        if (!unavailable) setUnavailable(true);
+        if (!ac.signal.aborted && !unavailable) setUnavailable(true);
       }
     }, interval);
-    return () => clearInterval(id);
+    return () => { clearInterval(id); ac.abort(); };
   }, [unavailable, rehydrate]);
 
   // ── SSE event handler ──────────────────────────────────────────────

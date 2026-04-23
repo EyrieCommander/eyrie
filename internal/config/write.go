@@ -300,7 +300,11 @@ func PatchConfigFile(path string, format string, fields map[string]any) error {
 
 	// Read existing config or start with empty map
 	cfg := make(map[string]any)
-	if data, err := os.ReadFile(absPath); err == nil && len(data) > 0 {
+	data, readErr := os.ReadFile(absPath)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		return fmt.Errorf("failed to read config file: %w", readErr)
+	}
+	if readErr == nil && len(data) > 0 {
 		switch format {
 		case "toml":
 			if _, err := toml.Decode(string(data), &cfg); err != nil {
@@ -310,6 +314,7 @@ func PatchConfigFile(path string, format string, fields map[string]any) error {
 			if err := json.Unmarshal(data, &cfg); err != nil {
 				return fmt.Errorf("failed to parse existing JSON: %w", err)
 			}
+			CoerceJSONNumbers(cfg)
 		case "yaml", "yml":
 			if err := yaml.Unmarshal(data, &cfg); err != nil {
 				return fmt.Errorf("failed to parse existing YAML: %w", err)
@@ -320,8 +325,14 @@ func PatchConfigFile(path string, format string, fields map[string]any) error {
 	}
 
 	// Patch fields
+	var blockedPaths []string
 	for key, val := range fields {
-		SetNestedValue(cfg, key, val)
+		if !SetNestedValue(cfg, key, val) {
+			blockedPaths = append(blockedPaths, key)
+		}
+	}
+	if len(blockedPaths) > 0 {
+		return fmt.Errorf("could not set paths (intermediate value is not a map): %s", strings.Join(blockedPaths, ", "))
 	}
 
 	// Ensure parent directory exists

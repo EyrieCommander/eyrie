@@ -86,7 +86,7 @@ export const PATTERNS: Record<SubStepId, Array<{ kind: string; re: RegExp }>> = 
   api_key: [],
   launch: [
     { kind: "gateway_started", re: /Gateway started on/i },
-    { kind: "listening", re: /Listening on :\d+/ },
+    { kind: "listening", re: /Listening on (?:[\w.]+:)?\d+|Listening on port \d+/i },
     // zeroclaw / picoclaw "ready" status line after `service start`.
     // Alternation is grouped so "service" is required before both
     // "ready" and "running on" — without the group, "running on" would

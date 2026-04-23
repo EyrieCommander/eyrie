@@ -892,11 +892,13 @@ function escapeTomlString(s: string): string {
  *  unquoted. Unknown types default to strings for safety. */
 function formatYamlValue(value: string, fieldType?: string): string {
   if (fieldType === "number") {
+    if (value.trim() === "") throw new Error("Number field cannot be empty");
     const n = Number(value);
     if (!Number.isFinite(n)) throw new Error("Invalid number");
     return String(n);
   }
   if (fieldType === "boolean") {
+    if (value.trim() === "") throw new Error("Boolean field cannot be empty");
     return value === "true" ? "true" : "false";
   }
   // String: always double-quote + escape. This sidesteps every edge case

@@ -227,7 +227,10 @@ func (v *KeyVault) load() error {
 }
 
 func (v *KeyVault) save() error {
-	if v.noPersist || v.path == "" {
+	if v.noPersist {
+		return nil
+	}
+	if v.path == "" {
 		return fmt.Errorf("cannot save: vault initialized without storage path")
 	}
 	if err := os.MkdirAll(filepath.Dir(v.path), 0700); err != nil {

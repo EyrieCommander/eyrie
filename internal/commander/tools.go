@@ -202,7 +202,7 @@ type personaSummary struct {
 	Name          string `json:"name"`
 	Description   string `json:"description,omitempty"`
 	HierarchyRole string `json:"hierarchy_role,omitempty"`
-	Installed     bool   `json:"installed,omitempty"`
+	Installed     bool   `json:"installed"`
 }
 
 type agentSummary struct {
@@ -514,8 +514,8 @@ func sendToProjectTool(send func(ctx context.Context, projectID, message string)
 				name = p.Name
 			}
 			preview := message
-			if len(preview) > 80 {
-				preview = preview[:80] + "…"
+			if runes := []rune(preview); len(runes) > 80 {
+				preview = string(runes[:80]) + "…"
 			}
 			return fmt.Sprintf("Send to %s: %q", name, preview)
 		},
