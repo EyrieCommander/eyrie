@@ -297,18 +297,17 @@ export default function FrameworkCompare() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Scroll to highlighted framework card when navigated from mission control
+  // Scroll to the relevant section once frameworks finish loading.
+  // highlight takes priority over compare — if both URL params are set,
+  // scroll to the card rather than the comparison tables.
   useEffect(() => {
-    if (highlightId && highlightRef.current && !loading) {
+    if (loading) return;
+    if (highlightId && highlightRef.current) {
       highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
-    }
-  }, [highlightId, loading]);
-  // Scroll to comparison section when arriving from "I'm not sure"
-  useEffect(() => {
-    if (compareMode && compareRef.current && !loading) {
+    } else if (compareMode && compareRef.current) {
       compareRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
     }
-  }, [compareMode, loading]);
+  }, [highlightId, compareMode, loading]);
   useEffect(() => {
     loadFrameworks();
   }, []);

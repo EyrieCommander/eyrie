@@ -6,12 +6,13 @@
 //
 // All commands run through the parent's tmux terminal (via onRun), so the
 // terminal output appears below the panel and the parser can detect success
-// markers to auto-advance the timeline.
+// markers to update step status and auto-advance the timeline.
 
 import { useEffect, useState } from "react";
 import { Download, Terminal as TerminalIcon, FileEdit, Play, Check, MessageSquare } from "lucide-react";
 import FrameworkCard from "./FrameworkCard";
 import ApiKeyForm from "./ApiKeyForm";
+import ConfigFieldsForm from "./ConfigFieldsForm";
 import type { Framework } from "../lib/types";
 import type { ApiKeyState } from "../lib/frameworkStatus";
 import type { InnerStepId } from "./FrameworkProgressTimeline";
@@ -32,6 +33,14 @@ interface Props {
   onRun: (cmd: string) => void;
   /** Refetch framework detail + keys (called after edits). */
   onRefresh: () => void;
+  /** The masked key value for display (e.g. "sk-o***9505"). */
+  maskedApiKey?: string;
+  /** User confirms the api key step (even when a key already exists). */
+  onApiKeyConfirm?: () => void;
+  /** Whether the user has confirmed the api key step. */
+  apiKeyConfirmed?: boolean;
+  /** Navigate to a different inner step (e.g. back to configure). */
+  onNavigateStep?: (step: InnerStepId) => void;
   /** Sanitised framework id safe to interpolate into shell commands. */
   safeId: string | null;
 }
@@ -89,18 +98,18 @@ function InstallStep({ framework, safeId, onRun }: Props) {
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <OptionCard
           icon={<Download className="h-3.5 w-3.5" />}
-          title="auto install with defaults"
+          title="install via eyrie"
           hint={<code className="text-[10px]">$ eyrie install {safeId} -y</code>}
-          description="Runs the full 4-phase install: binary → config → discovery → adapter."
+          description="Downloads the binary and wires it into Eyrie's discovery system."
           onAction={handleAuto}
           actionLabel="start install"
           actionStyle="primary"
         />
         <OptionCard
           icon={<TerminalIcon className="h-3.5 w-3.5" />}
-          title="install in terminal"
+          title="install manually"
           hint={<code className="text-[10px]">$ {framework.install_cmd || `eyrie install ${safeId}`}</code>}
-          description="Runs just the framework's own install command. You handle config + discovery yourself."
+          description="Run the framework's own install command if you prefer to manage it yourself."
           onAction={handleManual}
           actionLabel="paste into terminal"
           actionStyle="secondary"
@@ -122,20 +131,17 @@ function InstallStep({ framework, safeId, onRun }: Props) {
 }
 
 // ── step 3: configure ───────────────────────────────────────────────────
-function ConfigureStep({ framework, safeId, onRun }: Props) {
+function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;
-  const [path, setPath] = useState<"wizard" | "edit">("wizard");
+  const hasSchema = (framework.config_schema?.common_fields?.length ?? 0) > 0;
+  const [tab, setTab] = useState<"form" | "wizard" | "edit">(hasSchema ? "form" : "wizard");
 
   const handleWizard = () => {
     const binary = framework.binary_path || safeId;
-    // Quote the binary path so paths with spaces ("/Applications/My Claw/bin")
-    // don't parse as two argv entries.
     onRun(`${shellQuote(binary)} onboard`);
   };
 
   const handleEdit = () => {
-    // Quote the config path for the same reason.
-    // Use string concat to avoid the template literal escaping $ as $\{...}
     onRun("${EDITOR:-vi} " + shellQuote(framework.config_path));
   };
 
@@ -143,27 +149,29 @@ function ConfigureStep({ framework, safeId, onRun }: Props) {
     <div className="space-y-3">
       <StepHeader n={3} label="configure" />
       <p className="text-xs text-text-secondary">
-        Pick a provider, model, and defaults. Or run the framework's own onboarding
-        wizard if you prefer. Config lives at{" "}
+        Pick a provider, model, and defaults. Config lives at{" "}
         <code className="text-[10px] text-text-muted">{framework.config_path}</code>.
       </p>
 
       <div className="flex border-b border-border">
-        <TabButton active={path === "wizard"} onClick={() => setPath("wizard")}>
+        {hasSchema && (
+          <TabButton active={tab === "form"} onClick={() => setTab("form")}>
+            quick setup
+          </TabButton>
+        )}
+        <TabButton active={tab === "wizard"} onClick={() => setTab("wizard")}>
           run wizard in terminal
         </TabButton>
-        <TabButton active={path === "edit"} onClick={() => setPath("edit")}>
+        <TabButton active={tab === "edit"} onClick={() => setTab("edit")}>
           edit config file
         </TabButton>
       </div>
 
-      <p className="text-[10px] text-text-muted">
-        (Inline form for <code>config_schema.common_fields</code> is a follow-up —
-        the framework's own wizard handles interactive prompts for TOML/YAML configs
-        that can't be safely round-tripped from a form.)
-      </p>
+      {tab === "form" && hasSchema && (
+        <ConfigFieldsForm framework={framework} onSaved={onRefresh} onEcho={onRun} />
+      )}
 
-      {path === "wizard" ? (
+      {tab === "wizard" && (
         <div className="space-y-2">
           <code className="block rounded border border-border bg-bg px-2 py-1.5 text-[11px] text-text-muted">
             $ {framework.binary_path || safeId} onboard
@@ -176,7 +184,9 @@ function ConfigureStep({ framework, safeId, onRun }: Props) {
             run wizard
           </button>
         </div>
-      ) : (
+      )}
+
+      {tab === "edit" && (
         <div className="space-y-2">
           <code className="block rounded border border-border bg-bg px-2 py-1.5 text-[11px] text-text-muted">
             $ $EDITOR {framework.config_path}
@@ -195,7 +205,7 @@ function ConfigureStep({ framework, safeId, onRun }: Props) {
 }
 
 // ── step 4: api key ─────────────────────────────────────────────────────
-function ApiKeyStep({ framework, apiKey, onRefresh }: Props) {
+function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefresh, onApiKeyConfirm, onNavigateStep, onRun }: Props) {
   if (!framework) return <WaitingForFramework />;
 
   // Local / no-key providers auto-skip. Show a confirmation card.
@@ -232,16 +242,74 @@ function ApiKeyStep({ framework, apiKey, onRefresh }: Props) {
     );
   }
 
+  // Key already exists in the vault — show confirmation UI
+  if (apiKey.hasKey && !apiKeyConfirmed) {
+    return (
+      <div className="space-y-3">
+        <StepHeader n={4} label="api key" />
+        <div className="flex items-center justify-between rounded border border-border bg-bg px-3 py-2">
+          <div>
+            <p className="text-[10px] uppercase tracking-wider text-text-muted">
+              detected provider (from your config)
+            </p>
+            <p className="mt-0.5 text-xs font-semibold text-text">{apiKey.provider}</p>
+          </div>
+          {onNavigateStep && (
+            <button
+              onClick={() => onNavigateStep("configure")}
+              className="text-[10px] text-text-muted hover:text-accent transition-colors"
+            >
+              change provider &rarr;
+            </button>
+          )}
+        </div>
+        <div className="rounded border border-green/30 bg-green/5 px-4 py-3 space-y-3">
+          <div className="flex items-center gap-2">
+            <Check className="h-3.5 w-3.5 text-green shrink-0" />
+            <div>
+              <p className="text-xs text-text">
+                A key for <span className="font-semibold">{apiKey.provider}</span> is already in the vault.
+              </p>
+              {maskedApiKey && (
+                <p className="text-[10px] text-text-muted font-mono mt-0.5">{maskedApiKey}</p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => { onRun(`echo "✓ Using existing ${apiKey.provider} key"`); onApiKeyConfirm?.(); }}
+              className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover"
+            >
+              use this key
+            </button>
+            <span className="text-[10px] text-text-muted">or replace it below</span>
+          </div>
+        </div>
+        <ApiKeyForm provider={apiKey.provider} hideSavedStatus onSaved={() => { onRun(`echo "✓ ${apiKey.provider} key saved"`); onRefresh(); onApiKeyConfirm?.(); }} />
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-3">
       <StepHeader n={4} label="api key" />
-      <div className="rounded border border-border bg-bg px-3 py-2">
-        <p className="text-[10px] uppercase tracking-wider text-text-muted">
-          detected provider (from your config)
-        </p>
-        <p className="mt-0.5 text-xs font-semibold text-text">{apiKey.provider}</p>
+      <div className="flex items-center justify-between rounded border border-border bg-bg px-3 py-2">
+        <div>
+          <p className="text-[10px] uppercase tracking-wider text-text-muted">
+            detected provider (from your config)
+          </p>
+          <p className="mt-0.5 text-xs font-semibold text-text">{apiKey.provider}</p>
+        </div>
+        {onNavigateStep && (
+          <button
+            onClick={() => onNavigateStep("configure")}
+            className="text-[10px] text-text-muted hover:text-accent transition-colors"
+          >
+            change provider &rarr;
+          </button>
+        )}
       </div>
-      <ApiKeyForm provider={apiKey.provider} onSaved={onRefresh} />
+      <ApiKeyForm provider={apiKey.provider} onSaved={() => { onRun(`echo "✓ ${apiKey.provider} key saved"`); onRefresh(); onApiKeyConfirm?.(); }} />
       <p className="text-[10px] text-text-muted">
         or set <code className="font-mono">{apiKey.provider.toUpperCase().replace(/-/g, "_")}_API_KEY</code>{" "}
         as an environment variable and restart Eyrie.

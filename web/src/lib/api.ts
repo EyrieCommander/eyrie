@@ -346,6 +346,29 @@ export async function getFrameworkDetail(id: string): Promise<Framework> {
   return res.json();
 }
 
+export async function fetchFrameworkConfig(
+  id: string,
+): Promise<{ content: string; format: string; path: string }> {
+  const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks/${id}/config`);
+  if (!res.ok) return { content: "", format: "", path: "" };
+  return res.json();
+}
+
+export async function patchFrameworkConfig(
+  id: string,
+  fields: Record<string, unknown>,
+): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks/${id}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ fields }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to patch config: ${res.statusText}`);
+  }
+}
+
 export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
   const qs = refresh ? "?refresh=true" : "";
   const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks${qs}`);

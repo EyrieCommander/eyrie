@@ -5,12 +5,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 )
 
-// tmuxConfContent is a minimal tmux config that makes tmux invisible to the user.
-// No prefix key, no status bar — the user just sees a normal shell that happens
-// to persist across WebSocket reconnections.
-const tmuxConfContent = `# Eyrie managed tmux config v6 — do not edit
+// tmuxConfBase is the platform-independent part of the tmux config.
+// clipboardBindings are appended by tmuxConfContent() when a clipboard
+// tool is available.
+const tmuxConfBase = `# Eyrie managed tmux config v7 — do not edit
 # Minimal tmux: no prefix key, persistent sessions, clean status bar.
 
 set -g prefix None
@@ -26,13 +27,53 @@ set -g window-status-format ""
 set -g history-limit 50000
 set -g mouse on
 set -g default-terminal "xterm-256color"
-
-# Mouse drag selects text in copy mode. On release, pipe the selection to
-# the OS clipboard and exit copy mode. This lets scrollback work (mouse on)
-# while still supporting copy via drag-select.
-bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
-bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"
 `
+
+// clipboardCommand returns the best available clipboard tool for the
+// current platform, or "" if none is found.
+func clipboardCommand() string {
+	switch runtime.GOOS {
+	case "darwin":
+		if _, err := exec.LookPath("pbcopy"); err == nil {
+			return "pbcopy"
+		}
+	case "linux":
+		// Wayland first, then X11
+		for _, cmd := range []string{"wl-copy", "xclip -selection clipboard", "xsel --clipboard"} {
+			bin := cmd
+			// For commands with args, check just the binary name
+			for i, c := range cmd {
+				if c == ' ' {
+					bin = cmd[:i]
+					break
+				}
+			}
+			if _, err := exec.LookPath(bin); err == nil {
+				return cmd
+			}
+		}
+	case "windows":
+		if _, err := exec.LookPath("clip.exe"); err == nil {
+			return "clip.exe"
+		}
+	}
+	return ""
+}
+
+// tmuxConfContent generates the full tmux config, appending clipboard
+// bindings only when a clipboard tool is available on this platform.
+func tmuxConfContent() string {
+	clip := clipboardCommand()
+	if clip == "" {
+		return tmuxConfBase
+	}
+	return tmuxConfBase + fmt.Sprintf(`
+# Mouse drag selects text in copy mode. On release, pipe the selection to
+# the OS clipboard and exit copy mode.
+bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "%s"
+bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "%s"
+`, clip, clip)
+}
 
 // eyrieHomeDir returns ~/.eyrie, preferring os.UserHomeDir and falling back
 // to $HOME. Returns an error if neither is usable — callers should treat
@@ -71,9 +112,11 @@ func ensureTmuxConfig() (string, error) {
 		return "", err
 	}
 
+	content := tmuxConfContent()
+
 	// Check if it already has the right content
 	existing, rerr := os.ReadFile(path)
-	if rerr == nil && string(existing) == tmuxConfContent {
+	if rerr == nil && string(existing) == content {
 		return path, nil
 	}
 
@@ -81,7 +124,7 @@ func ensureTmuxConfig() (string, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
 		return path, fmt.Errorf("creating tmux config dir %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, []byte(tmuxConfContent), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		return path, fmt.Errorf("writing tmux config %s: %w", path, err)
 	}
 	return path, nil

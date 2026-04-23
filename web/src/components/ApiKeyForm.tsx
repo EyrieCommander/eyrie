@@ -21,9 +21,11 @@ interface Props {
   onSaved?: () => void;
   /** Placeholder shown in the password input. Defaults to a generic "sk-...". */
   placeholder?: string;
+  /** Hide the "saved: sk-***" existing-key indicator (when the caller shows it elsewhere). */
+  hideSavedStatus?: boolean;
 }
 
-export default function ApiKeyForm({ provider, onSaved, placeholder }: Props) {
+export default function ApiKeyForm({ provider, onSaved, placeholder, hideSavedStatus }: Props) {
   const [existing, setExisting] = useState<KeyEntry | null>(null);
   const [value, setValue] = useState("");
   const [show, setShow] = useState(false);
@@ -82,7 +84,7 @@ export default function ApiKeyForm({ provider, onSaved, placeholder }: Props) {
 
   return (
     <div className="space-y-2">
-      {existing?.has_key && (
+      {existing?.has_key && !hideSavedStatus && (
         <div className="flex items-center gap-2 text-[10px] text-text-muted">
           <Check className="h-3 w-3 text-green" />
           <span>saved:</span>

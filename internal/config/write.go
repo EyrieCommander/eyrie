@@ -6,6 +6,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 	"gopkg.in/yaml.v3"
@@ -264,4 +265,70 @@ func WriteConfigAtomic(path string, format string, data interface{}) error {
 	default:
 		return fmt.Errorf("unsupported config format: %s", format)
 	}
+}
+
+// SetNestedValue sets a value at a dot-separated path in a nested map,
+// creating intermediate maps as needed. Returns false if a non-map node
+// blocked the path (e.g., "a.b" where "a" is a string, not a map).
+func SetNestedValue(m map[string]any, path string, value any) bool {
+	parts := strings.Split(path, ".")
+	current := m
+	for i := 0; i < len(parts)-1; i++ {
+		existing, exists := current[parts[i]]
+		if !exists {
+			next := make(map[string]any)
+			current[parts[i]] = next
+			current = next
+			continue
+		}
+		next, ok := existing.(map[string]any)
+		if !ok {
+			return false
+		}
+		current = next
+	}
+	key := parts[len(parts)-1]
+	current[key] = value
+	return true
+}
+
+// PatchConfigFile reads a config file, patches the given dot-path fields,
+// and writes back atomically. Creates the file (with parent dirs) if it
+// doesn't exist. format is "toml", "json", or "yaml".
+func PatchConfigFile(path string, format string, fields map[string]any) error {
+	absPath := ExpandHome(path)
+
+	// Read existing config or start with empty map
+	cfg := make(map[string]any)
+	if data, err := os.ReadFile(absPath); err == nil && len(data) > 0 {
+		switch format {
+		case "toml":
+			if _, err := toml.Decode(string(data), &cfg); err != nil {
+				return fmt.Errorf("failed to parse existing TOML: %w", err)
+			}
+		case "json":
+			if err := json.Unmarshal(data, &cfg); err != nil {
+				return fmt.Errorf("failed to parse existing JSON: %w", err)
+			}
+		case "yaml", "yml":
+			if err := yaml.Unmarshal(data, &cfg); err != nil {
+				return fmt.Errorf("failed to parse existing YAML: %w", err)
+			}
+		default:
+			return fmt.Errorf("unsupported format: %s", format)
+		}
+	}
+
+	// Patch fields
+	for key, val := range fields {
+		SetNestedValue(cfg, key, val)
+	}
+
+	// Ensure parent directory exists
+	dir := filepath.Dir(absPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	return WriteConfigAtomic(absPath, format, cfg)
 }

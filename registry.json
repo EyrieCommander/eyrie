@@ -35,7 +35,8 @@
             "required": true,
             "description": "port for gateway HTTP API",
             "min": 1024,
-            "max": 65535
+            "max": 65535,
+            "advanced": true
           },
           {
             "key": "gateway.host",
@@ -43,7 +44,8 @@
             "type": "text",
             "default": "127.0.0.1",
             "required": true,
-            "description": "host address for gateway to bind to"
+            "description": "host address for gateway to bind to",
+            "advanced": true
           },
           {
             "key": "default_provider",
@@ -68,7 +70,8 @@
             "type": "text",
             "default": "~/.zeroclaw/workspace",
             "required": false,
-            "description": "directory for agent workspace files"
+            "description": "directory for agent workspace files",
+            "advanced": true
           },
           {
             "key": "memory.backend",
@@ -77,7 +80,8 @@
             "options": ["sqlite", "memory"],
             "default": "sqlite",
             "required": true,
-            "description": "storage backend for conversation memory"
+            "description": "storage backend for conversation memory",
+            "advanced": true
           }
         ],
         "api_key_hint": "set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable before starting zeroclaw"
@@ -116,7 +120,8 @@
             "required": true,
             "description": "port for gateway WebSocket RPC",
             "min": 1024,
-            "max": 65535
+            "max": 65535,
+            "advanced": true
           },
           {
             "key": "gateway.bind",
@@ -124,7 +129,8 @@
             "type": "text",
             "default": "127.0.0.1",
             "required": true,
-            "description": "address for gateway to bind to"
+            "description": "address for gateway to bind to",
+            "advanced": true
           },
           {
             "key": "provider",
@@ -150,7 +156,8 @@
             "options": ["coding", "research", "assistant", "custom"],
             "default": "coding",
             "required": false,
-            "description": "pre-configured toolset profile"
+            "description": "pre-configured toolset profile",
+            "advanced": true
           },
           {
             "key": "channels",
@@ -216,7 +223,8 @@
             "options": ["local", "ssh", "docker", "modal"],
             "default": "local",
             "required": true,
-            "description": "execution environment for agent commands"
+            "description": "execution environment for agent commands",
+            "advanced": true
           },
           {
             "key": "agent.max_turns",
@@ -226,7 +234,8 @@
             "required": false,
             "description": "maximum conversation turns before reset",
             "min": 1,
-            "max": 1000
+            "max": 1000,
+            "advanced": true
           },
           {
             "key": "agent.reasoning_effort",
@@ -235,7 +244,8 @@
             "options": ["low", "medium", "high"],
             "default": "medium",
             "required": false,
-            "description": "how much reasoning the agent should apply"
+            "description": "how much reasoning the agent should apply",
+            "advanced": true
           },
           {
             "key": "platforms",
@@ -283,7 +293,8 @@
             "required": true,
             "description": "port for the gateway health and channel servers",
             "min": 1024,
-            "max": 65535
+            "max": 65535,
+            "advanced": true
           },
           {
             "key": "gateway.host",
@@ -291,7 +302,8 @@
             "type": "text",
             "default": "127.0.0.1",
             "required": true,
-            "description": "host address for gateway to bind to"
+            "description": "host address for gateway to bind to",
+            "advanced": true
           },
           {
             "key": "agents.defaults.provider",
@@ -316,7 +328,8 @@
             "type": "checkbox",
             "default": true,
             "required": false,
-            "description": "restrict file and shell access to the workspace directory"
+            "description": "restrict file and shell access to the workspace directory",
+            "advanced": true
           },
           {
             "key": "channels",

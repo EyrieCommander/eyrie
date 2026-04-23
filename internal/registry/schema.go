@@ -68,4 +68,5 @@ type ConfigField struct {
 	Options     []string `json:"options,omitempty"` // For select/multiselect types
 	Min         *int     `json:"min,omitempty"` // For number types
 	Max         *int     `json:"max,omitempty"` // For number types
+	Advanced    bool     `json:"advanced,omitempty"` // Hide behind "advanced" toggle in quick setup
 }

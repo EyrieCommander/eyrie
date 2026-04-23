@@ -91,7 +91,9 @@ export default function FrameworkProgressTimeline({
                     ? "text-green hover:bg-green/10"
                     : isError
                       ? "text-red hover:bg-red/10"
-                      : "text-text-muted cursor-not-allowed"
+                      : state === "current"
+                        ? "text-text-secondary hover:bg-surface-hover/50"
+                        : "text-text-muted cursor-not-allowed"
               }`}
             >
               <span

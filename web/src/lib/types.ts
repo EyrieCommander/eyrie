@@ -106,6 +106,8 @@ export interface ConfigField {
   options?: string[];
   min?: number;
   max?: number;
+  /** Hide behind an "advanced" toggle in the quick setup form. */
+  advanced?: boolean;
 }
 
 export interface ConfigSchema {

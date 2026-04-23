@@ -815,6 +815,82 @@ func unwireDiscovery(fw *registry.Framework) error {
 	return config.Save(cfg)
 }
 
+// handleFrameworkConfigPatch patches specific fields in a framework's config file.
+// Used by the onboarding form to set provider, model, etc. without replacing the
+// entire config. Creates the config file if it doesn't exist.
+// PUT /api/registry/frameworks/{id}/config
+func (s *Server) handleFrameworkConfigPatch(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	client, err := registry.NewClient("")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	fw, err := client.GetFramework(ctx, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	var body struct {
+		Fields map[string]any `json:"fields"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
+		return
+	}
+	if len(body.Fields) == 0 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no fields to patch"})
+		return
+	}
+
+	if err := config.PatchConfigFile(fw.ConfigPath, fw.ConfigFormat, body.Fields); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+// handleFrameworkConfigRead returns the raw config file for a framework.
+// Unlike GET /api/agents/{name}/config, this reads directly from the file
+// path in the registry — no discovery or running agent required.
+// GET /api/registry/frameworks/{id}/config
+func (s *Server) handleFrameworkConfigRead(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	client, err := registry.NewClient("")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		return
+	}
+
+	fw, err := client.GetFramework(ctx, id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+		return
+	}
+
+	absPath := config.ExpandHome(fw.ConfigPath)
+	data, err := os.ReadFile(absPath)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "config file not found"})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, map[string]string{
+		"content": string(data),
+		"format":  fw.ConfigFormat,
+		"path":    fw.ConfigPath,
+	})
+}
+
 // setupAdapter verifies adapter support
 func setupAdapter(fw *registry.Framework, progress *installProgress) error {
 	progress.addLog(fmt.Sprintf("Setting up %s adapter", fw.AdapterType))
