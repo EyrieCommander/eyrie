@@ -155,7 +155,11 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	// Provisioned instances live in ~/.eyrie/instances/ and survive
 	// framework uninstalls. Without the framework binary they can't
 	// start, so they're effectively orphaned.
-	cleanupOrphanedInstances(fw, uninstallFlags.yes)
+	// Always prompt for this — even with -y. The -y flag covers the
+	// "proceed with uninstall?" confirmation, but deleting provisioned
+	// agents is a separate, more destructive action that deserves its
+	// own explicit consent.
+	cleanupOrphanedInstances(fw, false)
 
 	fmt.Printf("\n✓ %s uninstalled successfully.\n", fw.Name)
 	if !uninstallFlags.purge && configExists {

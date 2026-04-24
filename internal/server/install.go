@@ -788,24 +788,28 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 	// Phase 4: Clear install status
 	globalInstallState.set(fw.ID, nil)
 
-	// Phase 5: Remove orphaned instances for this framework.
-	// Without the binary they can't start — leaving them around just
-	// clutters the sidebar and confuses the user on reinstall.
+	// Phase 5: Report orphaned instances so the frontend can prompt
+	// the user before deleting them. The actual deletion happens via
+	// DELETE /api/instances/{id} — we just surface the list here.
 	if s.instanceStore != nil {
-		instances, listErr := s.instanceStore.List()
-		if listErr == nil {
-			removed := 0
+		if instances, listErr := s.instanceStore.List(); listErr == nil {
+			var orphans []map[string]string
 			for _, inst := range instances {
 				if inst.Framework == fw.ID {
-					if delErr := s.instanceStore.Delete(inst.ID); delErr != nil {
-						sendLog(fmt.Sprintf("Warning: could not remove orphaned instance %s: %s", inst.Name, delErr))
-					} else {
-						removed++
-					}
+					orphans = append(orphans, map[string]string{
+						"id":        inst.ID,
+						"name":      inst.DisplayName,
+						"role":      string(inst.HierarchyRole),
+						"project_id": inst.ProjectID,
+					})
 				}
 			}
-			if removed > 0 {
-				sendLog(fmt.Sprintf("Removed %d orphaned instance(s)", removed))
+			if len(orphans) > 0 {
+				sse.WriteEvent(map[string]any{
+					"type":     "orphaned_instances",
+					"instances": orphans,
+					"message":  fmt.Sprintf("%d agent(s) used %s and can no longer start", len(orphans), fw.Name),
+				})
 			}
 		}
 	}
