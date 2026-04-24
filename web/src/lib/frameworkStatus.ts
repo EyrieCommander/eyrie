@@ -72,6 +72,7 @@ export function findProviderField(framework: Framework): ConfigField | null {
       (f) =>
         f.key === "provider" ||
         f.key === "default_provider" ||
+        f.key === "providers.fallback" ||
         f.key === "agents.defaults.provider",
     ) ?? null
   );

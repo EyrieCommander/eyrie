@@ -48,7 +48,7 @@
             "advanced": true
           },
           {
-            "key": "default_provider",
+            "key": "providers.fallback",
             "label": "LLM provider",
             "type": "select",
             "options": ["openrouter", "anthropic", "openai"],
@@ -65,7 +65,7 @@
             "required": true,
             "description": "model identifier (provider-specific)",
             "group": "llm",
-            "suggestions_key": "default_provider",
+            "suggestions_key": "providers.fallback",
             "suggestions": {
               "openrouter": ["anthropic/claude-sonnet-4-20250514", "anthropic/claude-opus-4-20250514", "moonshotai/kimi-k2.5", "google/gemini-2.5-pro", "openai/gpt-4.1"],
               "anthropic": ["claude-sonnet-4-20250514", "claude-opus-4-20250514"],

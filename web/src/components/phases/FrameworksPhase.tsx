@@ -27,24 +27,62 @@ import FrameworkProgressTimeline, {
 import FrameworkStepPanel, { askCommander } from "../FrameworkStepPanel";
 import { loadSaved, saveSubStep, isApiKeyConfirmed, setApiKeyConfirmedFor } from "../../lib/onboardingStorage";
 
+/** Escape special regex characters in a string. */
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 /**
- * Pull a provider value out of a raw config string. We don't try to fully
- * parse TOML/YAML here — a line-anchored regex catches the common shape
- * `provider = "openrouter"` (TOML), `provider: openrouter` (YAML), or
- * `"provider": "openrouter"` (JSON). Returns null if nothing matches.
+ * Extract the content of a TOML section — from `[sectionName]` to the next
+ * section header that isn't a child (e.g. `[providers]` content includes
+ * `[providers.models.x]` subsections but stops at `[observability]`).
+ */
+function tomlSection(raw: string, sectionName: string): string | null {
+  const headerRe = new RegExp(`^\\[${escapeRe(sectionName)}\\]\\s*$`, "m");
+  const m = headerRe.exec(raw);
+  if (!m) return null;
+  const start = m.index + m[0].length;
+  // Next section that isn't a child of this one
+  const nextRe = new RegExp(`^\\[(?!${escapeRe(sectionName)}\\.)`, "m");
+  const next = nextRe.exec(raw.slice(start));
+  return next ? raw.slice(start, start + next.index) : raw.slice(start);
+}
+
+/**
+ * Pull a provider value out of a raw config string. For dotted keys (e.g.
+ * `providers.fallback`), narrows the TOML search to the correct section so
+ * we don't accidentally match a same-named key in an unrelated subsection
+ * (e.g. `default_provider = "groq"` inside `[transcription]`).
  */
 function extractProviderFromRaw(raw: string, fieldKey: string): string | null {
   if (!raw) return null;
-  const baseName = fieldKey.split(".").pop() || fieldKey;
-  const patterns = [
-    new RegExp(`^\\s*${baseName}\\s*=\\s*["']([^"']+)["']`, "m"), // TOML
-    new RegExp(`"${baseName}"\\s*:\\s*"([^"]+)"`, "m"), // JSON
-    new RegExp(`^\\s*${baseName}:\\s*["']?([^\\s"'#]+)["']?`, "m"), // YAML
-  ];
-  for (const re of patterns) {
-    const m = re.exec(raw);
-    if (m) return m[1];
+  const parts = fieldKey.split(".");
+  const leafKey = parts[parts.length - 1];
+
+  if (parts.length > 1) {
+    // Dotted key — try TOML section-aware extraction first
+    const section = tomlSection(raw, parts.slice(0, -1).join("."));
+    if (section) {
+      const m = new RegExp(`^\\s*${escapeRe(leafKey)}\\s*=\\s*["']([^"']+)["']`, "m").exec(section);
+      if (m) return m[1];
+    }
+    // Fallback: JSON (nested objects still use the leaf key name)
+    const jm = new RegExp(`"${escapeRe(leafKey)}"\\s*:\\s*"([^"]+)"`).exec(raw);
+    if (jm) return jm[1];
+    return null;
   }
+
+  // Non-dotted key — restrict TOML to top-level (before first [section])
+  const firstSection = raw.match(/^\[/m);
+  const topLevel = firstSection ? raw.slice(0, firstSection.index) : raw;
+  const tm = new RegExp(`^\\s*${escapeRe(leafKey)}\\s*=\\s*["']([^"']+)["']`, "m").exec(topLevel);
+  if (tm) return tm[1];
+
+  // JSON / YAML — search full content
+  const jm = new RegExp(`"${escapeRe(leafKey)}"\\s*:\\s*"([^"]+)"`).exec(raw);
+  if (jm) return jm[1];
+  const ym = new RegExp(`^\\s*${escapeRe(leafKey)}:\\s*["']?([^\\s"'#]+)["']?`, "m").exec(raw);
+  if (ym) return ym[1];
   return null;
 }
 
