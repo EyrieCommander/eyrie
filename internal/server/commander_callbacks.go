@@ -117,7 +117,11 @@ func (s *Server) restartAgentByName(ctx context.Context, name string) error {
 	}
 
 	// Framework-level and provisioned instances go through the manager.
-	if err := manager.ExecuteWithConfigEnv(restartCtx, target.Framework, target.ConfigPath, manager.ActionRestart, s.vault.EnvSlice()); err != nil {
+	var env []string
+	if s.vault != nil {
+		env = s.vault.EnvSlice()
+	}
+	if err := manager.ExecuteWithConfigEnv(restartCtx, target.Framework, target.ConfigPath, manager.ActionRestart, env); err != nil {
 		// Persist error status if this is a tracked instance, matching
 		// handleInstanceAction's behavior.
 		if target.InstanceID != "" {

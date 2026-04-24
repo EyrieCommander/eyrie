@@ -115,7 +115,11 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 				autoStartErr = agent.Start(startCtx)
 			}
 		} else {
-			autoStartErr = manager.ExecuteWithConfigEnv(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart, s.vault.EnvSlice())
+			var env []string
+				if s.vault != nil {
+					env = s.vault.EnvSlice()
+				}
+				autoStartErr = manager.ExecuteWithConfigEnv(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart, env)
 		}
 
 		if autoStartErr != nil {
@@ -356,7 +360,11 @@ func (s *Server) handleInstanceAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		if err := manager.ExecuteWithConfigEnv(execCtx, inst.Framework, inst.ConfigPath, mgrAction, s.vault.EnvSlice()); err != nil {
+		var env []string
+		if s.vault != nil {
+			env = s.vault.EnvSlice()
+		}
+		if err := manager.ExecuteWithConfigEnv(execCtx, inst.Framework, inst.ConfigPath, mgrAction, env); err != nil {
 			// Persist the error status so the instance reflects the failure
 			inst.Status = instance.StatusError
 			if updateErr := store.UpdateStatus(inst.ID, instance.StatusError); updateErr != nil {
@@ -477,51 +485,93 @@ func autoPairZeroClaw(name string, port int) {
 		slog.Info("auto-pair: existing token stale or unverifiable, re-pairing", "agent", name)
 	}
 
-	// Fetch pairing code from admin endpoint
-	resp, err := client.Get(baseURL + "/admin/paircode")
-	if err != nil {
-		slog.Warn("auto-pair: failed to fetch paircode", "agent", name, "error", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	var pcResp struct {
-		PairingCode     *string `json:"pairing_code"`
-		PairingRequired bool    `json:"pairing_required"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&pcResp); err != nil {
-		slog.Warn("auto-pair: failed to decode paircode response", "agent", name, "error", err)
-		return
-	}
-
-	if pcResp.PairingCode == nil || *pcResp.PairingCode == "" {
+	// Fetch pairing code. Try the existing code first; if unavailable
+	// (already consumed or expired), generate a new one via the admin endpoint.
+	code := fetchPairCode(client, baseURL, name)
+	if code == "" {
 		slog.Info("auto-pair: no pairing code available, skipping", "agent", name)
 		return
 	}
 
-	// Pair with the gateway
-	pairReq, _ := http.NewRequest("POST", baseURL+"/pair", nil)
-	pairReq.Header.Set("X-Pairing-Code", *pcResp.PairingCode)
-	pairResp, err := client.Do(pairReq)
-	if err != nil {
-		slog.Warn("auto-pair: pair request failed", "agent", name, "error", err)
-		return
-	}
-	defer pairResp.Body.Close()
-
-	var tokenResp struct {
-		Token string `json:"token"`
-	}
-	if err := json.NewDecoder(pairResp.Body).Decode(&tokenResp); err != nil || tokenResp.Token == "" {
-		slog.Warn("auto-pair: no token in pair response", "agent", name, "status", pairResp.StatusCode)
+	// Exchange the code for a bearer token
+	token := exchangePairCode(client, baseURL, code, name)
+	if token == "" {
 		return
 	}
 
-	// Store token (reusing the already-opened store)
-	if err := ts.Set(name, tokenResp.Token); err != nil {
+	if err := ts.Set(name, token); err != nil {
 		slog.Warn("auto-pair: failed to save token", "agent", name, "error", err)
 		return
 	}
 
 	slog.Info("auto-pair: success", "agent", name, "port", port)
+}
+
+// fetchPairCode tries to get a pairing code from the ZeroClaw gateway.
+// First tries GET /admin/paircode (returns existing code). If that returns
+// no code (consumed or expired), tries POST /admin/paircode/new to generate
+// a fresh one. Returns "" if neither works.
+func fetchPairCode(client *http.Client, baseURL, name string) string {
+	// Try existing code
+	resp, err := client.Get(baseURL + "/admin/paircode")
+	if err != nil {
+		slog.Warn("auto-pair: failed to fetch paircode", "agent", name, "error", err)
+		return ""
+	}
+	defer resp.Body.Close()
+
+	var pcResp struct {
+		PairingCode *string `json:"pairing_code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&pcResp); err != nil {
+		slog.Warn("auto-pair: failed to decode paircode response", "agent", name, "error", err)
+		return ""
+	}
+	if pcResp.PairingCode != nil && *pcResp.PairingCode != "" {
+		return *pcResp.PairingCode
+	}
+
+	// No existing code — generate a new one
+	newResp, err := client.Post(baseURL+"/admin/paircode/new", "application/json", nil)
+	if err != nil {
+		slog.Warn("auto-pair: failed to generate new paircode", "agent", name, "error", err)
+		return ""
+	}
+	defer newResp.Body.Close()
+
+	var newPcResp struct {
+		PairingCode *string `json:"pairing_code"`
+		Success     bool    `json:"success"`
+	}
+	if err := json.NewDecoder(newResp.Body).Decode(&newPcResp); err != nil {
+		slog.Warn("auto-pair: failed to decode new paircode response", "agent", name, "error", err)
+		return ""
+	}
+	if newPcResp.PairingCode != nil && *newPcResp.PairingCode != "" {
+		return *newPcResp.PairingCode
+	}
+	return ""
+}
+
+// exchangePairCode exchanges a pairing code for a bearer token via POST /pair.
+// Returns "" on failure (logs the reason).
+func exchangePairCode(client *http.Client, baseURL, code, name string) string {
+	pairReq, _ := http.NewRequest("POST", baseURL+"/pair", nil)
+	pairReq.Header.Set("X-Pairing-Code", code)
+	pairResp, err := client.Do(pairReq)
+	if err != nil {
+		slog.Warn("auto-pair: pair request failed", "agent", name, "error", err)
+		return ""
+	}
+	defer pairResp.Body.Close()
+
+	var tokenResp struct {
+		Token  string `json:"token"`
+		Paired bool   `json:"paired"`
+	}
+	if err := json.NewDecoder(pairResp.Body).Decode(&tokenResp); err != nil || tokenResp.Token == "" {
+		slog.Warn("auto-pair: no token in pair response", "agent", name, "status", pairResp.StatusCode)
+		return ""
+	}
+	return tokenResp.Token
 }

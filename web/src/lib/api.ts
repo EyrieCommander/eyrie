@@ -369,6 +369,21 @@ export async function patchFrameworkConfig(
   }
 }
 
+export async function putRawFrameworkConfig(
+  id: string,
+  rawContent: string,
+): Promise<void> {
+  const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks/${id}/config`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ raw_content: rawContent }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to save config: ${res.statusText}`);
+  }
+}
+
 export async function fetchFrameworks(refresh = false): Promise<Framework[]> {
   const qs = refresh ? "?refresh=true" : "";
   const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks${qs}`);

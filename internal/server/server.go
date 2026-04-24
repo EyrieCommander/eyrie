@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/commander"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
@@ -54,6 +55,10 @@ type Server struct {
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
 	// to cancel the detached agent context.
 	activeChats sync.Map // map[string]context.CancelFunc
+
+	// pairAttempted tracks which agents we've already tried to auto-pair
+	// so we don't spawn goroutines on every discovery poll.
+	pairAttempted sync.Map // map[string]bool
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -247,9 +252,33 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
-// runDiscovery is a helper used by API handlers.
+// runDiscovery is a helper used by API handlers. After discovery, it
+// triggers auto-pairing for any alive ZeroClaw agents that lack a token.
 func (s *Server) runDiscovery(ctx context.Context) discovery.Result {
-	return discovery.Run(ctx, s.cfg)
+	result := discovery.Run(ctx, s.cfg)
+
+	// Auto-pair alive ZeroClaw agents that have no token. The attempt map
+	// prevents concurrent pairing goroutines for the same agent. On failure,
+	// the entry is cleared so the next discovery cycle retries.
+	for _, ar := range result.Agents {
+		if ar.Alive && ar.Agent.Framework == adapter.FrameworkZeroClaw && ar.Agent.Token == "" {
+			if _, loaded := s.pairAttempted.LoadOrStore(ar.Agent.Name, true); !loaded {
+				agentName := ar.Agent.Name
+				go func() {
+					autoPairZeroClaw(agentName, ar.Agent.Port)
+					// Check if token was actually stored — if not, clear
+					// the flag so we retry on next discovery cycle.
+					if ts, err := config.NewTokenStore(); err == nil {
+						if ts.Get(agentName) == "" {
+							s.pairAttempted.Delete(agentName)
+						}
+					}
+				}()
+			}
+		}
+	}
+
+	return result
 }
 
 // corsHandler wraps a handler with CORS headers. Only localhost origins are

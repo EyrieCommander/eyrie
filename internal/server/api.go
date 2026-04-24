@@ -62,7 +62,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 				// provider. The provider endpoint may be reachable (probe says
 				// "ok") but the agent can't use it without credentials.
 				if status.ProviderStatus == "ok" && s.vault != nil {
-					if !s.vault.HasKey(status.Provider) {
+					if s.vault.Get(status.Provider) == "" {
 						status.ProviderStatus = "error"
 					}
 				}
@@ -240,7 +240,11 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 				execErr = agent.Restart(ctx)
 			}
 		} else {
-			execErr = manager.ExecuteWithConfigEnv(ctx, inst.Framework, inst.ConfigPath, la, s.vault.EnvSlice())
+			var env []string
+				if s.vault != nil {
+					env = s.vault.EnvSlice()
+				}
+				execErr = manager.ExecuteWithConfigEnv(ctx, inst.Framework, inst.ConfigPath, la, env)
 		}
 		if execErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": execErr.Error()})
