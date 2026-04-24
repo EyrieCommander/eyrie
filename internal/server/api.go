@@ -58,6 +58,14 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 		if status, err := agent.Status(ctx); err == nil {
 			if ar.Alive && status.Provider != "" {
 				status.ProviderStatus = adapter.ProbeProvider(ctx, status.Provider)
+				// Override to error if the vault doesn't have a key for this
+				// provider. The provider endpoint may be reachable (probe says
+				// "ok") but the agent can't use it without credentials.
+				if status.ProviderStatus == "ok" && s.vault != nil {
+					if !s.vault.HasKey(status.Provider) {
+						status.ProviderStatus = "error"
+					}
+				}
 			}
 			status.InferBusyState()
 			aj.Status = status
@@ -238,7 +246,11 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": execErr.Error()})
 			return
 		}
-		_ = s.instanceStore.UpdateStatus(inst.ID, instance.StatusStarting)
+		newStatus := instance.StatusStarting
+		if action == "stop" {
+			newStatus = instance.StatusStopped
+		}
+		_ = s.instanceStore.UpdateStatus(inst.ID, newStatus)
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 		return
 	}

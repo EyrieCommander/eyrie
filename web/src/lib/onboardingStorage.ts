@@ -14,7 +14,10 @@ export interface OnboardingState {
 export function loadSaved(): OnboardingState {
   try {
     const raw = localStorage.getItem(ONBOARDING_STORAGE_KEY);
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return {};
+    return parsed;
   } catch {
     return {};
   }

@@ -61,6 +61,7 @@ export default function ApiKeysSection({ onChanged, compact }: Props) {
   }, [successMsg]);
 
   const handleAdd = async () => {
+    if (saving) return;
     if (!newProvider || !newKey) return;
     try {
       setSaving(true);

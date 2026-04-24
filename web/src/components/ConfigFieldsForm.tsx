@@ -37,7 +37,7 @@ export default function ConfigFieldsForm({ framework, onSaved }: Props) {
             const val = getNestedValue(parsed, field.key);
             if (val !== undefined) loaded[field.key] = val;
           }
-          setValues((prev) => ({ ...loaded, ...prev }));
+          setValues((prev) => ({ ...prev, ...loaded }));
         } catch { /* config not parseable — use defaults */ }
       })
       .catch(() => { /* no config yet — use defaults */ });

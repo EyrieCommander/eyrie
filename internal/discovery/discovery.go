@@ -236,6 +236,16 @@ func scanConfigFiles(paths []string) []adapter.DiscoveredAgent {
 			slog.Debug("failed to scan config", "path", path, "error", err)
 			continue
 		}
+		if agent == nil {
+			continue
+		}
+
+		// Skip frameworks whose binary is missing — config exists but the
+		// framework was never installed or was uninstalled. Without this,
+		// a stale config file causes a red dot in the sidebar.
+		if !frameworkBinaryExists(agent.Framework) {
+			continue
+		}
 
 		agents = append(agents, *agent)
 	}

@@ -106,13 +106,10 @@ export default function CommanderChat({ phase }: Props) {
     const history = await fetchCommanderHistory();
     if (signal?.aborted) return;
     setUnavailable(false);
-    if (history.length > 0) {
-      if (signal?.aborted) return;
-      setItems(history.map((m: CommanderHistoryMessage) => ({
-        role: m.role as "user" | "assistant",
-        content: m.content,
-      })));
-    }
+    setItems(history.map((m: CommanderHistoryMessage) => ({
+      role: m.role as "user" | "assistant",
+      content: m.content,
+    })));
     fetchCommanderMemory().then((mem) => { if (!signal?.aborted) setMemories(mem); }).catch(() => {});
   }, []);
 
@@ -349,7 +346,7 @@ export default function CommanderChat({ phase }: Props) {
 
   // ── Expanded panel ─────────────────────────────────────────────────
 
-  const usagePct = contextUsage
+  const usagePct = contextUsage && contextUsage.window > 0
     ? Math.round((contextUsage.tokens / contextUsage.window) * 100)
     : null;
 

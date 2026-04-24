@@ -14,13 +14,8 @@ import { getFrameworkStatus } from "../lib/frameworkStatus";
 import { useData } from "../lib/DataContext";
 import Terminal, { TerminalHandle } from "./Terminal";
 import { shellQuote } from "../lib/shell";
+import { CHAT_COMMANDS } from "../lib/chatCommands";
 
-const CHAT_COMMANDS: Record<string, string> = {
-  zeroclaw: "zeroclaw agent",
-  openclaw: "openclaw tui",
-  picoclaw: "picoclaw agent",
-  hermes: "hermes",
-};
 
 function statusDotClass(alive: boolean, providerStatus?: string): string {
   if (!alive) return "bg-red";

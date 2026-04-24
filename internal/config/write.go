@@ -271,6 +271,9 @@ func WriteConfigAtomic(path string, format string, data interface{}) error {
 // creating intermediate maps as needed. Returns false if a non-map node
 // blocked the path (e.g., "a.b" where "a" is a string, not a map).
 func SetNestedValue(m map[string]any, path string, value any) bool {
+	if path == "" || strings.HasPrefix(path, ".") || strings.HasSuffix(path, ".") || strings.Contains(path, "..") {
+		return false
+	}
 	parts := strings.Split(path, ".")
 	current := m
 	for i := 0; i < len(parts)-1; i++ {
@@ -334,6 +337,11 @@ func PatchConfigFile(path string, format string, fields map[string]any) error {
 	if len(blockedPaths) > 0 {
 		return fmt.Errorf("could not set paths (intermediate value is not a map): %s", strings.Join(blockedPaths, ", "))
 	}
+
+	// Coerce float64 → int64 for whole numbers. Patched fields arrive from
+	// JSON (where all numbers are float64), but TOML requires integers for
+	// ports, counts, etc. Safe for all formats — JSON and YAML handle int64 fine.
+	CoerceJSONNumbers(cfg)
 
 	// Ensure parent directory exists
 	dir := filepath.Dir(absPath)

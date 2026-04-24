@@ -386,6 +386,9 @@ func readProjectChatTool(store *project.ChatStore) Tool {
 			limit := 20
 			if l, ok := args["limit"].(float64); ok && l > 0 {
 				limit = int(l)
+				if limit < 1 {
+					limit = 1
+				}
 			}
 			if limit > maxChatLimit {
 				limit = maxChatLimit
@@ -628,6 +631,9 @@ func recallTool(mem *MemoryStore) Tool {
 			key, _ := args["key"].(string)
 			if key == "" {
 				return marshalJSON(mem.List())
+			}
+			if err := validateString("key", key, 0, maxMemoryKeyLen); err != nil {
+				return "", err
 			}
 			entry, err := mem.Recall(key)
 			if err != nil {

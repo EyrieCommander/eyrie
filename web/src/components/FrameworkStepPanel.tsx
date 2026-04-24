@@ -9,10 +9,13 @@
 // markers to update step status and auto-advance the timeline.
 
 import { useEffect, useRef, useState } from "react";
-import { Download, Terminal as TerminalIcon, FileEdit, Play, Check, MessageSquare } from "lucide-react";
+import { Download, Terminal as TerminalIcon, FileEdit, Play, Check, Loader2, MessageSquare } from "lucide-react";
 import FrameworkCard from "./FrameworkCard";
 import ApiKeyForm from "./ApiKeyForm";
 import ConfigFieldsForm from "./ConfigFieldsForm";
+import { CHAT_COMMANDS } from "../lib/chatCommands";
+import ConfigEditor from "./ConfigEditor";
+import { fetchFrameworkConfig, putRawFrameworkConfig } from "../lib/api";
 import type { Framework } from "../lib/types";
 import type { ApiKeyState } from "../lib/frameworkStatus";
 import type { InnerStepId } from "./FrameworkProgressTimeline";
@@ -143,10 +146,6 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
     onRun(`${shellQuote(binary)} onboard`);
   };
 
-  const handleEdit = () => {
-    onRun("${EDITOR:-vi} " + shellQuote(framework.config_path));
-  };
-
   return (
     <div className="space-y-3">
       <StepHeader n={3} label="configure" />
@@ -165,7 +164,7 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
           run wizard in terminal
         </TabButton>
         <TabButton active={tab === "edit"} onClick={() => setTab("edit")}>
-          edit config file
+          raw editor
         </TabButton>
       </div>
 
@@ -189,19 +188,71 @@ function ConfigureStep({ framework, safeId, onRun, onRefresh }: Props) {
       )}
 
       {tab === "edit" && (
-        <div className="space-y-2">
-          <code className="block rounded border border-border bg-bg px-2 py-1.5 text-[11px] text-text-muted">
-            $ $EDITOR {framework.config_path}
-          </code>
-          <button
-            onClick={handleEdit}
-            className="flex items-center gap-1.5 rounded border border-border px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:text-text"
-          >
-            <FileEdit className="h-3 w-3" />
-            open in $EDITOR
-          </button>
-        </div>
+        <RawConfigEditor frameworkId={safeId} format={framework.config_format} onSaved={onRefresh} />
       )}
+    </div>
+  );
+}
+
+/** Inline raw config editor — loads the config file, lets the user edit in a
+ *  textarea with syntax validation, and saves back via the registry API. */
+function RawConfigEditor({ frameworkId, format, onSaved }: { frameworkId: string; format: string; onSaved?: () => void }) {
+  const [raw, setRaw] = useState("");
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchFrameworkConfig(frameworkId)
+      .then((cfg) => {
+        if (cancelled || !cfg.content) return;
+        setRaw(typeof cfg.content === "string" ? cfg.content : JSON.stringify(cfg.content, null, 2));
+        setLoaded(true);
+      })
+      .catch(() => { setLoaded(true); });
+    return () => { cancelled = true; };
+  }, [frameworkId]);
+
+  useEffect(() => {
+    if (!saved) return;
+    const t = setTimeout(() => setSaved(false), 3000);
+    return () => clearTimeout(t);
+  }, [saved]);
+
+  const handleSave = async () => {
+    if (saving) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await putRawFrameworkConfig(frameworkId, raw);
+      setSaved(true);
+      onSaved?.();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "failed to save");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (!loaded) return <p className="text-xs text-text-muted">loading config…</p>;
+
+  return (
+    <div className="space-y-2">
+      <ConfigEditor value={raw} format={format} onChange={setRaw} />
+      <div className="flex items-center gap-2">
+        <button
+          onClick={handleSave}
+          disabled={saving}
+          className="flex items-center gap-1.5 rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent-hover disabled:opacity-40"
+        >
+          {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : <FileEdit className="h-3 w-3" />}
+          save config
+        </button>
+        {saved && <span className="flex items-center gap-1 text-[10px] text-green"><Check className="h-2.5 w-2.5" /> saved</span>}
+        {error && <span className="text-[10px] text-red">{error}</span>}
+      </div>
     </div>
   );
 }
@@ -321,12 +372,6 @@ function ApiKeyStep({ framework, apiKey, maskedApiKey, apiKeyConfirmed, onRefres
 }
 
 // ── step 5: launch ──────────────────────────────────────────────────────
-const CHAT_COMMANDS: Record<string, string> = {
-  zeroclaw: "zeroclaw agent",
-  openclaw: "openclaw tui",
-  picoclaw: "picoclaw agent",
-  hermes: "hermes",
-};
 
 function LaunchStep({ framework, safeId, onRun, onHealthChange }: Props) {
   if (!framework || !safeId) return <WaitingForFramework />;

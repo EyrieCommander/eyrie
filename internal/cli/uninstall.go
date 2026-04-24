@@ -313,7 +313,7 @@ func cleanupOrphanedInstances(fw *registry.Framework, skipConfirm bool) {
 		removed := 0
 		for _, inst := range orphans {
 			if err := store.Delete(inst.ID); err != nil {
-				fmt.Printf("⚠️  Could not remove %s: %s\n", inst.Name, err)
+				fmt.Printf("⚠️  Could not remove %s: %s\n", inst.DisplayName, err)
 			} else {
 				removed++
 			}

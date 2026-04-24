@@ -93,13 +93,15 @@ export default function CommanderPhase({ onContinue }: { onContinue?: () => void
       <button
         onClick={() => setDetailsOpen(!detailsOpen)}
         className="flex items-center gap-1.5 text-[10px] text-text-muted hover:text-text transition-colors"
+        aria-expanded={detailsOpen}
+        aria-controls="commander-settings"
       >
         {detailsOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
         settings
       </button>
 
       {detailsOpen && (
-        <div className="space-y-3 border-t border-border pt-3">
+        <div id="commander-settings" className="space-y-3 border-t border-border pt-3">
           {/* API key management */}
           <ApiKeysSection compact onChanged={check} />
 
