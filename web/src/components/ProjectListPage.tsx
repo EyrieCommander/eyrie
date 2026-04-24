@@ -23,6 +23,7 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
   const [captainName, setCaptainName] = useState("");
   const [captainFramework, setCaptainFramework] = useState("");
   const [installedFrameworks, setInstalledFrameworks] = useState<Framework[]>([]);
+  const [fwLoaded, setFwLoaded] = useState(false);
   const [existingCaptains, setExistingCaptains] = useState<AgentInstance[]>([]);
   const [selectedCaptainId, setSelectedCaptainId] = useState("");
   const [startingCaptain, setStartingCaptain] = useState("");
@@ -52,13 +53,14 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
         setExistingCaptains([]);
       });
       // Populate the framework dropdown with only installed frameworks
+      setFwLoaded(false);
       fetchFrameworks().then((all) => {
         const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
         setInstalledFrameworks(installed);
         if (installed.length > 0 && !captainFramework) {
           setCaptainFramework(installed[0].id);
         }
-      }).catch(() => {});
+      }).catch(() => {}).finally(() => setFwLoaded(true));
     }
   }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -232,14 +234,21 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
                     onChange={(e) => setCaptainFramework(e.target.value)}
                     className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
                   >
-                    {installedFrameworks.length === 0 ? (
+                    {!fwLoaded ? (
                       <option value="" disabled>loading frameworks…</option>
+                    ) : installedFrameworks.length === 0 ? (
+                      <option value="" disabled>no installed frameworks</option>
                     ) : (
                       installedFrameworks.map((fw) => (
                         <option key={fw.id} value={fw.id}>{fw.name}</option>
                       ))
                     )}
                   </select>
+                  {fwLoaded && installedFrameworks.length === 0 && (
+                    <p className="text-[10px] text-yellow mt-1">
+                      Install a framework first from the frameworks page.
+                    </p>
+                  )}
                 </div>
                 <button
                   onClick={() => setCaptainMode("existing")}

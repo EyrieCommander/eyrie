@@ -26,6 +26,7 @@ export function SetCaptainDialog({
   const [name, setName] = useState("");
   const [framework, setFramework] = useState("");
   const [installedFrameworks, setInstalledFrameworks] = useState<Framework[]>([]);
+  const [fwLoaded, setFwLoaded] = useState(false);
   const [captainInstances, setCaptainInstances] = useState<AgentInstance[]>([]);
 
   const refreshInstances = useCallback(() => {
@@ -38,6 +39,7 @@ export function SetCaptainDialog({
     refreshInstances();
     // Fetch installed frameworks so the dropdown only shows frameworks the
     // user can actually provision from.
+    setFwLoaded(false);
     fetchFrameworks().then((all) => {
       const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
       setInstalledFrameworks(installed);
@@ -45,7 +47,7 @@ export function SetCaptainDialog({
       if (installed.length > 0 && !framework) {
         setFramework(installed[0].id);
       }
-    }).catch(() => {});
+    }).catch(() => {}).finally(() => setFwLoaded(true));
   }, [refreshInstances]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreate = async () => {
@@ -120,8 +122,10 @@ export function SetCaptainDialog({
                 onChange={(e) => setFramework(e.target.value)}
                 className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
               >
-                {installedFrameworks.length === 0 ? (
+                {!fwLoaded ? (
                   <option value="" disabled>loading frameworks…</option>
+                ) : installedFrameworks.length === 0 ? (
+                  <option value="" disabled>no installed frameworks</option>
                 ) : (
                   installedFrameworks.map((fw) => (
                     <option key={fw.id} value={fw.id}>{fw.name}</option>

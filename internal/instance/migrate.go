@@ -174,16 +174,21 @@ func migrateZeroClaw(configPath string) ([]string, error) {
 // value was changed (i.e., it was different or missing).
 func setNestedValue(m map[string]any, path string, value any) bool {
 	// Read existing value for change detection before writing.
+	// If any intermediate key doesn't resolve to a map, the path doesn't
+	// exist yet — treat that as "changed" so the write proceeds and the
+	// migration is logged.
 	parts := strings.Split(path, ".")
 	existing := m
+	resolved := true
 	for _, p := range parts[:len(parts)-1] {
 		next, ok := existing[p].(map[string]any)
 		if !ok {
+			resolved = false
 			break
 		}
 		existing = next
 	}
-	if len(parts) > 0 {
+	if resolved && len(parts) > 0 {
 		if old := existing[parts[len(parts)-1]]; fmt.Sprintf("%v", old) == fmt.Sprintf("%v", value) {
 			return false
 		}
