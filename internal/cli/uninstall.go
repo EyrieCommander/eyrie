@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/config"
+	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/registry"
 	"github.com/spf13/cobra"
 )
@@ -150,6 +151,12 @@ func runUninstall(cmd *cobra.Command, args []string) error {
 	// Phase 4: Clear install status from state file
 	clearInstallStatus(fw.ID)
 
+	// Phase 5: Warn about (and optionally remove) orphaned instances.
+	// Provisioned instances live in ~/.eyrie/instances/ and survive
+	// framework uninstalls. Without the framework binary they can't
+	// start, so they're effectively orphaned.
+	cleanupOrphanedInstances(fw, uninstallFlags.yes)
+
 	fmt.Printf("\n✓ %s uninstalled successfully.\n", fw.Name)
 	if !uninstallFlags.purge && configExists {
 		fmt.Printf("\nNote: Config directory kept at %s (use --purge to remove)\n", fw.ConfigDir)
@@ -250,6 +257,74 @@ func clearInstallStatus(frameworkID string) {
 		return
 	}
 	os.WriteFile(statusFile, out, 0644)
+}
+
+// cleanupOrphanedInstances finds provisioned instances that use the
+// uninstalled framework and offers to remove them. Without the binary
+// they can't start, so they'll just clutter the sidebar and confuse
+// the user on next install.
+func cleanupOrphanedInstances(fw *registry.Framework, skipConfirm bool) {
+	store, err := instance.NewStore()
+	if err != nil {
+		return // store not available — nothing to clean
+	}
+	all, err := store.List()
+	if err != nil {
+		return
+	}
+
+	var orphans []instance.Instance
+	for _, inst := range all {
+		if inst.Framework == fw.ID {
+			orphans = append(orphans, inst)
+		}
+	}
+	if len(orphans) == 0 {
+		return
+	}
+
+	fmt.Printf("\n━━━ Orphaned instances (%d) ━━━\n", len(orphans))
+	fmt.Printf("These provisioned agents used %s and can no longer start:\n", fw.Name)
+	for _, inst := range orphans {
+		role := string(inst.HierarchyRole)
+		if role == "" {
+			role = "agent"
+		}
+		project := ""
+		if inst.ProjectID != "" {
+			project = fmt.Sprintf(" (project: %s)", inst.ProjectID)
+		}
+		fmt.Printf("  • %s [%s]%s\n", inst.DisplayName, role, project)
+	}
+
+	remove := skipConfirm
+	if !skipConfirm {
+		fmt.Print("\nRemove these instances? [y/N] ")
+		var response string
+		fmt.Scanln(&response)
+		remove = strings.HasPrefix(strings.ToLower(response), "y")
+	}
+
+	if remove {
+		removed := 0
+		for _, inst := range orphans {
+			if err := store.Delete(inst.ID); err != nil {
+				fmt.Printf("⚠️  Could not remove %s: %s\n", inst.Name, err)
+			} else {
+				removed++
+			}
+		}
+		fmt.Printf("✓ Removed %d instance%s\n", removed, pluralS(removed))
+	} else {
+		fmt.Println("Keeping instances. They will reappear if you reinstall the framework.")
+	}
+}
+
+func pluralS(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
 }
 
 func fileExists(path string) bool {

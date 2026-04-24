@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"syscall"
@@ -159,9 +160,10 @@ func isProcessAlive(pid int) bool {
 
 type frameworkWithStatus struct {
 	registry.Framework
-	Installed  bool   `json:"installed"`            // binary exists on disk
-	Configured bool   `json:"configured"`           // config file exists (onboarding complete)
-	Version    string `json:"version,omitempty"`     // installed binary version (best-effort)
+	Installed     bool   `json:"installed"`                    // binary exists on disk
+	Configured    bool   `json:"configured"`                   // config file exists (onboarding complete)
+	Version       string `json:"version,omitempty"`             // installed binary version (best-effort)
+	VersionStatus string `json:"version_status,omitempty"`      // "outdated", "update_available", "current"
 }
 
 // handleListFrameworks returns all frameworks from the registry with installation status
@@ -205,6 +207,16 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	wg.Wait()
+
+	// Compute version status for each installed framework.
+	for i := range result {
+		if result[i].Version != "" {
+			extracted := registry.ExtractVersion(result[i].Version)
+			result[i].VersionStatus = registry.VersionStatus(
+				extracted, result[i].MinVersion, result[i].LatestVersion,
+			)
+		}
+	}
 
 	writeJSON(w, http.StatusOK, result)
 }
@@ -462,16 +474,34 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 		cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
 
 	case "cargo":
-		progress.addLog(fmt.Sprintf("Running: cargo install %s", fw.ID))
-		cmd = exec.CommandContext(ctx, config.LookPathEnriched("cargo"), "install", fw.ID)
+		defaultCmd := "cargo install " + fw.ID
+		if fw.InstallCmd != "" && fw.InstallCmd != defaultCmd {
+			progress.addLog(fmt.Sprintf("Running: %s", fw.InstallCmd))
+			cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
+		} else {
+			progress.addLog(fmt.Sprintf("Running: %s", defaultCmd))
+			cmd = exec.CommandContext(ctx, config.LookPathEnriched("cargo"), "install", fw.ID)
+		}
 
 	case "npm":
-		progress.addLog(fmt.Sprintf("Running: npm install -g %s", fw.ID))
-		cmd = exec.CommandContext(ctx, config.LookPathEnriched("npm"), "install", "-g", fw.ID)
+		defaultCmd := "npm install -g " + fw.ID
+		if fw.InstallCmd != "" && fw.InstallCmd != defaultCmd {
+			progress.addLog(fmt.Sprintf("Running: %s", fw.InstallCmd))
+			cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
+		} else {
+			progress.addLog(fmt.Sprintf("Running: %s", defaultCmd))
+			cmd = exec.CommandContext(ctx, config.LookPathEnriched("npm"), "install", "-g", fw.ID)
+		}
 
 	case "pip":
-		progress.addLog(fmt.Sprintf("Running: pip install %s", fw.ID))
-		cmd = exec.CommandContext(ctx, config.LookPathEnriched("pip"), "install", fw.ID)
+		defaultCmd := "pip install " + fw.ID
+		if fw.InstallCmd != "" && fw.InstallCmd != defaultCmd {
+			progress.addLog(fmt.Sprintf("Running: %s", fw.InstallCmd))
+			cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
+		} else {
+			progress.addLog(fmt.Sprintf("Running: %s", defaultCmd))
+			cmd = exec.CommandContext(ctx, config.LookPathEnriched("pip"), "install", fw.ID)
+		}
 
 	case "manual":
 		progress.addLog("This framework requires manual installation:")
@@ -758,6 +788,28 @@ func (s *Server) handleUninstallFramework(w http.ResponseWriter, r *http.Request
 	// Phase 4: Clear install status
 	globalInstallState.set(fw.ID, nil)
 
+	// Phase 5: Remove orphaned instances for this framework.
+	// Without the binary they can't start — leaving them around just
+	// clutters the sidebar and confuses the user on reinstall.
+	if s.instanceStore != nil {
+		instances, listErr := s.instanceStore.List()
+		if listErr == nil {
+			removed := 0
+			for _, inst := range instances {
+				if inst.Framework == fw.ID {
+					if delErr := s.instanceStore.Delete(inst.ID); delErr != nil {
+						sendLog(fmt.Sprintf("Warning: could not remove orphaned instance %s: %s", inst.Name, delErr))
+					} else {
+						removed++
+					}
+				}
+			}
+			if removed > 0 {
+				sendLog(fmt.Sprintf("Removed %d orphaned instance(s)", removed))
+			}
+		}
+	}
+
 	// Done
 	progress.Phase = "complete"
 	progress.Status = "success"
@@ -871,14 +923,36 @@ func (s *Server) handleFrameworkConfigPatch(w http.ResponseWriter, r *http.Reque
 	}
 
 	var body struct {
-		Fields map[string]any `json:"fields"`
+		Fields     map[string]any `json:"fields"`
+		RawContent *string        `json:"raw_content"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
+
+	// Raw content mode: validate syntax and write the full file as-is
+	if body.RawContent != nil {
+		if valErr := config.ValidateRawFormat(fw.ConfigFormat, *body.RawContent); valErr != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("invalid %s: %v", fw.ConfigFormat, valErr)})
+			return
+		}
+		absPath := config.ExpandHome(fw.ConfigPath)
+		if err := os.MkdirAll(filepath.Dir(absPath), 0755); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		if err := config.WriteRawAtomic(fw.ConfigPath, *body.RawContent); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+		return
+	}
+
+	// Field patch mode: merge specific fields into the existing config
 	if len(body.Fields) == 0 {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no fields to patch"})
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "no fields to patch and no raw_content"})
 		return
 	}
 
