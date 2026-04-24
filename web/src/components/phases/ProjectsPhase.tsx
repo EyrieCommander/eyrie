@@ -37,19 +37,29 @@ export default function ProjectsPhase() {
   const { projects, instances, backendDown, refresh: refreshData } = useData();
   const navigate = useNavigate();
 
-  // Installed/ready frameworks (for the dropdowns)
+  // Installed/ready frameworks (for the dropdowns).
+  // Uses a cancellation guard so StrictMode's double-mount doesn't let a
+  // stale promise's .catch nuke frameworks that a later fetch loaded.
   const [frameworks, setFrameworks] = useState<Framework[]>([]);
   const [fwLoading, setFwLoading] = useState(true);
   useEffect(() => {
+    let cancelled = false;
     setFwLoading(true);
     fetchFrameworks()
       .then((list) => {
+        if (cancelled) return;
         // Only offer frameworks that are installed — can't provision from a
         // framework we haven't set up.
         setFrameworks(list.filter((fw) => getFrameworkStatus(fw).isInstalled));
       })
-      .catch(() => setFrameworks([]))
-      .finally(() => setFwLoading(false));
+      .catch(() => {
+        // Don't clear frameworks on error — keep whatever we had.
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setFwLoading(false);
+      });
+    return () => { cancelled = true; };
   }, []);
 
   const defaultFramework = frameworks[0]?.id || "zeroclaw";
@@ -195,18 +205,11 @@ export default function ProjectsPhase() {
     );
   }
 
-  if (!fwLoading && frameworks.length === 0 && !backendDown) {
-    return (
-      <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-4 text-xs text-text-secondary">
-        Install a framework first — you need an agent runtime before creating a
-        project.
-      </div>
-    );
-  }
+  const noFrameworks = !fwLoading && frameworks.length === 0 && !backendDown;
 
   return (
     <div className="space-y-4">
-      {/* Existing projects list */}
+      {/* Existing projects list — always shown regardless of framework state */}
       {projects.length > 0 && (
         <div className="space-y-2">
           <h2 className="text-[10px] font-medium uppercase tracking-wider text-text-muted">
@@ -234,8 +237,16 @@ export default function ProjectsPhase() {
         </div>
       )}
 
+      {/* No installed frameworks — can't create new projects */}
+      {noFrameworks && (
+        <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-4 text-xs text-text-secondary">
+          Install a framework first — you need an agent runtime before creating a
+          project.
+        </div>
+      )}
+
       {/* Collapsed entry point after at least one project exists */}
-      {projects.length > 0 && !formOpen && (
+      {!noFrameworks && projects.length > 0 && !formOpen && (
         <button
           onClick={() => setFormOpen(true)}
           className="flex items-center gap-1.5 rounded border border-dashed border-border px-4 py-3 text-xs text-text-muted hover:text-text hover:border-accent/30 transition-colors w-full justify-center"
@@ -245,7 +256,7 @@ export default function ProjectsPhase() {
       )}
 
       {/* Form */}
-      {formOpen && (
+      {!noFrameworks && formOpen && (
         <div className="rounded border border-border bg-surface p-4 space-y-4">
           <div>
             <h2 className="text-sm font-semibold text-text">
