@@ -56,8 +56,10 @@ export default function ProjectsPhase() {
         // Don't clear frameworks on error — keep whatever we had.
       })
       .finally(() => {
-        if (cancelled) return;
-        setFwLoading(false);
+        // Always clear loading for the non-cancelled invocation.
+        // In StrictMode the first effect is cancelled before its fetch
+        // resolves, so only the second (active) effect clears the flag.
+        if (!cancelled) setFwLoading(false);
       });
     return () => { cancelled = true; };
   }, []);
@@ -204,13 +206,16 @@ export default function ProjectsPhase() {
 
   if (fwLoading) {
     return (
-      <div className="rounded border border-border bg-bg-secondary px-4 py-4 text-xs text-text-muted">
+      <div className="rounded border border-border bg-surface px-4 py-4 text-xs text-text-muted">
         Loading frameworks…
       </div>
     );
   }
 
-  const noFrameworks = !fwLoading && frameworks.length === 0 && !backendDown;
+  // No installed frameworks — can't create new projects. This also covers
+  // the case where backendDown is true and frameworks never loaded: show
+  // the guidance rather than falling through to a form with empty selects.
+  const noFrameworks = frameworks.length === 0;
 
   return (
     <div className="space-y-4">
@@ -245,8 +250,10 @@ export default function ProjectsPhase() {
       {/* No installed frameworks — can't create new projects */}
       {noFrameworks && (
         <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-4 text-xs text-text-secondary">
-          Install a framework first — you need an agent runtime before creating a
-          project.
+          {backendDown
+            ? "Cannot reach the backend — check that Eyrie is running."
+            : "Install a framework first — you need an agent runtime before creating a project."
+          }
         </div>
       )}
 
