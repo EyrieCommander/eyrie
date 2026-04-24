@@ -62,7 +62,12 @@ export default function ProjectsPhase() {
     return () => { cancelled = true; };
   }, []);
 
-  const defaultFramework = frameworks[0]?.id || "zeroclaw";
+  // Don't fall back to a hardcoded framework name — if nothing is installed,
+  // the form shows the "install a framework first" message. Using "" here
+  // means the captain slot starts with framework="" and the <select> shows
+  // the first installed framework once frameworks load (synced by the
+  // useEffect below).
+  const defaultFramework = frameworks[0]?.id || "";
 
   // Show-or-hide the form. Starts open when there are no projects yet.
   const [formOpen, setFormOpen] = useState(projects.length === 0);
