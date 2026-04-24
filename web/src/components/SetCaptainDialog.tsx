@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import type { AgentInstance, Framework } from "../lib/types";
-import { fetchInstances, fetchFrameworks, createInstance, updateProject, streamCaptainBriefing, instanceAction } from "../lib/api";
-import { getFrameworkStatus } from "../lib/frameworkStatus";
+import type { AgentInstance } from "../lib/types";
+import { fetchInstances, createInstance, updateProject, streamCaptainBriefing, instanceAction } from "../lib/api";
+import { useInstalledFrameworks } from "../lib/useInstalledFrameworks";
 
 export interface SetCaptainDialogProps {
   projectId: string;
@@ -25,8 +25,8 @@ export function SetCaptainDialog({
   const defaultName = `${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-captain`;
   const [name, setName] = useState("");
   const [framework, setFramework] = useState("");
-  const [installedFrameworks, setInstalledFrameworks] = useState<Framework[]>([]);
-  const [fwLoaded, setFwLoaded] = useState(false);
+  const { frameworks: installedFrameworks, loading: fwLoading } = useInstalledFrameworks();
+  const fwLoaded = !fwLoading;
   const [captainInstances, setCaptainInstances] = useState<AgentInstance[]>([]);
 
   const refreshInstances = useCallback(() => {
@@ -35,21 +35,14 @@ export function SetCaptainDialog({
     }).catch((err) => { console.error("Failed to fetch instances:", err); });
   }, []);
 
+  useEffect(() => { refreshInstances(); }, [refreshInstances]);
+
+  // Default to the first installed framework once loaded.
   useEffect(() => {
-    refreshInstances();
-    // Fetch installed frameworks so the dropdown only shows frameworks the
-    // user can actually provision from.
-    setFwLoaded(false);
-    fetchFrameworks().then((all) => {
-      const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
-      setInstalledFrameworks(installed);
-      // Use functional updater so we don't overwrite a user selection
-      // that happened while the fetch was in flight.
-      if (installed.length > 0) {
-        setFramework((prev) => prev || installed[0].id);
-      }
-    }).catch(() => {}).finally(() => setFwLoaded(true));
-  }, [refreshInstances]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (installedFrameworks.length > 0) {
+      setFramework((prev) => prev || installedFrameworks[0].id);
+    }
+  }, [installedFrameworks]);
 
   const handleCreate = async () => {
     const effectiveName = name.trim() || defaultName;

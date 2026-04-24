@@ -1,10 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Briefcase, ChevronRight } from "lucide-react";
-import type { AgentInstance, Framework } from "../lib/types";
-import { fetchInstances, fetchFrameworks, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
+import type { AgentInstance } from "../lib/types";
+import { fetchInstances, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
 import { useData } from "../lib/DataContext";
-import { getFrameworkStatus } from "../lib/frameworkStatus";
+import { useInstalledFrameworks } from "../lib/useInstalledFrameworks";
 
 function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -22,8 +22,8 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
   const [captainMode, setCaptainMode] = useState<"create" | "existing">("create");
   const [captainName, setCaptainName] = useState("");
   const [captainFramework, setCaptainFramework] = useState("");
-  const [installedFrameworks, setInstalledFrameworks] = useState<Framework[]>([]);
-  const [fwLoaded, setFwLoaded] = useState(false);
+  const { frameworks: installedFrameworks, loading: fwLoading } = useInstalledFrameworks();
+  const fwLoaded = !fwLoading;
   const [existingCaptains, setExistingCaptains] = useState<AgentInstance[]>([]);
   const [selectedCaptainId, setSelectedCaptainId] = useState("");
   const [startingCaptain, setStartingCaptain] = useState("");
@@ -41,7 +41,14 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
 
   const [fetchCaptainError, setFetchCaptainError] = useState("");
 
-  // Load captain instances + installed frameworks when entering step 2.
+  // Default to the first installed framework once loaded.
+  useEffect(() => {
+    if (installedFrameworks.length > 0) {
+      setCaptainFramework((prev) => prev || installedFrameworks[0].id);
+    }
+  }, [installedFrameworks]);
+
+  // Load captain instances when entering step 2.
   useEffect(() => {
     if (step === 2) {
       setFetchCaptainError("");
@@ -52,19 +59,8 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
         setFetchCaptainError(err instanceof Error ? err.message : "Failed to load captain instances");
         setExistingCaptains([]);
       });
-      // Populate the framework dropdown with only installed frameworks
-      setFwLoaded(false);
-      fetchFrameworks().then((all) => {
-        const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
-        setInstalledFrameworks(installed);
-        // Use functional updater so we don't overwrite a user selection
-        // that happened while the fetch was in flight.
-        if (installed.length > 0) {
-          setCaptainFramework((prev) => prev || installed[0].id);
-        }
-      }).catch(() => {}).finally(() => setFwLoaded(true));
     }
-  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [step]);
 
   const handleCreate = async () => {
     setCreating(true);

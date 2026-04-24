@@ -13,11 +13,10 @@ import { useData } from "../../lib/DataContext";
 import {
   createInstance,
   createProject,
-  fetchFrameworks,
   updateProject,
 } from "../../lib/api";
 import type { AgentInstance, Framework } from "../../lib/types";
-import { getFrameworkStatus } from "../../lib/frameworkStatus";
+import { useInstalledFrameworks } from "../../lib/useInstalledFrameworks";
 
 /** A team slot the user is configuring. New = to-be-provisioned, existing = use
  *  this AgentInstance already in the pool. */
@@ -37,39 +36,7 @@ export default function ProjectsPhase() {
   const { projects, instances, backendDown, refresh: refreshData } = useData();
   const navigate = useNavigate();
 
-  // Installed/ready frameworks (for the dropdowns).
-  // Uses a cancellation guard so StrictMode's double-mount doesn't let a
-  // stale promise's .catch nuke frameworks that a later fetch loaded.
-  const [frameworks, setFrameworks] = useState<Framework[]>([]);
-  const [fwLoading, setFwLoading] = useState(true);
-  useEffect(() => {
-    let cancelled = false;
-    setFwLoading(true);
-    fetchFrameworks()
-      .then((list) => {
-        if (cancelled) return;
-        // Only offer frameworks that are installed — can't provision from a
-        // framework we haven't set up.
-        setFrameworks(list.filter((fw) => getFrameworkStatus(fw).isInstalled));
-      })
-      .catch(() => {
-        // Don't clear frameworks on error — keep whatever we had.
-      })
-      .finally(() => {
-        // Always clear loading for the non-cancelled invocation.
-        // In StrictMode the first effect is cancelled before its fetch
-        // resolves, so only the second (active) effect clears the flag.
-        if (!cancelled) setFwLoading(false);
-      });
-    return () => { cancelled = true; };
-  }, []);
-
-  // Don't fall back to a hardcoded framework name — if nothing is installed,
-  // the form shows the "install a framework first" message. Using "" here
-  // means the captain slot starts with framework="" and the <select> shows
-  // the first installed framework once frameworks load (synced by the
-  // useEffect below).
-  const defaultFramework = frameworks[0]?.id || "";
+  const { frameworks, loading: fwLoading, defaultId: defaultFramework } = useInstalledFrameworks();
 
   // Show-or-hide the form. Starts open when there are no projects yet.
   const [formOpen, setFormOpen] = useState(projects.length === 0);
