@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Plus, RefreshCw, Briefcase, ChevronRight } from "lucide-react";
-import type { AgentInstance } from "../lib/types";
-import { fetchInstances, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
+import type { AgentInstance, Framework } from "../lib/types";
+import { fetchInstances, fetchFrameworks, createProject, createInstance, updateProject, instanceAction, deleteInstance } from "../lib/api";
 import { useData } from "../lib/DataContext";
+import { getFrameworkStatus } from "../lib/frameworkStatus";
 
 function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; onClose: () => void }) {
   const dialogRef = useRef<HTMLDivElement>(null);
@@ -20,7 +21,8 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
   // Captain fields
   const [captainMode, setCaptainMode] = useState<"create" | "existing">("create");
   const [captainName, setCaptainName] = useState("");
-  const [captainFramework, setCaptainFramework] = useState("zeroclaw");
+  const [captainFramework, setCaptainFramework] = useState("");
+  const [installedFrameworks, setInstalledFrameworks] = useState<Framework[]>([]);
   const [existingCaptains, setExistingCaptains] = useState<AgentInstance[]>([]);
   const [selectedCaptainId, setSelectedCaptainId] = useState("");
   const [startingCaptain, setStartingCaptain] = useState("");
@@ -38,22 +40,27 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
 
   const [fetchCaptainError, setFetchCaptainError] = useState("");
 
-  // Load all captain instances when entering step 2.
-  // Assignment/stopped-state filtering is applied in the UI (disabled prop).
+  // Load captain instances + installed frameworks when entering step 2.
   useEffect(() => {
     if (step === 2) {
       setFetchCaptainError("");
       fetchInstances().then((all) => {
-
         setExistingCaptains(all.filter((i) => i.hierarchy_role === "captain"));
       }).catch((err) => {
-
         console.error("Failed to fetch instances:", err);
         setFetchCaptainError(err instanceof Error ? err.message : "Failed to load captain instances");
         setExistingCaptains([]);
       });
+      // Populate the framework dropdown with only installed frameworks
+      fetchFrameworks().then((all) => {
+        const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
+        setInstalledFrameworks(installed);
+        if (installed.length > 0 && !captainFramework) {
+          setCaptainFramework(installed[0].id);
+        }
+      }).catch(() => {});
     }
-  }, [step]);
+  }, [step]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreate = async () => {
     setCreating(true);
@@ -225,9 +232,13 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
                     onChange={(e) => setCaptainFramework(e.target.value)}
                     className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
                   >
-                    <option value="zeroclaw">ZeroClaw</option>
-                    <option value="openclaw">OpenClaw</option>
-                    <option value="hermes">Hermes</option>
+                    {installedFrameworks.length === 0 ? (
+                      <option value="" disabled>loading frameworks…</option>
+                    ) : (
+                      installedFrameworks.map((fw) => (
+                        <option key={fw.id} value={fw.id}>{fw.name}</option>
+                      ))
+                    )}
                   </select>
                 </div>
                 <button
@@ -311,7 +322,7 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={creating || (captainMode === "existing" && !selectedCaptainId)}
+                  disabled={creating || (captainMode === "create" && !captainFramework) || (captainMode === "existing" && !selectedCaptainId)}
                   className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white transition-colors hover:bg-accent/80 disabled:opacity-50"
                 >
                   {creating ? "creating..." : "create project"}
