@@ -28,17 +28,14 @@ export default function ConfigFieldsForm({ framework, onSaved }: Props) {
     let cancelled = false;
     fetchFrameworkConfig(framework.id)
       .then((cfg) => {
-        if (cancelled || !cfg.content) return;
-        try {
-          const parsed = typeof cfg.content === "string" ? JSON.parse(cfg.content) : cfg.content;
-          if (!fields) return;
-          const loaded: Record<string, unknown> = {};
-          for (const field of fields) {
-            const val = getNestedValue(parsed, field.key);
-            if (val !== undefined) loaded[field.key] = val;
-          }
-          setValues((prev) => ({ ...prev, ...loaded }));
-        } catch { /* config not parseable — use defaults */ }
+        if (cancelled || !cfg.parsed) return;
+        if (!fields) return;
+        const loaded: Record<string, unknown> = {};
+        for (const field of fields) {
+          const val = getNestedValue(cfg.parsed, field.key);
+          if (val !== undefined) loaded[field.key] = val;
+        }
+        setValues((prev) => ({ ...prev, ...loaded }));
       })
       .catch(() => { /* no config yet — use defaults */ });
     return () => { cancelled = true; };

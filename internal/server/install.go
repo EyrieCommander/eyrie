@@ -14,6 +14,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/BurntSushi/toml"
+	"gopkg.in/yaml.v3"
+
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/registry"
 )
@@ -977,10 +980,33 @@ func (s *Server) handleFrameworkConfigRead(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	writeJSON(w, http.StatusOK, map[string]string{
+	// Parse the raw config into a map so the frontend can read field values
+	// without needing TOML/YAML parsers. The raw content is still returned
+	// for the text editor.
+	var parsed map[string]any
+	switch fw.ConfigFormat {
+	case "toml":
+		var m map[string]any
+		if _, err := toml.Decode(string(data), &m); err == nil {
+			parsed = m
+		}
+	case "json":
+		var m map[string]any
+		if json.Unmarshal(data, &m) == nil {
+			parsed = m
+		}
+	case "yaml", "yml":
+		var m map[string]any
+		if yaml.Unmarshal(data, &m) == nil {
+			parsed = m
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
 		"content": string(data),
 		"format":  fw.ConfigFormat,
 		"path":    fw.ConfigPath,
+		"parsed":  parsed,
 	})
 }
 

@@ -348,7 +348,7 @@ export async function getFrameworkDetail(id: string): Promise<Framework> {
 
 export async function fetchFrameworkConfig(
   id: string,
-): Promise<{ content: string; format: string; path: string }> {
+): Promise<{ content: string; format: string; path: string; parsed?: Record<string, unknown> }> {
   const res = await fetchWithTimeout(`${BASE}/api/registry/frameworks/${id}/config`);
   if (!res.ok) return { content: "", format: "", path: "" };
   return res.json();
