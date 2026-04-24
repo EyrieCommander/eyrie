@@ -116,10 +116,10 @@ func (s *Server) handleCreateInstance(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			var env []string
-				if s.vault != nil {
-					env = s.vault.EnvSlice()
-				}
-				autoStartErr = manager.ExecuteWithConfigEnv(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart, env)
+			if s.vault != nil {
+				env = s.vault.EnvSlice()
+			}
+			autoStartErr = manager.ExecuteWithConfigEnv(startCtx, inst.Framework, inst.ConfigPath, manager.ActionStart, env)
 		}
 
 		if autoStartErr != nil {

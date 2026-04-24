@@ -241,10 +241,10 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 			}
 		} else {
 			var env []string
-				if s.vault != nil {
-					env = s.vault.EnvSlice()
-				}
-				execErr = manager.ExecuteWithConfigEnv(ctx, inst.Framework, inst.ConfigPath, la, env)
+			if s.vault != nil {
+				env = s.vault.EnvSlice()
+			}
+			execErr = manager.ExecuteWithConfigEnv(ctx, inst.Framework, inst.ConfigPath, la, env)
 		}
 		if execErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": execErr.Error()})
