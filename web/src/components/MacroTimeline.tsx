@@ -44,7 +44,9 @@ export default function MacroTimeline({ active, status, onSelect }: Props) {
                   ? "text-text"
                   : isComplete
                     ? "text-green hover:bg-green/10"
-                    : "text-text-muted cursor-not-allowed"
+                    : isPending
+                      ? "text-text-muted cursor-not-allowed"
+                      : "text-text-muted hover:text-text hover:bg-surface-hover"
               }`}
             >
               <span

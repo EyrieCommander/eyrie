@@ -252,7 +252,12 @@ export default function ProjectsPhase() {
         <div className="rounded border border-yellow/30 bg-yellow/5 px-4 py-4 text-xs text-text-secondary">
           {backendDown
             ? "Cannot reach the backend — check that Eyrie is running."
-            : "Install a framework first — you need an agent runtime before creating a project."
+            : <>
+                Install a framework first — you need an agent runtime before creating a project.{" "}
+                <Link to="/?phase=frameworks" className="text-accent hover:text-accent/80 transition-colors">
+                  go to frameworks &rarr;
+                </Link>
+              </>
           }
         </div>
       )}
