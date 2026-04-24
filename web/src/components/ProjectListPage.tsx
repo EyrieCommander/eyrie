@@ -57,8 +57,10 @@ function CreateProjectDialog({ onCreated, onClose }: { onCreated: () => void; on
       fetchFrameworks().then((all) => {
         const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
         setInstalledFrameworks(installed);
-        if (installed.length > 0 && !captainFramework) {
-          setCaptainFramework(installed[0].id);
+        // Use functional updater so we don't overwrite a user selection
+        // that happened while the fetch was in flight.
+        if (installed.length > 0) {
+          setCaptainFramework((prev) => prev || installed[0].id);
         }
       }).catch(() => {}).finally(() => setFwLoaded(true));
     }

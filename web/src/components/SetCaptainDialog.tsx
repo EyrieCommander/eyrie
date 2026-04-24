@@ -43,9 +43,10 @@ export function SetCaptainDialog({
     fetchFrameworks().then((all) => {
       const installed = all.filter((fw) => getFrameworkStatus(fw).isInstalled);
       setInstalledFrameworks(installed);
-      // Default to the first installed framework (not a hardcoded name).
-      if (installed.length > 0 && !framework) {
-        setFramework(installed[0].id);
+      // Use functional updater so we don't overwrite a user selection
+      // that happened while the fetch was in flight.
+      if (installed.length > 0) {
+        setFramework((prev) => prev || installed[0].id);
       }
     }).catch(() => {}).finally(() => setFwLoaded(true));
   }, [refreshInstances]); // eslint-disable-line react-hooks/exhaustive-deps
