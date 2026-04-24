@@ -210,12 +210,9 @@ func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 
 	// Compute version status for each installed framework.
 	for i := range result {
-		if result[i].Version != "" {
-			extracted := registry.ExtractVersion(result[i].Version)
-			result[i].VersionStatus = registry.VersionStatus(
-				extracted, result[i].MinVersion, result[i].LatestVersion,
-			)
-		}
+		result[i].VersionStatus = registry.ComputeVersionStatus(
+			result[i].Version, result[i].Framework,
+		)
 	}
 
 	writeJSON(w, http.StatusOK, result)
@@ -474,32 +471,29 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 		cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
 
 	case "cargo":
-		defaultCmd := "cargo install " + fw.ID
-		if fw.InstallCmd != "" && fw.InstallCmd != defaultCmd {
+		if fw.IsCustomInstallCmd() {
 			progress.addLog(fmt.Sprintf("Running: %s", fw.InstallCmd))
 			cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
 		} else {
-			progress.addLog(fmt.Sprintf("Running: %s", defaultCmd))
+			progress.addLog(fmt.Sprintf("Running: cargo install %s", fw.ID))
 			cmd = exec.CommandContext(ctx, config.LookPathEnriched("cargo"), "install", fw.ID)
 		}
 
 	case "npm":
-		defaultCmd := "npm install -g " + fw.ID
-		if fw.InstallCmd != "" && fw.InstallCmd != defaultCmd {
+		if fw.IsCustomInstallCmd() {
 			progress.addLog(fmt.Sprintf("Running: %s", fw.InstallCmd))
 			cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
 		} else {
-			progress.addLog(fmt.Sprintf("Running: %s", defaultCmd))
+			progress.addLog(fmt.Sprintf("Running: npm install -g %s", fw.ID))
 			cmd = exec.CommandContext(ctx, config.LookPathEnriched("npm"), "install", "-g", fw.ID)
 		}
 
 	case "pip":
-		defaultCmd := "pip install " + fw.ID
-		if fw.InstallCmd != "" && fw.InstallCmd != defaultCmd {
+		if fw.IsCustomInstallCmd() {
 			progress.addLog(fmt.Sprintf("Running: %s", fw.InstallCmd))
 			cmd = exec.CommandContext(ctx, "bash", "-c", fw.InstallCmd)
 		} else {
-			progress.addLog(fmt.Sprintf("Running: %s", defaultCmd))
+			progress.addLog(fmt.Sprintf("Running: pip install %s", fw.ID))
 			cmd = exec.CommandContext(ctx, config.LookPathEnriched("pip"), "install", fw.ID)
 		}
 

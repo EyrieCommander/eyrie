@@ -27,6 +27,10 @@ type Framework struct {
 	InstallCmd    string   `json:"install_cmd"`    // Command or script URL
 	Requirements  []string `json:"requirements"`   // ["python>=3.11", "node>=22"]
 
+	// Version constraints (optional — empty means "no constraint" / "unknown")
+	MinVersion    string `json:"min_version,omitempty"`    // Minimum compatible version (e.g. "0.7.0")
+	LatestVersion string `json:"latest_version,omitempty"` // Latest known release version
+
 	// Configuration
 	ConfigFormat string        `json:"config_format"` // "toml", "json", "yaml"
 	ConfigPath   string        `json:"config_path"`   // "~/.hermes/config.yaml"
@@ -52,6 +56,29 @@ type Framework struct {
 	// Logs and activity
 	LogDir    string `json:"log_dir"`    // "~/.hermes/logs"
 	LogFormat string `json:"log_format"` // "text", "json"
+}
+
+// DefaultInstallCmd returns the default package-manager command for this
+// framework (e.g. "cargo install zeroclaw"). Returns "" for non-package-manager
+// install methods (script, manual).
+func (fw Framework) DefaultInstallCmd() string {
+	switch fw.InstallMethod {
+	case "cargo":
+		return "cargo install " + fw.ID
+	case "npm":
+		return "npm install -g " + fw.ID
+	case "pip":
+		return "pip install " + fw.ID
+	default:
+		return ""
+	}
+}
+
+// IsCustomInstallCmd reports whether the registry specifies a non-default
+// install command for this framework (e.g. --git, @version, custom flags).
+func (fw Framework) IsCustomInstallCmd() bool {
+	dflt := fw.DefaultInstallCmd()
+	return dflt != "" && fw.InstallCmd != "" && fw.InstallCmd != dflt
 }
 
 // ConfigSchema defines editable configuration fields for a framework

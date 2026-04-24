@@ -148,9 +148,12 @@ export interface Framework {
   log_dir: string;
   log_format: string;
   config_schema?: ConfigSchema;
-  installed?: boolean;   // binary exists on disk
-  configured?: boolean;  // config file exists (onboarding complete)
-  version?: string;      // installed binary version (from --version)
+  min_version?: string;     // minimum compatible version from registry
+  latest_version?: string;  // latest known release version from registry
+  installed?: boolean;      // binary exists on disk
+  configured?: boolean;     // config file exists (onboarding complete)
+  version?: string;         // installed binary version (from --version)
+  version_status?: "outdated" | "update_available" | "current";
 }
 
 export interface InstallProgress {

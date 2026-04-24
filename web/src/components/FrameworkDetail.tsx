@@ -167,7 +167,15 @@ export default function FrameworkDetail() {
             status.badge.color === "red" ? "bg-red/10 text-red" :
             status.badge.color === "blue" ? "bg-blue/10 text-blue" :
             "bg-yellow/10 text-yellow"
-          }`}>{status.badge.label}</span>
+          }`}>
+            {status.badge.label}
+            {status.isOutdated && framework.min_version && ` (min: ${framework.min_version})`}
+          </span>
+        )}
+        {status?.hasUpdate && !status?.isOutdated && framework.latest_version && (
+          <span className="text-[10px] text-text-muted">
+            {framework.latest_version} available
+          </span>
         )}
         <div className="flex-1" />
         <button
@@ -286,6 +294,15 @@ export default function FrameworkDetail() {
               <Settings className="h-3 w-3" /> configure
             </button>
           </>
+        )}
+        {/* Update */}
+        {(status?.isOutdated || status?.hasUpdate) && (
+          <button
+            onClick={handleInstall}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-accent hover:bg-accent-hover text-white rounded text-xs font-medium transition-colors"
+          >
+            <RefreshCw className="h-3 w-3" /> update
+          </button>
         )}
         {/* Uninstall */}
         {(status?.isInstalled || status?.isConfigured) && !showUninstallConfirm && (

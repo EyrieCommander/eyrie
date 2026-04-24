@@ -44,6 +44,10 @@ export interface FrameworkStatus {
   skipApiKey: boolean;
   /** Installed, configured, AND has (or skips) the api key — fully operational. */
   isReady: boolean;
+  /** Installed version is below the registry's min_version */
+  isOutdated: boolean;
+  /** Installed version is below latest_version but meets min_version */
+  hasUpdate: boolean;
   /** SSE install/uninstall is currently running */
   isRunning: boolean;
   /** Currently installing (not uninstalling) */
@@ -137,6 +141,9 @@ export function getFrameworkStatus(
   const needsApiKey = isInstalled && isConfigured && !hasApiKey;
   const isReady = isInstalled && isConfigured && hasApiKey;
 
+  const isOutdated = isInstalled && framework.version_status === "outdated";
+  const hasUpdate = isInstalled && framework.version_status === "update_available";
+
   let badge: FrameworkStatus["badge"] = null;
   if (isBinaryMissing) {
     badge = { label: "binary missing", color: "yellow" };
@@ -152,6 +159,10 @@ export function getFrameworkStatus(
     badge = { label: "needs setup", color: "yellow" };
   } else if (needsApiKey) {
     badge = { label: "needs api key", color: "yellow" };
+  } else if (isOutdated) {
+    badge = { label: "outdated", color: "yellow" };
+  } else if (isReady && hasUpdate) {
+    badge = { label: "update available", color: "blue" };
   } else if (isReady) {
     badge = { label: "ready", color: "green" };
   }
@@ -166,6 +177,8 @@ export function getFrameworkStatus(
     apiKeyProvider,
     skipApiKey,
     isReady,
+    isOutdated,
+    hasUpdate,
     isRunning,
     isInstalling,
     isUninstalling,

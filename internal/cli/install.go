@@ -171,14 +171,26 @@ func installBinary(ctx context.Context, fw *registry.Framework) error {
 		return runInstallScript(ctx, fw.InstallCmd)
 
 	case "cargo":
+		if fw.IsCustomInstallCmd() {
+			fmt.Printf("Running: %s\n", fw.InstallCmd)
+			return runInstallScript(ctx, fw.InstallCmd)
+		}
 		fmt.Printf("Running: cargo install %s\n", fw.ID)
 		return runCommand(ctx, "cargo", "install", fw.ID)
 
 	case "npm":
+		if fw.IsCustomInstallCmd() {
+			fmt.Printf("Running: %s\n", fw.InstallCmd)
+			return runInstallScript(ctx, fw.InstallCmd)
+		}
 		fmt.Printf("Running: npm install -g %s\n", fw.ID)
 		return runCommand(ctx, "npm", "install", "-g", fw.ID)
 
 	case "pip":
+		if fw.IsCustomInstallCmd() {
+			fmt.Printf("Running: %s\n", fw.InstallCmd)
+			return runInstallScript(ctx, fw.InstallCmd)
+		}
 		fmt.Printf("Running: pip install %s\n", fw.ID)
 		return runCommand(ctx, "pip", "install", fw.ID)
 

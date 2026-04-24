@@ -452,10 +452,11 @@ func (s *Server) handleFrameworkDetail(w http.ResponseWriter, r *http.Request) {
 				version = frameworkVersion(fw)
 			}
 			writeJSON(w, http.StatusOK, frameworkWithStatus{
-				Framework:  fw,
-				Installed:  installed,
-				Configured: configured,
-				Version:    version,
+				Framework:     fw,
+				Installed:     installed,
+				Configured:    configured,
+				Version:       version,
+				VersionStatus: registry.ComputeVersionStatus(version, fw),
 			})
 			return
 		}

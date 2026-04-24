@@ -10,8 +10,10 @@
       "repository": "https://github.com/zeroclaw-labs/zeroclaw",
       "website": "https://zeroclawlabs.ai",
       "install_method": "cargo",
-      "install_cmd": "cargo install zeroclaw",
+      "install_cmd": "cargo install --git https://github.com/zeroclaw-labs/zeroclaw zeroclawlabs",
       "requirements": ["rust>=1.70"],
+      "min_version": "0.7.0",
+      "latest_version": "0.7.3",
       "config_format": "toml",
       "config_path": "~/.zeroclaw/config.toml",
       "config_dir": "~/.zeroclaw",
@@ -58,17 +60,17 @@
             "group": "llm"
           },
           {
-            "key": "default_model",
+            "key": "providers.models.openrouter.model",
             "label": "model",
             "type": "text",
-            "default": "moonshotai/kimi-k2.5",
+            "default": "anthropic/claude-sonnet-4.6",
             "required": true,
             "description": "model identifier (provider-specific)",
             "group": "llm",
             "suggestions_key": "providers.fallback",
             "suggestions": {
-              "openrouter": ["anthropic/claude-sonnet-4-20250514", "anthropic/claude-opus-4-20250514", "moonshotai/kimi-k2.5", "google/gemini-2.5-pro", "openai/gpt-4.1"],
-              "anthropic": ["claude-sonnet-4-20250514", "claude-opus-4-20250514"],
+              "openrouter": ["anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.6", "moonshotai/kimi-k2.5", "google/gemini-2.5-pro", "openai/gpt-4.1"],
+              "anthropic": ["claude-sonnet-4.6", "claude-opus-4.6"],
               "openai": ["gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"]
             }
           },
