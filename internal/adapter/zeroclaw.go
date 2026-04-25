@@ -1152,11 +1152,23 @@ func (z *ZeroClawAdapter) loadEnrichedMessages(sessionKey string) []ChatMessage 
 
 
 
-// Interrupt asks ZeroClaw to cancel an in-flight response.
-// TODO: Call POST /api/sessions/{id}/abort once upstream ships zeroclaw-labs/zeroclaw#XXXX.
-// Until then, this is a no-op — context cancellation on the WS connection is
-// the only way to stop receiving, but the agent continues processing.
-func (z *ZeroClawAdapter) Interrupt(_ context.Context, _ string) error {
+// Interrupt asks ZeroClaw to cancel an in-flight response via the abort endpoint.
+func (z *ZeroClawAdapter) Interrupt(ctx context.Context, sessionKey string) error {
+	req, err := http.NewRequestWithContext(ctx, "POST", z.baseURL+"/api/sessions/"+sessionKey+"/abort", nil)
+	if err != nil {
+		return err
+	}
+	if z.token != "" {
+		req.Header.Set("Authorization", "Bearer "+z.token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return wrapConnError(err, "aborting session")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return httpStatusError(resp.StatusCode, "abort session returned %d", resp.StatusCode)
+	}
 	return nil
 }
 
