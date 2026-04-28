@@ -78,10 +78,13 @@ GET /api/review-tasks?project_id={id}
 ### Get task
 GET /api/review-tasks/{id}
 
-### Run task (stub)
+### Run task (stub + source context)
 POST /api/review-tasks/{id}/run
-Transitions task to running, writes one markdown draft artifact, then marks
-task draft_ready. No network calls or GitHub writes are performed.
+Transitions task to running. For GitHub-domain tasks, fetches read-only source
+context (issue/PR metadata + bounded comments) and persists a source_context
+artifact. Then writes the local stub draft artifact and marks task draft_ready.
+If the GitHub fetch fails, the draft is still created with a note about the
+failure. No GitHub writes are performed.
 
 ### List task artifacts
 GET /api/review-tasks/{id}/artifacts

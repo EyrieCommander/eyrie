@@ -37,7 +37,10 @@ const (
 
 type ArtifactKind string
 
-const ArtifactKindMarkdown ArtifactKind = "markdown"
+const (
+	ArtifactKindMarkdown      ArtifactKind = "markdown"
+	ArtifactKindSourceContext ArtifactKind = "source_context"
+)
 
 type Task struct {
 	ID           string     `json:"id"`
