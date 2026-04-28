@@ -247,8 +247,9 @@ export default function FrameworkDetail() {
                 // or mistyped registry entry from running arbitrary shell
                 // against the user's tmux.
                 const INSTALL_ALLOWLIST = /^\s*(cargo|pip|pip3|npm|pnpm|yarn|brew|apt|apt-get|dnf|choco|go|uv)\b/;
+                const SHELL_METACHAR = /[;&|`$(){}]/;
                 const raw = framework.install_cmd;
-                const cmd = raw && INSTALL_ALLOWLIST.test(raw)
+                const cmd = raw && INSTALL_ALLOWLIST.test(raw) && !SHELL_METACHAR.test(raw)
                   ? raw
                   : `eyrie install ${safeId}`;
                 sendToTerminal(cmd);

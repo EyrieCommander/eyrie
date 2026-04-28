@@ -522,8 +522,14 @@ func installBinary(ctx context.Context, fw *registry.Framework, progress *instal
 	cmd.Env = config.EnrichedEnv()
 
 	// Capture output and stream to logs
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("creating stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return fmt.Errorf("creating stderr pipe: %w", err)
+	}
 
 	if err := cmd.Start(); err != nil {
 		// Give actionable guidance when the tool binary is missing

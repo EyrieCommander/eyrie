@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
 	"strings"
 	"time"
@@ -221,7 +222,12 @@ func translateMessages(msgs []Message) (system string, out []anthropicMessage) {
 				// Anthropic's `input` is a real JSON object, not a string.
 				var input map[string]any
 				if tc.Function.Arguments != "" {
-					_ = json.Unmarshal([]byte(tc.Function.Arguments), &input)
+					if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+						// Log but don't fail — translation should be best-effort.
+						// Malformed arguments are sent as an empty map so the
+						// conversation can continue.
+						fmt.Fprintf(os.Stderr, "anthropic: malformed tool_call arguments for %s: %v\n", tc.Function.Name, err)
+					}
 				}
 				if input == nil {
 					input = map[string]any{}
@@ -583,7 +589,7 @@ done:
 	if err := scanner.Err(); err != nil {
 		return nil, fmt.Errorf("streaming read error: %w", err)
 	}
-	if !foundMessageStop && scanner.Err() == nil {
+	if !foundMessageStop {
 		return nil, fmt.Errorf("stream ended without message_stop event")
 	}
 

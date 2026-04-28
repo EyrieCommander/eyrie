@@ -79,8 +79,12 @@ interface Props {
 
 export default function CommanderChat({ phase }: Props) {
   const [expanded, setExpanded] = useState(() => {
-    const saved = localStorage.getItem(STORAGE_KEY);
-    return saved === null ? true : saved === "true";
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY);
+      return saved === null ? true : saved === "true";
+    } catch {
+      return true;
+    }
   });
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
@@ -95,7 +99,7 @@ export default function CommanderChat({ phase }: Props) {
   const controllerRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, String(expanded));
+    try { localStorage.setItem(STORAGE_KEY, String(expanded)); } catch { /* private mode */ }
   }, [expanded]);
 
   // ── Shared rehydration logic ──────────────────────────────────────
@@ -279,6 +283,8 @@ export default function CommanderChat({ phase }: Props) {
         return item;
       }),
     );
+    // Abort any existing controller before starting a new one
+    controllerRef.current?.abort();
     // Stream the continuation turn
     setStreaming(true);
     controllerRef.current = confirmCommanderAction(id, approved, handleEvent);
@@ -501,6 +507,7 @@ export default function CommanderChat({ phase }: Props) {
           <textarea
             ref={inputRef}
             value={input}
+            aria-label="Message the commander"
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {

@@ -85,6 +85,15 @@ export default function ConfigFieldsForm({ framework, onSaved }: Props) {
     if (saving) return;
     setSaving(true);
     setError(null);
+    // Validate required fields
+    if (fields) {
+      const missing = fields.filter((f) => f.required && (values[f.key] === undefined || values[f.key] === ""));
+      if (missing.length > 0) {
+        setError(`required: ${missing.map((f) => f.label || f.key).join(", ")}`);
+        setSaving(false);
+        return;
+      }
+    }
     try {
       await patchFrameworkConfig(framework.id, values);
       setSaved(true);
@@ -254,6 +263,9 @@ function FieldInput({
           onChange={(e) => onChange(e.target.value)}
           className="w-full rounded border border-border bg-bg px-2 py-1.5 text-xs text-text focus:border-accent focus:outline-none"
         >
+          {!field.options.includes(strVal) && strVal !== "" && (
+            <option value={strVal} disabled>{strVal} (unknown)</option>
+          )}
           {field.options.map((opt) => (
             <option key={opt} value={opt}>{opt}</option>
           ))}
@@ -310,7 +322,13 @@ function FieldInput({
         <input
           id={id}
           type="number"
-          value={value !== undefined ? Number(value) : (field.default as number) ?? ""}
+          value={(() => {
+            if (value !== undefined) {
+              const n = Number(value);
+              return Number.isFinite(n) ? n : "";
+            }
+            return (field.default as number) ?? "";
+          })()}
           min={field.min}
           max={field.max}
           onChange={(e) => onChange(e.target.value ? Number(e.target.value) : undefined)}

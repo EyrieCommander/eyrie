@@ -264,8 +264,9 @@ func (s *Server) runDiscovery(ctx context.Context) discovery.Result {
 		if ar.Alive && ar.Agent.Framework == adapter.FrameworkZeroClaw && ar.Agent.Token == "" {
 			if _, loaded := s.pairAttempted.LoadOrStore(ar.Agent.Name, true); !loaded {
 				agentName := ar.Agent.Name
+				agentPort := ar.Agent.Port
 				go func() {
-					autoPairZeroClaw(agentName, ar.Agent.Port)
+					autoPairZeroClaw(agentName, agentPort)
 					// Check if token was actually stored — if not, clear
 					// the flag so we retry on next discovery cycle.
 					if ts, err := config.NewTokenStore(); err == nil {
