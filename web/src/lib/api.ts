@@ -13,6 +13,9 @@ import type {
   PersonaCategory,
   Project,
   CreateProjectRequest,
+  ReviewTask,
+  ReviewArtifact,
+  ReviewTaskKind,
   HierarchyTree,
   ProjectChatMessage,
   KeyEntry,
@@ -541,6 +544,50 @@ export async function resetProject(id: string): Promise<void> {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || `Failed to reset project: ${res.statusText}`);
   }
+}
+
+export async function createReviewTask(req: {
+  project_id: string;
+  domain: string;
+  kind: ReviewTaskKind;
+  repo: string;
+  target_number: number;
+  runner_kind?: string;
+}): Promise<ReviewTask> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to create review task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchReviewTasks(projectId: string): Promise<ReviewTask[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks?project_id=${encodeURIComponent(projectId)}`);
+  if (!res.ok) throw new Error(`Failed to fetch review tasks: ${res.statusText}`);
+  return res.json();
+}
+
+export async function runReviewTask(taskID: string): Promise<ReviewTask> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks/${encodeURIComponent(taskID)}/run`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to run review task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchReviewTaskArtifacts(taskID: string): Promise<ReviewArtifact[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/review-tasks/${encodeURIComponent(taskID)}/artifacts`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || `Failed to fetch artifacts: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 // Hierarchy API

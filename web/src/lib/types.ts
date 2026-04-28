@@ -258,6 +258,30 @@ export interface CreateProjectRequest {
   goal?: string;
 }
 
+export type ReviewTaskStatus = "queued" | "running" | "draft_ready" | "posted" | "failed";
+export type ReviewTaskKind = "triage_issue" | "review_pr" | "rereview_pr" | "respond_reviewer";
+
+export interface ReviewTask {
+  id: string;
+  project_id: string;
+  domain: string;
+  kind: ReviewTaskKind;
+  repo: string;
+  target_number: number;
+  runner_kind?: string;
+  status: ReviewTaskStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ReviewArtifact {
+  id: string;
+  task_id: string;
+  kind: string;
+  content: string;
+  created_at: string;
+}
+
 // --- Hierarchy types ---
 
 export interface CommanderInfo {

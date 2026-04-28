@@ -17,6 +17,7 @@ import (
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"github.com/Audacity88/eyrie/internal/instance"
 	"github.com/Audacity88/eyrie/internal/project"
+	"github.com/Audacity88/eyrie/internal/reviewops"
 )
 
 //go:embed all:static
@@ -39,6 +40,7 @@ type Server struct {
 	projectStore  *project.Store
 	chatStore     *project.ChatStore
 	instanceStore *instance.Store
+	reviewStore   *reviewops.Store
 
 	// commander is the built-in LLM-driven orchestrator. The user chats
 	// with it directly via /api/commander/chat. It has direct access to
@@ -84,6 +86,10 @@ func New(cfg config.Config) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("instance store: %w", err)
 	}
+	reviewStore, err := reviewops.NewStore()
+	if err != nil {
+		return nil, fmt.Errorf("review store: %w", err)
+	}
 	s := &Server{
 		cfg:           cfg,
 		hidden:        hidden,
@@ -92,6 +98,7 @@ func New(cfg config.Config) (*Server, error) {
 		projectStore:  projStore,
 		chatStore:     chatSt,
 		instanceStore: instStore,
+		reviewStore:   reviewStore,
 	}
 	// Commander is constructed AFTER s is populated so its tools can
 	// receive method values of server methods (runDiscovery, send, etc.).
@@ -184,6 +191,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("POST /api/projects/{id}/reset", s.handleProjectReset)
 	s.mux.HandleFunc("GET /api/projects/{id}/activity", s.handleProjectActivity)
 	s.mux.HandleFunc("GET /api/projects/{id}/events", s.handleProjectEvents)
+	s.mux.HandleFunc("POST /api/review-tasks", s.handleCreateReviewTask)
+	s.mux.HandleFunc("GET /api/review-tasks", s.handleListReviewTasks)
+	s.mux.HandleFunc("GET /api/review-tasks/{id}", s.handleGetReviewTask)
+	s.mux.HandleFunc("POST /api/review-tasks/{id}/run", s.handleRunReviewTask)
+	s.mux.HandleFunc("GET /api/review-tasks/{id}/artifacts", s.handleListReviewTaskArtifacts)
 
 	// Commander (built-in LLM orchestrator — the user's chat surface)
 	s.mux.HandleFunc("POST /api/commander/chat", s.handleCommanderChat)

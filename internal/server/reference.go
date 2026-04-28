@@ -59,6 +59,33 @@ Clears project chat history, resets commander and captain session state (the
 instances themselves are preserved), and stops + deletes all talon instances.
 Use when a project needs a fresh start.
 
+## Review Ops Tasks (draft-first, local stub runner)
+
+### Create task
+POST /api/review-tasks
+Content-Type: application/json
+Body:
+- project_id (string, required)
+- domain (string, required): currently "github"
+- kind (string, required): triage_issue | review_pr | rereview_pr | respond_reviewer
+- repo (string, required): owner/repo
+- target_number (number, required): issue or PR number
+- runner_kind (string, optional)
+
+### List tasks
+GET /api/review-tasks?project_id={id}
+
+### Get task
+GET /api/review-tasks/{id}
+
+### Run task (stub)
+POST /api/review-tasks/{id}/run
+Transitions task to running, writes one markdown draft artifact, then marks
+task draft_ready. No network calls or GitHub writes are performed.
+
+### List task artifacts
+GET /api/review-tasks/{id}/artifacts
+
 ## Agent Instances
 
 ### Create an agent instance

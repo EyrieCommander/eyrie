@@ -29,8 +29,8 @@ import {
   ArrowLeft, Plus, Trash2, Briefcase, Crown,
   MessageSquare, Pause, Target,
 } from "lucide-react";
-import type { AgentInstance } from "../lib/types";
-import { deleteProject, resetProject, agentAction, instanceAction } from "../lib/api";
+import type { AgentInstance, ReviewTask, ReviewTaskKind, ReviewArtifact } from "../lib/types";
+import { deleteProject, resetProject, agentAction, instanceAction, createReviewTask, fetchReviewTasks, runReviewTask, fetchReviewTaskArtifacts } from "../lib/api";
 import { useData } from "../lib/DataContext";
 import { SetCaptainDialog } from "./SetCaptainDialog";
 import { AddAgentDialog } from "./AddAgentDialog";
@@ -79,6 +79,12 @@ export default function ProjectDetail() {
   const [loadError, setLoadError] = useState("");
   const [startingAgent, setStartingAgent] = useState("");
   const [chatKey, setChatKey] = useState(0); // increment to remount ProjectChat
+  const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>([]);
+  const [reviewKind, setReviewKind] = useState<ReviewTaskKind>("review_pr");
+  const [reviewRepo, setReviewRepo] = useState("zeroclaw-labs/zeroclaw");
+  const [reviewTarget, setReviewTarget] = useState(1);
+  const [selectedTaskID, setSelectedTaskID] = useState("");
+  const [selectedArtifacts, setSelectedArtifacts] = useState<ReviewArtifact[]>([]);
   const hasLoadedRef = useRef(false);
   const pollRef = useRef<{ interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null }>({ interval: null, timeout: null });
 
@@ -109,6 +115,30 @@ export default function ProjectDetail() {
   }, [id, ctxRefresh]);
 
   useEffect(() => { refresh(); }, [refresh]);
+
+  const refreshReviewTasks = useCallback(async () => {
+    if (!id) return;
+    try {
+      const tasks = await fetchReviewTasks(id);
+      setReviewTasks(tasks);
+      if (!selectedTaskID && tasks.length > 0) {
+        setSelectedTaskID(tasks[0].id);
+      }
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "Failed to load review tasks");
+    }
+  }, [id, selectedTaskID]);
+
+  useEffect(() => {
+    refreshReviewTasks();
+  }, [refreshReviewTasks]);
+
+  useEffect(() => {
+    if (!selectedTaskID) return;
+    fetchReviewTaskArtifacts(selectedTaskID)
+      .then(setSelectedArtifacts)
+      .catch((err) => setLoadError(err instanceof Error ? err.message : "Failed to load artifacts"));
+  }, [selectedTaskID]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -377,6 +407,94 @@ export default function ProjectDetail() {
                   />
                 ))}
               </div>
+            )}
+          </div>
+
+          <div className="h-px w-full bg-border" />
+
+          <div className="space-y-2">
+            <span className="text-[10px] font-medium text-text-muted">// review ops</span>
+            <div className="space-y-1">
+              <select
+                value={reviewKind}
+                onChange={(e) => setReviewKind(e.target.value as ReviewTaskKind)}
+                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
+              >
+                <option value="triage_issue">triage_issue</option>
+                <option value="review_pr">review_pr</option>
+                <option value="rereview_pr">rereview_pr</option>
+                <option value="respond_reviewer">respond_reviewer</option>
+              </select>
+              <input
+                value={reviewRepo}
+                onChange={(e) => setReviewRepo(e.target.value)}
+                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
+              />
+              <input
+                type="number"
+                min={1}
+                value={reviewTarget}
+                onChange={(e) => setReviewTarget(Number(e.target.value))}
+                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
+              />
+              <button
+                onClick={async () => {
+                  if (!id) return;
+                  try {
+                    const created = await createReviewTask({
+                      project_id: id,
+                      domain: "github",
+                      kind: reviewKind,
+                      repo: reviewRepo,
+                      target_number: reviewTarget,
+                    });
+                    setSelectedTaskID(created.id);
+                    await refreshReviewTasks();
+                  } catch (err) {
+                    setLoadError(err instanceof Error ? err.message : "Failed to create review task");
+                  }
+                }}
+                className="w-full rounded bg-accent px-2 py-1.5 text-[10px] font-medium text-white hover:bg-accent/80"
+              >
+                create task
+              </button>
+            </div>
+            <div className="max-h-36 space-y-1 overflow-y-auto">
+              {reviewTasks.map((task) => (
+                <button
+                  key={task.id}
+                  onClick={() => setSelectedTaskID(task.id)}
+                  className={`w-full rounded border px-2 py-1 text-left text-[10px] ${selectedTaskID === task.id ? "border-accent/50 bg-accent/10" : "border-border"}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-text">{task.kind} #{task.target_number}</span>
+                    <span className="rounded px-1 py-0.5 text-[9px] bg-surface-hover text-text-muted">{task.status}</span>
+                  </div>
+                  <div className="text-text-muted">{task.repo}</div>
+                </button>
+              ))}
+            </div>
+            {selectedTaskID && (
+              <button
+                onClick={async () => {
+                  try {
+                    await runReviewTask(selectedTaskID);
+                    await refreshReviewTasks();
+                    const arts = await fetchReviewTaskArtifacts(selectedTaskID);
+                    setSelectedArtifacts(arts);
+                  } catch (err) {
+                    setLoadError(err instanceof Error ? err.message : "Failed to run task");
+                  }
+                }}
+                className="w-full rounded border border-border px-2 py-1 text-[10px] text-text-muted hover:bg-surface-hover"
+              >
+                run selected task
+              </button>
+            )}
+            {selectedArtifacts[0] && (
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg p-2 text-[10px] text-text-muted">
+                {selectedArtifacts[selectedArtifacts.length - 1].content}
+              </pre>
             )}
           </div>
 
