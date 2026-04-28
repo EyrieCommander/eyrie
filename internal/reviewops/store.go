@@ -37,7 +37,10 @@ const (
 
 type ArtifactKind string
 
-const ArtifactKindMarkdown ArtifactKind = "markdown"
+const (
+	ArtifactKindMarkdown      ArtifactKind = "markdown"
+	ArtifactKindSourceContext ArtifactKind = "source_context"
+)
 
 type Task struct {
 	ID           string     `json:"id"`
@@ -126,6 +129,9 @@ func validateTaskCreate(req CreateTaskRequest) error {
 	}
 	if strings.TrimSpace(req.Repo) == "" {
 		return fmt.Errorf("repo is required")
+	}
+	if _, _, err := splitRepo(req.Repo); err != nil {
+		return err
 	}
 	if req.TargetNumber <= 0 {
 		return fmt.Errorf("target_number must be positive")

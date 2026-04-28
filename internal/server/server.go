@@ -41,6 +41,7 @@ type Server struct {
 	chatStore     *project.ChatStore
 	instanceStore *instance.Store
 	reviewStore   *reviewops.Store
+	githubClient  *reviewops.GitHubClient
 
 	// commander is the built-in LLM-driven orchestrator. The user chats
 	// with it directly via /api/commander/chat. It has direct access to
@@ -99,6 +100,7 @@ func New(cfg config.Config) (*Server, error) {
 		chatStore:     chatSt,
 		instanceStore: instStore,
 		reviewStore:   reviewStore,
+		githubClient:  reviewops.NewGitHubClient(),
 	}
 	// Commander is constructed AFTER s is populated so its tools can
 	// receive method values of server methods (runDiscovery, send, etc.).

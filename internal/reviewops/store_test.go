@@ -55,6 +55,7 @@ func TestStoreValidation(t *testing.T) {
 		{ProjectID: "p", Domain: "jira", Kind: "review_pr", Repo: "a/b", TargetNumber: 1},
 		{ProjectID: "p", Domain: DomainGitHub, Kind: "bad", Repo: "a/b", TargetNumber: 1},
 		{ProjectID: "p", Domain: DomainGitHub, Kind: "review_pr", Repo: "", TargetNumber: 1},
+		{ProjectID: "p", Domain: DomainGitHub, Kind: "review_pr", Repo: "../b", TargetNumber: 1},
 		{ProjectID: "p", Domain: DomainGitHub, Kind: "review_pr", Repo: "a/b", TargetNumber: 0},
 	}
 	for _, c := range cases {

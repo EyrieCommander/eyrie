@@ -85,6 +85,7 @@ export default function ProjectDetail() {
   const [reviewTarget, setReviewTarget] = useState(1);
   const [selectedTaskID, setSelectedTaskID] = useState("");
   const [selectedArtifacts, setSelectedArtifacts] = useState<ReviewArtifact[]>([]);
+  const [viewedArtifactIdx, setViewedArtifactIdx] = useState<number>(-1);
   const hasLoadedRef = useRef(false);
   const pollRef = useRef<{ interval: ReturnType<typeof setInterval> | null; timeout: ReturnType<typeof setTimeout> | null }>({ interval: null, timeout: null });
 
@@ -134,9 +135,16 @@ export default function ProjectDetail() {
   }, [refreshReviewTasks]);
 
   useEffect(() => {
-    if (!selectedTaskID) return;
+    if (!selectedTaskID) {
+      setSelectedArtifacts([]);
+      setViewedArtifactIdx(-1);
+      return;
+    }
     fetchReviewTaskArtifacts(selectedTaskID)
-      .then(setSelectedArtifacts)
+      .then((arts) => {
+        setSelectedArtifacts(arts);
+        setViewedArtifactIdx(arts.length > 0 ? arts.length - 1 : -1);
+      })
       .catch((err) => setLoadError(err instanceof Error ? err.message : "Failed to load artifacts"));
   }, [selectedTaskID]);
 
@@ -482,6 +490,7 @@ export default function ProjectDetail() {
                     await refreshReviewTasks();
                     const arts = await fetchReviewTaskArtifacts(selectedTaskID);
                     setSelectedArtifacts(arts);
+                    setViewedArtifactIdx(arts.length > 0 ? arts.length - 1 : -1);
                   } catch (err) {
                     setLoadError(err instanceof Error ? err.message : "Failed to run task");
                   }
@@ -491,10 +500,25 @@ export default function ProjectDetail() {
                 run selected task
               </button>
             )}
-            {selectedArtifacts[0] && (
-              <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg p-2 text-[10px] text-text-muted">
-                {selectedArtifacts[selectedArtifacts.length - 1].content}
-              </pre>
+            {selectedArtifacts.length > 0 && (
+              <div className="space-y-1">
+                <div className="flex gap-1">
+                  {selectedArtifacts.map((art, idx) => (
+                    <button
+                      key={art.id}
+                      onClick={() => setViewedArtifactIdx(idx)}
+                      className={`rounded px-1.5 py-0.5 text-[9px] ${viewedArtifactIdx === idx ? "bg-accent/20 text-accent font-medium" : "bg-surface-hover text-text-muted hover:text-text"}`}
+                    >
+                      {art.kind === "source_context" ? "context" : "draft"}
+                    </button>
+                  ))}
+                </div>
+                {viewedArtifactIdx >= 0 && viewedArtifactIdx < selectedArtifacts.length && (
+                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg p-2 text-[10px] text-text-muted">
+                    {selectedArtifacts[viewedArtifactIdx].content}
+                  </pre>
+                )}
+              </div>
             )}
           </div>
 
