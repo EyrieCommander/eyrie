@@ -8,6 +8,8 @@ Agents are persistent entities with real identity (IDENTITY.md, SOUL.md, MEMORY.
 
 **Design reference:** `eyrie/project-design.pen` (Pencil mockups)
 
+**Status note (2026-04-29):** The original commander-as-agent portions of this plan are superseded by `docs/plan-onboarding-flow.md`. The current direction is that Eyrie itself is the commander; there is no separate commander agent instance or `commander.json` pointer. The captain/talon hierarchy remains the useful project-work model.
+
 ### Core Principles
 
 1. **Agents drive, user oversees** — Commander creates projects, captains create talons. The UI shows what they're doing and lets the user intervene.

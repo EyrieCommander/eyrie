@@ -4,11 +4,11 @@
 
 **Branch:** `feature/project-orchestrator`
 **Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
-**Design:** `eyrie/project-design.pen` (Pencil mockups), implementation plans at `~/.claude/plans/majestic-crunching-tiger.md` and `~/.claude/plans/purrfect-sprouting-kahn.md`
+**Design:** `project-design.pen` (Pencil mockups), implementation plans in `docs/PLAN.md` and `docs/plan-onboarding-flow.md`.
 
 ## Unified Onboarding Flow (in progress)
 
-Current work lives in `~/.claude/plans/purrfect-sprouting-kahn.md` (single source of truth). Mockups at `project-design.pen` y=4400 (framework drill-down) + y=6600 (unified flow overview). Three macro phases — commander (placeholder) → frameworks → projects — with agents provisioned inline inside project creation.
+Current work lives in `docs/plan-onboarding-flow.md` (single source of truth). Mockups at `project-design.pen` y=4400 (framework drill-down) + y=6600 (unified flow overview). Three macro phases — commander (placeholder) → frameworks → projects — with agents provisioned inline inside project creation.
 
 ### Deferred follow-ups from this work
 
@@ -79,23 +79,9 @@ Current work lives in `~/.claude/plans/purrfect-sprouting-kahn.md` (single sourc
 
 ---
 
-### ZeroClaw PRs:
-- **#4275 (named sessions)**: Merged ✅ (our #4267 was superseded)
-- **#4350 (streaming tool events)**: Closed — superseded by upstream #4175
-- **#4584 (proxy tool event parsing)**: Closed — functionality landed upstream on master
-- **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
-- **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — closed (pre-microkernel paths)
-- **#5148 (http_request per-host allowlist)**: Closed (pre-microkernel paths) — needs redo on new crate layout
-- **#5696 (session reset/delete tools)**: Changes requested → addressed (delete no-op guard, TOCTOU comment, risk label fix, follow-up issues filed). Awaiting re-review from @JordanTheJet.
-- **#5705 (session abort + incremental persistence)**: Changes requested → addressed (risk label fix, breaking changes documented, 4 follow-up issues filed). No code changes needed. Awaiting re-review from @JordanTheJet. Eyrie's stop button depends on this — once merged, wire `ZeroClawAdapter.Interrupt` to call `POST /api/sessions/{id}/abort`.
-- **#5701 (clear_messages issue)**: Open issue — we claimed ownership. Will submit follow-up PR after #5696 merges.
-- **#5791 (When to Supersede docs)**: Merged ✅ — shipped in v0.7.0.
-- **#4363 (push fixups instead of superseding)**: Closed in favor of #5791.
-- **#5833 (session ownership model)**: Open issue — scoping destructive operations per-agent. Follow-up from #5696.
-- **#5834 (FTS UPDATE trigger)**: Open issue — `sessions_fts` goes stale on `update_last`. Follow-up from #5705.
-- **#5835 (cancel_tokens eviction)**: Open issue — leaked map entries for abandoned sessions. Follow-up from #5705.
-- **#5836 (execute_tools cancellation)**: Open issue — thread CancellationToken into tool execution. Follow-up from #5705.
-- **#5837 (ACP cancellation)**: Open issue — ACP sessions have no abort support. Follow-up from #5705.
+### ZeroClaw tracking
+
+Moved to [../../ZEROCLAW_TRACKER.md](../../ZEROCLAW_TRACKER.md). Keep this TODO focused on Eyrie implementation; use the tracker for durable ZeroClaw PR/issue history and `../../claws/zeroclaw/tmp/handoff.md` for active review-session handoff.
 
 ---
 
@@ -140,7 +126,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
     - Tag/namespace support (`project:X/*`, `user-pref/*`) for scoped recall and bulk forget
     - TTL-based pruning and "last-accessed" ordering so stale notes fall out naturally
     - Cross-reference how EyrieClaw, OpenClaw, and PicoClaw structure their agent memory (`claws/*/`) — pick conventions rather than invent new ones
-  - **Later — UI surface for memory**: list/view/edit/delete via Settings page (backend beyond skeleton needs PUT/DELETE endpoints)
+  - **Later — UI surface for memory**: list/view/edit/delete via Settings page. The backend already has a read endpoint and tool-based writes; add explicit UI edit/delete endpoints if Settings needs direct memory management.
 - [ ] Implement an initial tool set: listing and getting project details, creating projects, listing personas and running agents, assigning captains (with full provisioning and briefing), reading a project's chat, sending messages into a project chat on the user's behalf, querying recent activity, and restarting agents
 - [ ] Autonomy policy: read-only tools run automatically; write tools (create, assign, send, restart) require user confirmation
 - [x] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
@@ -159,7 +145,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - Turning high-level goals into concrete projects
 
 **Cleanup (no backward compatibility — no existing users):**
-- [ ] Delete the old commander-agent concept everywhere: the stored pointer to a commander instance, the set/get commander endpoints, the frontend setup page, and any remaining participant/discovery paths that assumed the commander was an agent
+- [x] Delete the old commander-agent concept everywhere: the stored pointer to a commander instance, the set/get commander endpoints, the frontend setup page, and any remaining participant/discovery paths that assumed the commander was an agent
 - [ ] When the commander sends a message into a project chat, it appears as a distinct sender (not "user") so the captain and user can see who initiated it
 
 **Deferred (project-chat observation parity):**

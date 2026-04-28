@@ -4,13 +4,15 @@
 
 All work now lives on **`main`**. The former `feature/onboarding-ui` and `feature/eyrie-commander` branches have been merged. The commander backend (`internal/commander/`) is on `main` with read/write tools, structured confirmation, memory store, Anthropic native provider, and context-window usage reporting. The old commander-agent system has been deleted.
 
+This tracked plan now incorporates the still-current architecture notes from the legacy local Claude plan at `~/.claude/plans/majestic-crunching-tiger.md`. Treat that local file as archived reference; this document is the source of truth for onboarding/commander UI direction.
+
 ## Context
 
 Three separate surfaces — HierarchyPage (mission control), FrameworkDetail, ProjectDetail — each do part of the onboarding story, and none of them show the full arc. The result is fragmented, and there's no overarching progress indicator tying the pieces together.
 
 The pivot: **Eyrie itself becomes the commander**. The user is guided through a single scrollable flow with three macro phases:
 
-1. **Commander setup** — the backend (`internal/commander/`) already exists on `feature/eyrie-commander` (skeleton with OpenRouter + claude-sonnet-4.6, one tool, SSE streaming). Phase 0's UI is initially just a "ready" confirmation card (the commander is running; nothing for the user to do). It expands into provider/model selection + connectivity test + context-usage indicator once Phase 5a backend follow-ups land (more tools, Anthropic native provider, memory store, autonomy gating). The macro timeline treats phase 0 as auto-complete as long as the commander endpoint responds.
+1. **Commander setup** — the backend (`internal/commander/`) exists on `main` with read/write tools, structured confirmation, persistent conversation history, memory, Anthropic native provider support, and context-window reporting. Phase 0's UI is initially a compact "ready" confirmation card (the commander is running; nothing for the user to do). It can grow into provider/model settings, connectivity testing, memory controls, multi-session support, and autonomy policy controls without changing the macro timeline. The macro timeline treats phase 0 as auto-complete as long as the commander endpoint responds.
 2. **Frameworks** — pick and install agent runtimes (choose → install → configure → api key → launch).
 3. **Projects** — create projects as single-page forms, with captain/talon agents provisioned inline from the team section.
 
@@ -25,11 +27,40 @@ The chat panel's content is **context-aware**: the greeting, the commander's ope
 
 Every major choice point in the main content also surfaces an **"ask commander"** purple CTA — e.g., the "not sure which framework to pick?" box on phase 1, or the "help me resolve this" primary button on the error state. Clicking pre-fills a relevant question in the chat input.
 
+## Architecture strategy
+
+Eyrie is an agentic factory and control room. Agents do the project work; Eyrie provides the governance, project intelligence, cross-framework routing, and visual operating layer above them. Both agents and the user are first-class participants: anything an agent can do through the API should also be visible and overridable in the UI, and anything the user does should leave the same durable project state agents can observe.
+
+The core architectural separation is runtime primitives versus factory judgment. Runtimes such as ZeroClaw, OpenClaw, PicoClaw, and Hermes provide primitives: agent definitions, session management, tool execution, delegation, swarm execution, isolation, and per-framework observability. Eyrie provides judgment: which agent should handle a task, when to hand off, what a project needs next, how to compose agents across frameworks, and when human approval or intervention is required.
+
+The built-in commander validates this split. The commander understands user intent, queries project state, calls direct Go tools, sends messages into project chats, and asks for confirmation before sensitive writes. It does not need a shell, workspace sandbox, pairing flow, or provisioned gateway. Captains and talons remain external framework agents because they do real work in project workspaces.
+
+This means the old commander-agent approach is retired. There is no separate commander ZeroClaw instance, no `commander.json` instance pointer, no commander provisioning/pairing/briefing flow, and no commander participant in project chat. Eyrie itself is the commander; project captains are the first responders inside project chat.
+
+As runtimes gain stronger native multi-agent support, Eyrie's job shifts rather than disappears. Before, Eyrie filled gaps to make multi-agent usable at all. Over time it becomes the project, governance, analytics, and cross-framework composition layer above runtime primitives. Better runtime primitives make the factory layer more powerful, not less relevant.
+
+## Runtime evolution and Eyrie impact
+
+ZeroClaw RFC #5890 is the main near-term runtime change to track. If accepted and implemented, it should give ZeroClaw first-class per-agent identity, gateway CRUD for agents, live reload, `agent_name` observability, and per-agent channel bindings. For Eyrie, that means the ZeroClaw adapter can move from writing config files and restarting daemons toward HTTP lifecycle operations with richer event attribution.
+
+The `adapter.Agent` interface remains the right boundary. RFC #5890 changes how `internal/adapter/zeroclaw.go` implements provisioning, lifecycle, and observability, but it should not force Eyrie to become ZeroClaw-specific. OpenClaw, Hermes, PicoClaw, and embedded EyrieClaw can evolve independently behind the same control-room surface.
+
+Other adapters need their own refresh as their runtimes mature: OpenClaw already has more production multi-agent shape, Hermes has delegation concepts, and PicoClaw's swarm/sub-agent story is still emerging. Eyrie's comparison matrix and provisioning strategies should be updated from current code/docs rather than old assumptions.
+
+The enduring factory-layer work is:
+- Cross-framework teams, such as a ZeroClaw developer, Hermes researcher, and PicoClaw monitor in one project.
+- Project-level abstractions, such as milestones, quality gates, blueprints, dependencies, and budgets.
+- Governance and oversight, including approval workflows, audit trails, escalation policies, and human override.
+- Factory analytics, including cost rollups, utilization, bottleneck detection, and project health trends.
+- Visual command-center UX, including a spatial/canvas view of agents, workflows, handoffs, state, and batch operations.
+
 ## Retrospective: previous plans
 
 The Frameworks-First redesign (reordering frameworks → agents → projects, sidebar, breadcrumbs, collapsible comparisons) is implemented and holding up. Its 3-step mission-control guide was the closest precedent to the unified flow, but only at the macro level — it had no per-framework detail.
 
 The framework-detail redesign (this plan's earlier draft) landed as `1a1e919 feat: terminal-centric framework detail page`. It designed a 4-step timeline (install / configure / api key / launch). Those 4 steps became sub-steps 2–5 of phase 1 in the unified flow; a "choose" sub-step was added in front. The tmux output parser was deferred — the onboarding flow uses polling + filesystem state for step completion, which works well enough.
+
+The legacy commander plan (`majestic-crunching-tiger.md`) is also folded in here. Its stale skeleton implementation details are superseded by the current `internal/commander/` code on `main`; its enduring strategy is preserved above: Eyrie itself is the commander, runtime primitives stay below the adapter boundary, and Eyrie differentiates as the factory/governance layer.
 
 What's being retired:
 - `HierarchyPage` 3-step `GuideView` sub-component → absorbed into the unified flow. The mission-control half of `HierarchyPage.tsx` (`SwimLaneTimeline`, metric cards, commander bar, agent hierarchy) stays — it's operational/monitoring, not onboarding. Rather than wholesale deletion, the implementation extracts mission-control into its own component (e.g. `MissionControl.tsx`), keeps `/mission-control` routing it, and deletes the `GuideView` + wrapper logic from `HierarchyPage.tsx` (or renames the remaining file).
@@ -83,13 +114,13 @@ Rules:
 
 ### Phase 0: Commander setup
 
-The backend has landed as `cec33c8` on `feature/eyrie-commander`. The UI for phase 0 is minimal at this stage:
+The commander backend is available on `main`. The UI for phase 0 can stay minimal at this stage:
 
 - A compact "ready" card: "Eyrie is your commander. Ask me anything via the chat panel →" with a green check.
 - Collapsed-by-default details: which provider/model is configured (read from env / server-side config), history count (via `GET /api/commander/history`), "clear history" button (`DELETE /api/commander/history`).
 - If the commander fails a health check (e.g., no `OPENROUTER_API_KEY`): dashed-yellow card: "Commander isn't configured. Set `OPENROUTER_API_KEY` and restart Eyrie." with a doc link.
 
-The macro timeline auto-advances to phase 1 when the commander endpoint returns successfully. When Phase 5a backend follow-ups land (Anthropic native provider, memory store, autonomy gating, multi-session), phase 0's UI grows into a proper settings card (provider select, model text, connectivity test button, context-usage indicator, autonomy policy toggle) — no structural changes required to the macro timeline.
+The macro timeline auto-advances to phase 1 when the commander endpoint returns successfully. Phase 0 can later expand into a proper settings card — provider select, model text, connectivity test button, memory controls, context-usage indicator, multi-session selector, and autonomy policy controls — without structural changes to the macro timeline.
 
 ### Phase 1: Frameworks (5 sub-steps)
 
