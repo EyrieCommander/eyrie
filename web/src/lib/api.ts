@@ -611,7 +611,7 @@ export function confirmCommanderAction(
   reason?: string,
 ): AbortController {
   return streamSSE(
-    `${BASE}/api/commander/confirm/${id}`,
+    `${BASE}/api/commander/confirm/${encodeURIComponent(id)}`,
     { approved, reason },
     onEvent,
     "Confirm request failed",

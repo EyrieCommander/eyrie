@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 )
@@ -261,7 +262,7 @@ func postConfirm(baseURL, id string, approved bool, reason string) error {
 		"approved": approved,
 		"reason":   reason,
 	})
-	req, err := http.NewRequest("POST", baseURL+"/api/commander/confirm/"+id, bytes.NewReader(body))
+	req, err := http.NewRequest("POST", baseURL+"/api/commander/confirm/"+url.PathEscape(id), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

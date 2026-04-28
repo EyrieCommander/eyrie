@@ -898,8 +898,11 @@ function formatYamlValue(value: string, fieldType?: string): string {
     return String(n);
   }
   if (fieldType === "boolean") {
-    if (value.trim() === "") throw new Error("Boolean field cannot be empty");
-    return value === "true" ? "true" : "false";
+    const v = value.trim().toLowerCase();
+    if (v === "") throw new Error("Boolean field cannot be empty");
+    if (["true", "1", "yes", "y", "on"].includes(v)) return "true";
+    if (["false", "0", "no", "n", "off"].includes(v)) return "false";
+    throw new Error(`Unrecognized boolean value: "${value}"`);
   }
   // String: always double-quote + escape. This sidesteps every edge case
   // with special characters like ":", "#", leading "-", "!", etc.

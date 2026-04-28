@@ -202,6 +202,7 @@ function RawConfigEditor({ frameworkId, format, onSaved }: { frameworkId: string
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -211,7 +212,10 @@ function RawConfigEditor({ frameworkId, format, onSaved }: { frameworkId: string
         setRaw(typeof cfg.content === "string" ? cfg.content : JSON.stringify(cfg.content, null, 2));
         setLoaded(true);
       })
-      .catch(() => { setLoaded(true); });
+      .catch((err) => {
+        if (!cancelled) setLoadError(err instanceof Error ? err.message : "failed to load config");
+        setLoaded(true);
+      });
     return () => { cancelled = true; };
   }, [frameworkId]);
 
@@ -240,6 +244,9 @@ function RawConfigEditor({ frameworkId, format, onSaved }: { frameworkId: string
 
   return (
     <div className="space-y-2">
+      {loadError && (
+        <div className="rounded border border-red/30 bg-red/5 px-3 py-2 text-xs text-red">{loadError}</div>
+      )}
       <ConfigEditor value={raw} format={format} onChange={setRaw} />
       <div className="flex items-center gap-2">
         <button

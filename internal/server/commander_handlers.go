@@ -175,14 +175,6 @@ func (s *Server) handleCommanderConfirm(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Obtain the SSE writer BEFORE approving/denying. If SSE setup fails
-	// we haven't mutated any state yet, so the client can retry cleanly.
-	sse, sseErr := NewSSEWriter(w)
-	if sseErr != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": sseErr.Error()})
-		return
-	}
-
 	var (
 		pa  *commander.PendingAction
 		err error
@@ -202,6 +194,14 @@ func (s *Server) handleCommanderConfirm(w http.ResponseWriter, r *http.Request) 
 			status = http.StatusConflict
 		}
 		writeJSON(w, status, map[string]string{"error": errMsg})
+		return
+	}
+
+	// Obtain the SSE writer AFTER approve/deny so that error responses
+	// above can use writeJSON (which requires plain HTTP headers).
+	sse, sseErr := NewSSEWriter(w)
+	if sseErr != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": sseErr.Error()})
 		return
 	}
 

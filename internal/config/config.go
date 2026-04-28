@@ -146,6 +146,33 @@ func LookPathEnriched(command string) string {
 	if runtime.GOOS == "darwin" {
 		dirs = append(dirs, "/opt/homebrew/bin")
 	}
+	// Find NVM Node.js v22 if available (same logic as EnrichedEnv).
+	nvmDir := filepath.Join(home, ".nvm", "versions", "node")
+	if entries, err := os.ReadDir(nvmDir); err == nil {
+		bestName := ""
+		var bestMinor, bestPatch int
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, "v22.") {
+				continue
+			}
+			parts := strings.Split(strings.TrimPrefix(name, "v"), ".")
+			if len(parts) < 3 {
+				continue
+			}
+			minor, err1 := strconv.Atoi(parts[1])
+			patch, err2 := strconv.Atoi(parts[2])
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			if bestName == "" || minor > bestMinor || (minor == bestMinor && patch > bestPatch) {
+				bestName, bestMinor, bestPatch = name, minor, patch
+			}
+		}
+		if bestName != "" {
+			dirs = append(dirs, filepath.Join(nvmDir, bestName, "bin"))
+		}
+	}
 	for _, d := range dirs {
 		p := filepath.Join(d, command)
 		if _, err := os.Stat(p); err == nil {

@@ -113,6 +113,12 @@ func (s *Server) restartAgentByName(ctx context.Context, name string) error {
 			}
 			return fmt.Errorf("restarting embedded agent: %w", restartErr)
 		}
+		// Persist running status on success (Restart is synchronous for embedded agents)
+		if target.InstanceID != "" {
+			if updateErr := s.instanceStore.UpdateStatus(target.InstanceID, instance.StatusRunning); updateErr != nil {
+				slog.Warn("failed to persist embedded restart success status", "instance", target.InstanceID, "error", updateErr)
+			}
+		}
 		return nil
 	}
 

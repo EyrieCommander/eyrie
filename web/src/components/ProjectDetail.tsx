@@ -309,7 +309,6 @@ export default function ProjectDetail() {
                 <div className="font-medium text-text">Eyrie</div>
                 <div className="text-text-muted">built-in commander</div>
               </div>
-              <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400" />
             </div>
           </div>
 
@@ -513,6 +512,11 @@ export default function ProjectDetail() {
                           })
                           .join("; ");
                         setLoadError(`failed to start ${failures.length}/${needsStart.length} agent${failures.length === 1 ? "" : "s"}: ${msg}`);
+                      }
+                      // If every agent failed, don't bother polling — clear state immediately
+                      if (failures.length === needsStart.length) {
+                        setStartingAgent("");
+                        return;
                       }
                       // Clear any prior interval AND timeout — otherwise
                       // an older setTimeout could fire mid-poll and

@@ -62,7 +62,17 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 				// provider. The provider endpoint may be reachable (probe says
 				// "ok") but the agent can't use it without credentials.
 				if status.ProviderStatus == "ok" && s.vault != nil {
-					if s.vault.Get(status.Provider) == "" {
+					// Normalize composite provider names (e.g. "openrouter:x" → "openrouter")
+					// to match how providerAPIKey resolves vault lookups.
+					providerKey := status.Provider
+					if idx := strings.Index(providerKey, ":"); idx > 0 {
+						if providerKey[:idx] == "custom" {
+							providerKey = "" // custom endpoints don't need vault keys
+						} else {
+							providerKey = providerKey[:idx]
+						}
+					}
+					if providerKey != "" && s.vault.Get(providerKey) == "" {
 						status.ProviderStatus = "error"
 					}
 				}
