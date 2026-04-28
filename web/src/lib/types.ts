@@ -104,8 +104,17 @@ export interface ConfigField {
   required: boolean;
   description: string;
   options?: string[];
+  /** Suggested values for text fields — renders as a dropdown with a custom option.
+   *  Can be a flat array or a map keyed by another field's value (e.g., provider → models). */
+  suggestions?: string[] | Record<string, string[]>;
+  /** When suggestions is a map, this is the key of the field whose value selects the list. */
+  suggestions_key?: string;
   min?: number;
   max?: number;
+  /** Hide behind an "advanced" toggle in the quick setup form. */
+  advanced?: boolean;
+  /** Layout group name — fields with the same group render side-by-side. */
+  group?: string;
 }
 
 export interface ConfigSchema {
@@ -139,8 +148,12 @@ export interface Framework {
   log_dir: string;
   log_format: string;
   config_schema?: ConfigSchema;
-  installed?: boolean;   // binary exists on disk
-  configured?: boolean;  // config file exists (onboarding complete)
+  min_version?: string;     // minimum compatible version from registry
+  latest_version?: string;  // latest known release version from registry
+  installed?: boolean;      // binary exists on disk
+  configured?: boolean;     // config file exists (onboarding complete)
+  version?: string;         // installed binary version (from --version)
+  version_status?: "outdated" | "update_available" | "current";
 }
 
 export interface InstallProgress {
@@ -152,6 +165,11 @@ export interface InstallProgress {
   error?: string;
   started_at: string;
   completed_at?: string;
+  /** Kind of operation this progress represents. Consumed by
+   *  frameworkStatus.ts to reliably distinguish install from uninstall
+   *  instead of substring-matching `message`. Optional for backward
+   *  compatibility; legacy consumers fall back to the message check. */
+  operation?: "install" | "uninstall";
 }
 
 export interface InstallLogEvent {
@@ -289,6 +307,37 @@ export interface SetKeyResponse {
 export interface ValidateKeyResponse {
   valid: boolean;
   error?: string;
+}
+
+// --- Commander chat types ---
+
+export interface CommanderDelta          { type: "delta"; text: string }
+export interface CommanderToolCall       { type: "tool_call"; id: string; name: string; args: Record<string, unknown> }
+export interface CommanderToolResult     { type: "tool_result"; id: string; name: string; output: string; error?: boolean }
+export interface CommanderMessage        { type: "message"; role: string; content: string }
+export interface CommanderDone           { type: "done"; input_tokens?: number; output_tokens?: number; context_tokens?: number; context_window?: number }
+export interface CommanderError          { type: "error"; error: string }
+export interface CommanderConfirmRequired { type: "confirm_required"; id: string; tool: string; args: Record<string, unknown>; summary: string }
+
+export type CommanderEvent =
+  | CommanderDelta
+  | CommanderToolCall
+  | CommanderToolResult
+  | CommanderMessage
+  | CommanderDone
+  | CommanderError
+  | CommanderConfirmRequired;
+
+export interface CommanderHistoryMessage {
+  role: string;
+  content: string;
+}
+
+export interface MemoryEntry {
+  key: string;
+  value: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export const FRAMEWORK_EMOJI: Record<string, string> = {

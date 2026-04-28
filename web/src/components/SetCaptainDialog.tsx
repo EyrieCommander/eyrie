@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import type { AgentInstance } from "../lib/types";
 import { fetchInstances, createInstance, updateProject, streamCaptainBriefing, instanceAction } from "../lib/api";
+import { useInstalledFrameworks } from "../lib/useInstalledFrameworks";
 
 export interface SetCaptainDialogProps {
   projectId: string;
@@ -23,7 +24,9 @@ export function SetCaptainDialog({
   // Create new form — default name derived from project
   const defaultName = `${projectName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "")}-captain`;
   const [name, setName] = useState("");
-  const [framework, setFramework] = useState("openclaw");
+  const [framework, setFramework] = useState("");
+  const { frameworks: installedFrameworks, loading: fwLoading } = useInstalledFrameworks();
+  const fwLoaded = !fwLoading;
   const [captainInstances, setCaptainInstances] = useState<AgentInstance[]>([]);
 
   const refreshInstances = useCallback(() => {
@@ -32,9 +35,14 @@ export function SetCaptainDialog({
     }).catch((err) => { console.error("Failed to fetch instances:", err); });
   }, []);
 
+  useEffect(() => { refreshInstances(); }, [refreshInstances]);
+
+  // Default to the first installed framework once loaded.
   useEffect(() => {
-    refreshInstances();
-  }, [refreshInstances]);
+    if (installedFrameworks.length > 0) {
+      setFramework((prev) => prev || installedFrameworks[0].id);
+    }
+  }, [installedFrameworks]);
 
   const handleCreate = async () => {
     const effectiveName = name.trim() || defaultName;
@@ -108,9 +116,15 @@ export function SetCaptainDialog({
                 onChange={(e) => setFramework(e.target.value)}
                 className="w-full rounded border border-border bg-surface px-3 py-2 text-xs text-text focus:border-accent focus:outline-none"
               >
-                <option value="openclaw">OpenClaw</option>
-                <option value="zeroclaw">ZeroClaw</option>
-                <option value="hermes">Hermes</option>
+                {!fwLoaded ? (
+                  <option value="" disabled>loading frameworks…</option>
+                ) : installedFrameworks.length === 0 ? (
+                  <option value="" disabled>no installed frameworks</option>
+                ) : (
+                  installedFrameworks.map((fw) => (
+                    <option key={fw.id} value={fw.id}>{fw.name}</option>
+                  ))
+                )}
               </select>
             </div>
             <p className="text-[10px] text-text-muted">
@@ -129,7 +143,7 @@ export function SetCaptainDialog({
                 </button>
                 <button
                   onClick={handleCreate}
-                  disabled={saving}
+                  disabled={saving || !framework}
                   className="rounded bg-accent px-3 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
                 >
                   {saving ? "creating..." : "create captain"}

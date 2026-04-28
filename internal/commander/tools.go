@@ -111,15 +111,25 @@ type Registry struct {
 // Additional tools are registered here as the commander grows.
 func NewRegistry(deps RegistryDeps) *Registry {
 	r := &Registry{tools: make(map[string]Tool)}
-	// Read-only (Auto risk)
-	r.register(listProjectsTool(deps.Projects))
-	r.register(getProjectTool(deps.Projects))
+	// Read-only (Auto risk) — guard on deps so a nil pointer doesn't
+	// cause a panic when the LLM invokes the tool. Missing deps just
+	// mean the tool isn't offered; the LLM picks from what's available.
+	if deps.Projects != nil {
+		r.register(listProjectsTool(deps.Projects))
+		r.register(getProjectTool(deps.Projects))
+	}
 	r.register(listPersonasTool())
-	r.register(listAgentsTool(deps.Discovery))
-	r.register(readProjectChatTool(deps.Chat))
+	if deps.Discovery != nil {
+		r.register(listAgentsTool(deps.Discovery))
+	}
+	if deps.Chat != nil {
+		r.register(readProjectChatTool(deps.Chat))
+	}
 	// Write (Confirm risk)
-	r.register(createProjectTool(deps.Projects))
-	if deps.SendToProject != nil {
+	if deps.Projects != nil {
+		r.register(createProjectTool(deps.Projects))
+	}
+	if deps.SendToProject != nil && deps.Projects != nil {
 		r.register(sendToProjectTool(deps.SendToProject, deps.Projects))
 	}
 	if deps.RestartAgent != nil {
@@ -192,7 +202,7 @@ type personaSummary struct {
 	Name          string `json:"name"`
 	Description   string `json:"description,omitempty"`
 	HierarchyRole string `json:"hierarchy_role,omitempty"`
-	Installed     bool   `json:"installed,omitempty"`
+	Installed     bool   `json:"installed"`
 }
 
 type agentSummary struct {
@@ -372,9 +382,16 @@ func readProjectChatTool(store *project.ChatStore) Tool {
 			if projectID == "" {
 				return "", fmt.Errorf("project_id is required")
 			}
+			const maxChatLimit = 200
 			limit := 20
 			if l, ok := args["limit"].(float64); ok && l > 0 {
 				limit = int(l)
+				if limit < 1 {
+					limit = 1
+				}
+			}
+			if limit > maxChatLimit {
+				limit = maxChatLimit
 			}
 			messages, err := store.Messages(projectID, limit)
 			if err != nil {
@@ -500,8 +517,8 @@ func sendToProjectTool(send func(ctx context.Context, projectID, message string)
 				name = p.Name
 			}
 			preview := message
-			if len(preview) > 80 {
-				preview = preview[:80] + "…"
+			if runes := []rune(preview); len(runes) > 80 {
+				preview = string(runes[:80]) + "…"
 			}
 			return fmt.Sprintf("Send to %s: %q", name, preview)
 		},
@@ -614,6 +631,9 @@ func recallTool(mem *MemoryStore) Tool {
 			key, _ := args["key"].(string)
 			if key == "" {
 				return marshalJSON(mem.List())
+			}
+			if err := validateString("key", key, 0, maxMemoryKeyLen); err != nil {
+				return "", err
 			}
 			entry, err := mem.Recall(key)
 			if err != nil {

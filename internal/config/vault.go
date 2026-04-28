@@ -18,9 +18,10 @@ import (
 // take precedence over the on-disk store (e.g. ANTHROPIC_API_KEY overrides
 // the "anthropic" key). Follows the TokenStore pattern exactly.
 type KeyVault struct {
-	path string
-	mu   sync.Mutex
-	keys map[string]string
+	path      string
+	mu        sync.Mutex
+	keys      map[string]string
+	noPersist bool // true when initialised without storage; Set/Delete stay in-memory only
 }
 
 // WHY sync.Once singleton: Both the server (for API handlers) and discovery
@@ -62,10 +63,12 @@ func GetKeyVault() *KeyVault {
 	vaultOnce.Do(func() {
 		v, err := NewKeyVault()
 		if err != nil {
-			// Non-fatal: log and return an empty vault so callers
-			// can still fall back to environment variables.
+			// Non-fatal: log and return an empty in-memory-only vault so
+			// callers can still fall back to environment variables.
+			// noPersist=true prevents Set/Delete from writing to "." in the
+			// current working directory (which would happen if path is empty).
 			fmt.Fprintf(os.Stderr, "WARNING: failed to initialize KeyVault: %v\n", err)
-			v = &KeyVault{keys: make(map[string]string)}
+			v = &KeyVault{keys: make(map[string]string), noPersist: true}
 		}
 		vaultInstance = v
 	})
@@ -73,11 +76,14 @@ func GetKeyVault() *KeyVault {
 }
 
 // Get returns the API key for the given provider. Environment variable takes
-// precedence: the vault checks <PROVIDER>_API_KEY (uppercased) before falling
-// back to the on-disk store.
+// precedence: the vault checks the provider's mapped env var (from
+// providerEnvMap, consistent with EnvSlice) before falling back to
+// <PROVIDER>_API_KEY (uppercased), then the on-disk store.
 func (v *KeyVault) Get(provider string) string {
-	// Env var takes precedence
-	envKey := strings.ToUpper(provider) + "_API_KEY"
+	envKey, ok := providerEnvMap[provider]
+	if !ok {
+		envKey = strings.ToUpper(provider) + "_API_KEY"
+	}
 	if val := os.Getenv(envKey); val != "" {
 		return val
 	}
@@ -87,19 +93,38 @@ func (v *KeyVault) Get(provider string) string {
 }
 
 // Set stores an API key for the given provider and saves atomically.
+// On save() failure the in-memory map is rolled back so it stays consistent
+// with what actually made it to disk.
 func (v *KeyVault) Set(provider, key string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	prev, had := v.keys[provider]
 	v.keys[provider] = key
-	return v.save()
+	if err := v.save(); err != nil {
+		if had {
+			v.keys[provider] = prev
+		} else {
+			delete(v.keys, provider)
+		}
+		return err
+	}
+	return nil
 }
 
 // Delete removes an API key for the given provider and saves.
+// On save() failure the key is restored so memory doesn't diverge from disk.
 func (v *KeyVault) Delete(provider string) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	prev, had := v.keys[provider]
 	delete(v.keys, provider)
-	return v.save()
+	if err := v.save(); err != nil {
+		if had {
+			v.keys[provider] = prev
+		}
+		return err
+	}
+	return nil
 }
 
 // List returns a copy of all stored keys (not env vars).
@@ -202,8 +227,11 @@ func (v *KeyVault) load() error {
 }
 
 func (v *KeyVault) save() error {
+	if v.noPersist {
+		return nil
+	}
 	if v.path == "" {
-		return fmt.Errorf("key vault has no storage path (initialization failed)")
+		return fmt.Errorf("cannot save: vault initialized without storage path")
 	}
 	if err := os.MkdirAll(filepath.Dir(v.path), 0700); err != nil {
 		return err
@@ -217,5 +245,11 @@ func (v *KeyVault) save() error {
 	if err := os.WriteFile(tmp, data, 0600); err != nil {
 		return err
 	}
-	return os.Rename(tmp, v.path)
+	if err := os.Rename(tmp, v.path); err != nil {
+		// Best-effort cleanup so a failed rename doesn't leave an
+		// orphaned temp file behind.
+		_ = os.Remove(tmp)
+		return fmt.Errorf("renaming %s to %s: %w", tmp, v.path, err)
+	}
+	return nil
 }

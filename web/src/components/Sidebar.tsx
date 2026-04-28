@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, Download, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
+import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { FRAMEWORK_EMOJI } from "../lib/types";
+import { fetchFrameworks } from "../lib/api";
 import { useZoom } from "../lib/useZoom";
 import ZoomSlider from "./ZoomSlider";
 
@@ -59,6 +60,27 @@ export default function Sidebar() {
   const transparentImg = useRef<HTMLImageElement | null>(null);
   const activeProject = useMemo(() => parseProjectRoute(pathname), [pathname]);
 
+  // Installed frameworks from the registry — shows frameworks in the
+  // sidebar even when no agent is running (discovery only returns running ones).
+  const [installedFrameworks, setInstalledFrameworks] = useState<string[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => {
+      fetchFrameworks()
+        .then((fws) => {
+          if (cancelled) return;
+          const ids = fws.filter((fw) => fw.installed).map((fw) => fw.id);
+          setInstalledFrameworks((prev) =>
+            JSON.stringify(prev) === JSON.stringify(ids) ? prev : ids,
+          );
+        })
+        .catch(() => {});
+    };
+    load();
+    const id = setInterval(load, 30_000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   // Create a 1x1 transparent image for drag operations to prevent
   // Chrome's split-view suggestion that appears when dragging <a> tags
   useEffect(() => {
@@ -111,7 +133,7 @@ export default function Sidebar() {
   return (
     <aside className="flex h-screen w-56 shrink-0 flex-col bg-bg-sidebar border-r border-border">
       <div className="px-5 pt-7 pb-6">
-        <Link to="/agents/overview" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+        <Link to="/" className="flex items-center gap-2 hover:opacity-80 transition-opacity">
           <span className="relative h-5 w-5">
             <Bird className={`h-5 w-5 text-accent absolute inset-0 transition-all duration-500 ${windMode ? "opacity-0 translate-x-3 -translate-y-2 scale-75" : "opacity-100"}`} />
             <Wind className={`h-5 w-5 text-accent absolute inset-0 transition-all duration-500 ${windMode ? "opacity-100" : "opacity-0 -translate-x-2 scale-75"}`} />
@@ -121,6 +143,7 @@ export default function Sidebar() {
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 space-y-0.5">
+        {/* ── Mission Control ── */}
         <div className={`flex items-center rounded text-xs transition-colors ${
             pathname.startsWith("/mission-control")
               ? "bg-surface-hover text-text"
@@ -151,17 +174,6 @@ export default function Sidebar() {
         {missionControlExpanded && (
           <div id="mission-control-list" className="ml-4 border-l border-border pl-2 space-y-px">
             <Link
-              to="/frameworks"
-              className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                pathname === "/frameworks"
-                  ? "bg-surface-hover text-accent font-medium"
-                  : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-              }`}
-            >
-              <Layers className="h-3 w-3" />
-              <span>frameworks</span>
-            </Link>
-            <Link
               to="/mission-control/agents"
               className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
                 pathname === "/mission-control/agents"
@@ -186,82 +198,67 @@ export default function Sidebar() {
           </div>
         )}
 
-        <div className={`flex items-center rounded text-xs transition-colors ${
-            pathname.startsWith("/projects")
-              ? "bg-surface-hover text-text"
-              : "text-text-secondary hover:bg-surface-hover/50"
-          }`}>
-          <Link
-            to="/projects"
-            className="flex flex-1 items-center gap-2 px-3 py-1.5"
-          >
-            <Briefcase className="h-3.5 w-3.5" />
-            <span className="font-medium">projects</span>
-          </Link>
-          <button
-            onClick={() => setProjectsExpanded((prev) => !prev)}
-            aria-expanded={projectsExpanded}
-            aria-controls="projects-list"
-            aria-label={projectsExpanded ? "Collapse projects" : "Expand projects"}
-            className="px-3 py-1.5 hover:text-text transition-colors"
-          >
-            {projectsExpanded ? (
-              <ChevronDown className="h-3 w-3 text-green" />
-            ) : (
-              <ChevronRight className="h-3 w-3 text-text-muted" />
-            )}
-          </button>
-        </div>
-
-        {projectsExpanded && sortedProjects.length > 0 && (
-          <div id="projects-list" className="ml-4 border-l border-border pl-2 space-y-px">
-            {sortedProjects.map((project) => {
-              const isActive = activeProject === project.id;
-              const isDragOver = dragOverId === project.id;
-              return (
-                <div
-                  key={project.id}
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => navigate(`/projects/${project.id}`)}
-                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(`/projects/${project.id}`); } }}
-                  draggable
-                  onDragStart={(e) => {
-                    dragIdRef.current = project.id;
-                    e.dataTransfer.effectAllowed = "move";
-                    if (transparentImg.current) e.dataTransfer.setDragImage(transparentImg.current, 0, 0);
-                  }}
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    e.dataTransfer.dropEffect = "move";
-                    setDragOverId(project.id);
-                  }}
-                  onDragLeave={() => setDragOverId(null)}
-                  onDrop={(e) => {
-                    e.preventDefault();
-                    setDragOverId(null);
-                    if (dragIdRef.current) reorderProjects(dragIdRef.current, project.id);
-                    dragIdRef.current = null;
-                  }}
-                  onDragEnd={() => { setDragOverId(null); dragIdRef.current = null; }}
-                  className={`group flex items-center gap-2 rounded px-3 py-1.5 text-xs cursor-pointer transition-colors ${
-                    isDragOver
-                      ? "border-t border-accent"
-                      : isActive
-                        ? "bg-surface-hover text-accent font-medium"
-                        : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-                  }`}
+        {/* ── Frameworks ── */}
+        {(() => {
+          // Merge frameworks with running agents + installed frameworks from registry
+          const fromAgents = agents.map((a) => a.framework);
+          const frameworks = [...new Set([...installedFrameworks, ...fromAgents])];
+          return (
+            <>
+              <div className={`flex items-center rounded text-xs transition-colors ${
+                pathname.startsWith("/frameworks")
+                  ? "bg-surface-hover text-text"
+                  : "text-text-secondary hover:bg-surface-hover/50"
+              }`}>
+                <Link
+                  to="/frameworks"
+                  className="flex flex-1 items-center gap-2 px-3 py-1.5"
                 >
-                  <span
-                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${project.status === "active" ? "bg-green" : "bg-text-muted/30"}`}
-                  />
-                  <span className="truncate">{project.name}</span>
+                  <Layers className="h-3.5 w-3.5" />
+                  <span className="font-medium">frameworks</span>
+                </Link>
+                <button
+                  onClick={() => setFrameworksExpanded((prev) => !prev)}
+                  aria-expanded={frameworksExpanded}
+                  aria-controls="frameworks-list"
+                  aria-label={frameworksExpanded ? "Collapse frameworks" : "Expand frameworks"}
+                  className="px-3 py-1.5 hover:text-text transition-colors"
+                >
+                  {frameworksExpanded ? (
+                    <ChevronDown className="h-3 w-3 text-green" />
+                  ) : (
+                    <ChevronRight className="h-3 w-3 text-text-muted" />
+                  )}
+                </button>
+              </div>
+              {frameworksExpanded && (
+                <div id="frameworks-list" className="ml-4 border-l border-border pl-2 space-y-px">
+                  {frameworks.map((fw) => {
+                    const fwAgents = agents.filter((a) => a.framework === fw);
+                    const aliveCount = fwAgents.filter((a) => a.alive).length;
+                    const emoji = FRAMEWORK_EMOJI[fw] || "";
+                    return (
+                      <Link
+                        key={fw}
+                        to={`/frameworks/${fw}`}
+                        className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                          pathname === `/frameworks/${fw}`
+                            ? "bg-surface-hover text-accent font-medium"
+                            : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+                        }`}
+                      >
+                        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${aliveCount > 0 ? "bg-green" : fwAgents.length > 0 ? "bg-red" : "bg-text-muted/30"}`} />
+                        <span className="truncate">{fw} {emoji}</span>
+                      </Link>
+                    );
+                  })}
                 </div>
-              );
-            })}
-          </div>
-        )}
+              )}
+            </>
+          );
+        })()}
 
+        {/* ── Agents ── */}
         <div className={`flex items-center rounded text-xs transition-colors ${
             pathname.startsWith("/agents/")
               ? "bg-surface-hover text-text"
@@ -343,69 +340,85 @@ export default function Sidebar() {
           </div>
         )}
 
-        <div className="space-y-px">
-          {/* Frameworks */}
-          {(() => {
-            const frameworks = [...new Set(agents.map((a) => a.framework))];
-            return (
-              <>
-                <div className={`flex items-center rounded text-xs transition-colors ${
-                  pathname.startsWith("/frameworks") || pathname === "/install"
-                    ? "bg-surface-hover text-text"
-                    : "text-text-secondary hover:bg-surface-hover/50"
-                }`}>
-                  <span className="flex flex-1 items-center gap-2 px-3 py-1.5">
-                    <Layers className="h-3.5 w-3.5" />
-                    <span className="font-medium">frameworks</span>
-                  </span>
-                  <button
-                    onClick={() => setFrameworksExpanded((prev) => !prev)}
-                    aria-expanded={frameworksExpanded}
-                    aria-label={frameworksExpanded ? "Collapse frameworks" : "Expand frameworks"}
-                    className="px-3 py-1.5 hover:text-text transition-colors"
-                  >
-                    {frameworksExpanded ? (
-                      <ChevronDown className="h-3 w-3 text-green" />
-                    ) : (
-                      <ChevronRight className="h-3 w-3 text-text-muted" />
-                    )}
-                  </button>
-                </div>
-                {frameworksExpanded && (
-                  <div className="ml-4 border-l border-border pl-2 space-y-px">
-                    {frameworks.map((fw) => {
-                      const fwAgents = agents.filter((a) => a.framework === fw);
-                      return (
-                        <Link
-                          key={fw}
-                          to={`/frameworks/${fw}`}
-                          className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                            pathname === `/frameworks/${fw}`
-                              ? "bg-surface-hover text-accent font-medium"
-                              : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
-                          }`}
-                        >
-                          <span className="truncate">{fw} ({fwAgents.length} {FRAMEWORK_EMOJI[fw] || ""})</span>
-                        </Link>
-                      );
-                    })}
-                    <Link
-                      to="/install"
-                      className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
-                        pathname === "/install"
-                          ? "bg-surface-hover text-accent font-medium"
-                          : "text-text-muted hover:text-text hover:bg-surface-hover/50"
-                      }`}
-                    >
-                      <span>install</span>
-                      <Download className="h-3 w-3" />
-                    </Link>
-                  </div>
-                )}
-              </>
-            );
-          })()}
+        {/* ── Projects ── */}
+        <div className={`flex items-center rounded text-xs transition-colors ${
+            pathname.startsWith("/projects")
+              ? "bg-surface-hover text-text"
+              : "text-text-secondary hover:bg-surface-hover/50"
+          }`}>
+          <Link
+            to="/projects"
+            className="flex flex-1 items-center gap-2 px-3 py-1.5"
+          >
+            <Briefcase className="h-3.5 w-3.5" />
+            <span className="font-medium">projects</span>
+          </Link>
+          <button
+            onClick={() => setProjectsExpanded((prev) => !prev)}
+            aria-expanded={projectsExpanded}
+            aria-controls="projects-list"
+            aria-label={projectsExpanded ? "Collapse projects" : "Expand projects"}
+            className="px-3 py-1.5 hover:text-text transition-colors"
+          >
+            {projectsExpanded ? (
+              <ChevronDown className="h-3 w-3 text-green" />
+            ) : (
+              <ChevronRight className="h-3 w-3 text-text-muted" />
+            )}
+          </button>
+        </div>
 
+        {projectsExpanded && sortedProjects.length > 0 && (
+          <div id="projects-list" className="ml-4 border-l border-border pl-2 space-y-px">
+            {sortedProjects.map((project) => {
+              const isActive = activeProject === project.id;
+              const isDragOver = dragOverId === project.id;
+              return (
+                <div
+                  key={project.id}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => navigate(`/projects/${project.id}`)}
+                  onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); navigate(`/projects/${project.id}`); } }}
+                  draggable
+                  onDragStart={(e) => {
+                    dragIdRef.current = project.id;
+                    e.dataTransfer.effectAllowed = "move";
+                    if (transparentImg.current) e.dataTransfer.setDragImage(transparentImg.current, 0, 0);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.dataTransfer.dropEffect = "move";
+                    setDragOverId(project.id);
+                  }}
+                  onDragLeave={() => setDragOverId(null)}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    setDragOverId(null);
+                    if (dragIdRef.current) reorderProjects(dragIdRef.current, project.id);
+                    dragIdRef.current = null;
+                  }}
+                  onDragEnd={() => { setDragOverId(null); dragIdRef.current = null; }}
+                  className={`group flex items-center gap-2 rounded px-3 py-1.5 text-xs cursor-pointer transition-colors ${
+                    isDragOver
+                      ? "border-t border-accent"
+                      : isActive
+                        ? "bg-surface-hover text-accent font-medium"
+                        : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+                  }`}
+                >
+                  <span
+                    className={`h-1.5 w-1.5 shrink-0 rounded-full ${project.status === "active" ? "bg-green" : "bg-text-muted/30"}`}
+                  />
+                  <span className="truncate">{project.name}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Bottom items ── */}
+        <div className="space-y-px">
           <Link
             to="/personas"
             className={`flex items-center gap-2 rounded px-3 py-2 text-xs transition-colors ${

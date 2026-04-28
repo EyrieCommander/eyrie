@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 	"nhooyr.io/websocket"
@@ -678,11 +679,13 @@ func (z *ZeroClawAdapter) sessionsFromDB() ([]Session, error) {
 		}
 		if t, err := time.Parse(time.RFC3339Nano, lastActivity); err == nil {
 			sess.LastMsg = &t
+		} else if t, err := time.Parse(time.RFC3339, lastActivity); err == nil {
+			sess.LastMsg = &t
 		}
 		sessions = append(sessions, sess)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("iterating sessions rows: %w", err)
 	}
 	return sessions, nil
 }
@@ -1276,6 +1279,7 @@ func (z *ZeroClawAdapter) getRaw(ctx context.Context, path string) (string, erro
 
 func runCLI(ctx context.Context, command string, args ...string) error {
 	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, string(output))

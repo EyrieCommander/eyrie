@@ -4,7 +4,39 @@
 
 **Branch:** `feature/project-orchestrator`
 **Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
-**Design:** `eyrie/project-design.pen` (Pencil mockups), implementation plan at `~/.claude/plans/majestic-crunching-tiger.md`
+**Design:** `project-design.pen` (Pencil mockups), implementation plans in `docs/PLAN.md` and `docs/plan-onboarding-flow.md`.
+
+## Unified Onboarding Flow (in progress)
+
+Current work lives in `docs/plan-onboarding-flow.md` (single source of truth). Mockups at `project-design.pen` y=4400 (framework drill-down) + y=6600 (unified flow overview). Three macro phases — commander (placeholder) → frameworks → projects — with agents provisioned inline inside project creation.
+
+### Deferred follow-ups from this work
+
+- [x] **Framework coverage audit + checklist.** Created `ADDING_A_FRAMEWORK.md` with every location that needs updating. Remaining work: fix the 17 incomplete locations (picoclaw missing from captain dialogs, embedded missing from 10 locations, 3 hard-coded zeroclaw defaults). Long-term: make the registry the single source of truth so UI dropdowns, chat commands, and lifecycle actions all derive from registry data — adding a framework becomes adding one registry entry instead of touching 24 files.
+- [x] **URL-driven onboarding steps.** Phase, framework, and step are now stored in URL search params (`?phase=frameworks&fw=picoclaw&step=configure`) and persisted to localStorage. Refreshing the page restores the current position. Navigating away to another page and back restores from localStorage. Deep links work.
+- [x] **API key step should always require confirmation.** Fixed — `apiKeyConfirmed` state in FrameworksPhase gates the api_key step completion. When a key already exists in the vault, the step shows the detected provider, confirms the key exists, and offers "use this key" or "add a different one". Saving a new key via ApiKeyForm also auto-confirms. The flag resets when switching frameworks.
+- [x] **Launch step should verify gateway health before showing "all set".** Fixed — `HealthCheck` reports status back to `FrameworksPhase` via `onHealthChange` callback. The launch step is only "complete" when the gateway is healthy or the framework has no `health_url`. The "all set" banner no longer appears when `start gateway` fails.
+- [x] **Manager: add picoclaw to framework switch.** Added `case "picoclaw"` to all three switch statements in manager.go.
+- [x] **ProjectDetail: update for Eyrie-as-commander model.** The project detail page still looks for the old-style commander (an agent instance) and shows "commander not found". It also shows "unknown framework picoclaw" (framework ID lookup issue). Needs updating to reflect that Eyrie is always the commander, and to match framework IDs correctly against the registry.
+- [x] **Can't start a crashed agent from the agent detail page.** Fixed — `handleAgentAction` now falls back to the instance store (via `findInstanceByName`) when discovery doesn't find the agent. Uses `ExecuteWithConfigEnv` with vault env vars, matching `handleInstanceAction`'s behavior. Embedded agents are handled via adapter start/stop/restart.
+- [x] **Inject vault env vars into onboarding terminal commands.** Fixed — `handleShellTerminal` now injects vault API keys into the tmux session environment in two ways: (1) `cmd.Env` includes `vault.EnvSlice()` at session creation time, and (2) `tmux setenv` pushes updated vars into existing sessions on each WebSocket reconnection, so keys added after session creation (e.g., during the API key step) are available for the launch step.
+- [x] **Fix auto-pairing for ZeroClaw 0.7.x.** Fixed — the 0.7.x API shape is actually compatible (same endpoints, same field names), but the code was failing when the initial pairing code was already consumed. Now `fetchPairCode` tries `GET /admin/paircode` first, then falls back to `POST /admin/paircode/new` to generate a fresh code. `exchangePairCode` extracted for clarity. Provisioned instances keep `require_pairing = true`. Remaining: add a "re-pair" button in the UI for when tokens expire (tracked under UI section).
+- [x] **Show framework version on config/detail page.** Fixed — `frameworkVersion()` runs `<binary> --version` (3s timeout) and returns the first line. Displayed in the FrameworkDetail header as monospace text next to the name. Both the list and detail endpoints include the `version` field. Frameworks that don't support `--version` (e.g., PicoClaw) gracefully return empty.
+- [x] **Sidebar should show all installed frameworks, not just discovered ones.** Fixed — Sidebar now fetches installed frameworks from the registry (30s poll) and merges with discovered agents. Installed-but-not-running frameworks appear with a grey dot; running ones show green; stopped agents show red.
+- [x] **Registry cache ignores local edits.** Fixed — `Fetch()` now skips the cache entirely for `file://` URLs. Local files are already on disk; caching them was pointless and prevented edits to `~/.eyrie/registry.json` from taking effect.
+- [x] **Framework version management.** Fixed — added `min_version`/`latest_version` fields to registry schema and ZeroClaw entry (`0.7.0`/`0.7.3`). ZeroClaw install_cmd changed from `cargo install zeroclaw` (gets ancient 0.1.7 from crates.io) to `cargo install --git` (builds current 0.7.x from source). Backend compares installed version (via `--version` + semver extraction) against registry constraints and returns `version_status` ("outdated"/"update_available"/"current") in the API. Frontend shows yellow "outdated" badge when below min_version, blue "update available" when a newer release exists, and an "update" button on the framework detail page. `installBinary` now respects custom `install_cmd` for cargo/npm/pip instead of hardcoding the default command.
+- [x] **Terminal copy hint.** Added to the Terminal component itself — a subtle footer line ("hold Option to select text" on Mac, "hold Alt" elsewhere) appears in both inline and overlay modes. All embeds (onboarding, framework detail, agent detail) get it automatically.
+- [x] **Surface internal errors to the UI.** Fixed — `writeAdapterError` now exposes the real `err.Error()` for all errors, not just known sentinels. Two hardcoded "internal server error" strings in projects.go also replaced with `err.Error()`. Eyrie is localhost-only, so showing internal details helps users debug.
+- [x] **Instance status desync.** Fixed — discovery now reconciles instance store status with health probes. "running" instances that fail the health probe are immediately downgraded to "stopped". "starting" instances get a 30s grace period (tracked via new `StatusUpdatedAt` field on Instance) before being downgraded. This prevents the sidebar (discovery-driven, shows red) from disagreeing with project detail (store-driven, showed green).
+- [x] **Provider detection too naive for ZeroClaw 0.7.x config format.** Fixed — registry key updated from `default_provider` to `providers.fallback` (matching 0.7.x actual config structure). `extractProviderFromRaw` now uses TOML section-aware extraction for dotted keys (finds `[providers]` section, matches `fallback = "..."` within it) and restricts non-dotted keys to top-level content before the first section header. No longer matches `default_provider = "groq"` from `[transcription]`.
+- [x] **Sidebar still shows uninstalled frameworks.** Fixed — `scanInstances()` now checks `frameworkBinaryExists()` before including provisioned instances. If the framework binary is no longer installed, the instance is skipped during discovery, so the sidebar no longer shows stale frameworks. The "show all installed frameworks" enhancement (reading from registry rather than discovery) is tracked separately above.
+- [x] **Interactive config wizard option / inline config form.** Added "quick setup" tab to the configure step — renders a form from the registry's `config_schema.common_fields` (provider dropdown, model text field, port, etc.). Saves via `PUT /api/registry/frameworks/{id}/config` which patches the config file at dot-notation paths without replacing unrelated content. The form is the default tab when a schema is defined; "run wizard in terminal" and "edit config file" remain as fallback tabs. Backend: `PatchConfigFile()` in `config/write.go` reads existing config, patches fields, writes atomically.
+- [x] **"Edit config file" step UX.** Fixed — replaced the `$EDITOR` terminal option with an inline web-based raw editor (reuses the `ConfigEditor` component from the framework detail page). The "raw editor" tab loads the config file via the registry API, shows a textarea with syntax validation, and saves via `PUT /api/registry/frameworks/{id}/config` with `raw_content`. No more vim traps.
+- [ ] **ConfigPage uses agent-level APIs for framework config.** `ConfigPage.tsx` calls `fetchAgentConfig`, `updateAgentConfig`, and `validateAgentConfig` (all `/api/agents/{name}/config`) for what is actually framework configuration. These endpoints require the agent to be in discovery (running), so they 404 for installed-but-stopped frameworks. Should use the registry-level endpoints (`fetchFrameworkConfig`, `patchFrameworkConfig` at `/api/registry/frameworks/{id}/config`) instead. Broader question: clarify the boundary between ConfigPage (framework detail at `/frameworks/:id`) and the onboarding wizard's configure step — both edit the same config file but via different APIs and with different UX. Consider whether ConfigPage should embed the same `ConfigFieldsForm` component, or whether the two surfaces should have distinct roles (onboarding = guided first-time setup, ConfigPage = ongoing management with raw editor + terminal).
+- [ ] **Knowledge base for the commander.** The context-aware chat panel teaches users to ask questions like "what framework should I pick?", "what's a captain vs talon?", "help me resolve this install error". Without a knowledge base backing the commander, those prompts produce generic LLM answers instead of Eyrie-specific guidance. Needs: curated docs per framework (trade-offs, install quirks, config option semantics), concept explanations (captain vs talon, API keys, provider selection, persona setups), troubleshooting guides (common install errors per framework, network issues, permission errors), and retrieval/RAG plumbing so the commander can cite relevant sections rather than hallucinate.
+- [ ] **Project delete should clean up instances.** `handleDeleteProject` clears chat sessions but doesn't stop or delete the captain and talon instances. After deleting a project, its agents linger in the instance store and sidebar as orphans. The sidebar shows red dots for stopped agents whose project no longer exists, and project chat tries to connect to dead instances (causing 401/500 errors). Fix: on project delete, stop and remove all instances in `proj.RoleAgentIDs` plus the orchestrator. `handleProjectReset` already destroys talons — extend the pattern to delete. Related: the captain-tied-to-project redesign below would make this automatic.
+- [ ] **Captain tied to project (1:1 ownership).** Currently captains are standalone instances that can be reused across projects, creating name collisions and orphans on project delete. Redesign: project owns its captain — captain config (framework, name, persona) lives in the project record, captain lifecycle follows the project (create project = provision captain, delete project = destroy captain), no "use existing" option. Sidebar shows captains under their project, not in the standalone agents list. Touches: instance store, project store, provisioning, hierarchy page, sidebar grouping, ProjectsPhase, ProjectDetail.
+- [ ] **Framework-level vs agent-level config cascade.** `registry.json`'s `config_schema.common_fields` mixes framework-level fields (default provider, default model, binary path) with agent-level fields (workspace path, channels). Every field currently lives in every agent's config file. Coordination questions to design: should editing "provider" in the framework-level form cascade to existing instances? Or should each instance override independently? Where does inheritance live — registry, a framework-level config file, or convention? Currently both the onboarding form and ConfigPage edit per-agent files; the onboarding form is scoped to the framework's default single agent.
 
 ### What's working:
 - Commander system: select/change commander, briefing on assignment, inline role instructions per project
@@ -47,23 +79,9 @@
 
 ---
 
-### ZeroClaw PRs:
-- **#4275 (named sessions)**: Merged ✅ (our #4267 was superseded)
-- **#4350 (streaming tool events)**: Closed — superseded by upstream #4175
-- **#4584 (proxy tool event parsing)**: Closed — functionality landed upstream on master
-- **#4764 (seatbelt 127.0.0.1 bug)**: Closed — fixed by #4767
-- **#4852 (composite session backend)**: Merged then reverted in batch rollback. Re-submitted as **#5147** — closed (pre-microkernel paths)
-- **#5148 (http_request per-host allowlist)**: Closed (pre-microkernel paths) — needs redo on new crate layout
-- **#5696 (session reset/delete tools)**: Changes requested → addressed (delete no-op guard, TOCTOU comment, risk label fix, follow-up issues filed). Awaiting re-review from @JordanTheJet.
-- **#5705 (session abort + incremental persistence)**: Changes requested → addressed (risk label fix, breaking changes documented, 4 follow-up issues filed). No code changes needed. Awaiting re-review from @JordanTheJet. Eyrie's stop button depends on this — once merged, wire `ZeroClawAdapter.Interrupt` to call `POST /api/sessions/{id}/abort`.
-- **#5701 (clear_messages issue)**: Open issue — we claimed ownership. Will submit follow-up PR after #5696 merges.
-- **#5791 (When to Supersede docs)**: Merged ✅ — shipped in v0.7.0.
-- **#4363 (push fixups instead of superseding)**: Closed in favor of #5791.
-- **#5833 (session ownership model)**: Open issue — scoping destructive operations per-agent. Follow-up from #5696.
-- **#5834 (FTS UPDATE trigger)**: Open issue — `sessions_fts` goes stale on `update_last`. Follow-up from #5705.
-- **#5835 (cancel_tokens eviction)**: Open issue — leaked map entries for abandoned sessions. Follow-up from #5705.
-- **#5836 (execute_tools cancellation)**: Open issue — thread CancellationToken into tool execution. Follow-up from #5705.
-- **#5837 (ACP cancellation)**: Open issue — ACP sessions have no abort support. Follow-up from #5705.
+### ZeroClaw tracking
+
+Moved to [../../ZEROCLAW_TRACKER.md](../../ZEROCLAW_TRACKER.md). Keep this TODO focused on Eyrie implementation; use the tracker for durable ZeroClaw PR/issue history and `../../claws/zeroclaw/tmp/handoff.md` for active review-session handoff.
 
 ---
 
@@ -83,7 +101,7 @@
   - [ ] **Per-instance key overrides**: Currently one key per provider globally. Add optional per-instance overrides for multi-tenant setups (e.g., different OpenRouter keys for different projects).
   - [ ] **Custom env var names**: Provider-to-env-var mapping is hardcoded. Add optional `env_var` field per key for frameworks with non-standard env var names (e.g., `PICOCLAW_CHANNELS_*`).
   - [ ] **CLI command**: `eyrie keys set <provider> <key>` — API + UI are sufficient for now.
-  - [ ] **Key rotation dashboard**: Show which instances use which vault keys, last rotation date, and "restart required" indicator when a key changes.
+  - [ ] **Key vault agent visibility**: Show which agents/commander are using each key on the Settings page (query instances to map provider → agent names). On delete, list affected running agents in the confirmation dialog and warn that they keep the old key until restarted. Also show last rotation date and "restart required" indicator when a key changes.
 
 ## Functionality
 
@@ -108,7 +126,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
     - Tag/namespace support (`project:X/*`, `user-pref/*`) for scoped recall and bulk forget
     - TTL-based pruning and "last-accessed" ordering so stale notes fall out naturally
     - Cross-reference how EyrieClaw, OpenClaw, and PicoClaw structure their agent memory (`claws/*/`) — pick conventions rather than invent new ones
-  - **Later — UI surface for memory**: list/view/edit/delete via Settings page (backend beyond skeleton needs PUT/DELETE endpoints)
+  - **Later — UI surface for memory**: list/view/edit/delete via Settings page. The backend already has a read endpoint and tool-based writes; add explicit UI edit/delete endpoints if Settings needs direct memory management.
 - [ ] Implement an initial tool set: listing and getting project details, creating projects, listing personas and running agents, assigning captains (with full provisioning and briefing), reading a project's chat, sending messages into a project chat on the user's behalf, querying recent activity, and restarting agents
 - [ ] Autonomy policy: read-only tools run automatically; write tools (create, assign, send, restart) require user confirmation
 - [x] Surface context-window usage to the UI so the user can see when a conversation is getting long (summarization deferred)
@@ -127,7 +145,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - Turning high-level goals into concrete projects
 
 **Cleanup (no backward compatibility — no existing users):**
-- [ ] Delete the old commander-agent concept everywhere: the stored pointer to a commander instance, the set/get commander endpoints, the frontend setup page, and any remaining participant/discovery paths that assumed the commander was an agent
+- [x] Delete the old commander-agent concept everywhere: the stored pointer to a commander instance, the set/get commander endpoints, the frontend setup page, and any remaining participant/discovery paths that assumed the commander was an agent
 - [ ] When the commander sends a message into a project chat, it appears as a distinct sender (not "user") so the captain and user can see who initiated it
 
 **Deferred (project-chat observation parity):**
@@ -163,7 +181,7 @@ Eyrie itself becomes the commander — the user chats directly with Eyrie. No se
 - [ ] **Persona catalog**: Expand with more curated personas and allow community sharing ("Claude Mart" concept)
 - [ ] **Session management**: Test session group delete across all frameworks
 - [x] **Destroy talons on project reset**: `POST /api/projects/{id}/reset` clears chat, resets commander/captain sessions, stops+deletes talons. Auto-start chat restored.
-- [ ] **Hide project sessions from 1:1 chat**: Filter out sessions matching a project ID from the ChatPanel session list. Project conversations should only be accessed via the project chat UI — showing them in 1:1 creates split-brain confusion. Later: clicking a project session could redirect to the project detail page instead.
+- [ ] **Hide project sessions from 1:1 chat**: Filter out sessions matching a project ID from the ChatPanel session list. Project conversations should only be accessed via the project chat UI — showing them in 1:1 chat creates split-brain confusion. Later: clicking a project session could redirect to the project detail page instead.
 - [ ] **Bulk project selection + delete in UI**: Project list page needs multi-select (checkboxes or shift-click) with a bulk delete action. Currently deleting test projects requires per-row action or filesystem cleanup. Should destroy same-UUID workspace directory alongside the `.json` metadata, matching the single-delete path.
 - [ ] **Re-pair button in dashboard**: When Eyrie gets a 401 from a ZeroClaw gateway, show a "re-pair" button that prompts for the pairing code and updates the stored token.
 - [x] **Graceful handling of stale tokens**: Show a clear "authentication expired" state instead of raw 500 error.
@@ -219,6 +237,8 @@ Known config requirements for provisioned agents, by framework. The provisioner 
 - [ ] **Slack bridge**: Optional for teams using Slack
 - [ ] **Eyrie virtual channel**: Register Eyrie as a native channel in ZeroClaw/OpenClaw/PicoClaw/Hermes (like Telegram/Discord). Deeper integration than WebSocket-based project chat.
 - [x] **PicoClaw support**: Fourth framework — adapter (978 lines), discovery, provisioning, registry, install page all wired up. Pending:
+  - [ ] **PicoClaw adapter WebSocket mismatch**: The adapter connects to `/pico/ws` on `gatewayPort + 10`, but PicoClaw v0.2.x serves everything on one port and may not expose a WebSocket in standalone gateway mode (`picoclaw agent` runs in-process, not through the gateway). The adapter's two-tier port assumption (`webPort = gatewayPort + 10`) was fixed to use one port, but the `/pico/ws` path returns 404. Need to verify whether PicoClaw's gateway exposes a WebSocket endpoint at all, or whether Eyrie should use a different protocol (e.g., HTTP REST chat endpoint) for PicoClaw.
+  - [ ] **PicoClaw provisioner config gaps**: Provisioned instances are missing `model_list` (copied from parent config), use wrong model names (`claude-sonnet-4` vs `openrouter-auto`), and the `gateway stop` subcommand doesn't exist. Instance status gets stuck at "starting" when the process fails immediately.
   - [ ] **Post-install onboarding UI**: After installing PicoClaw from the install page, launch the framework's onboard wizard (e.g., `picoclaw onboard`) from the dashboard so the config file gets created and discovery can pick it up. Currently requires manual CLI onboarding.
   - [ ] **PicoClaw instance provisioning test**: Test end-to-end provisioning of PicoClaw instances from the hierarchy page (captain creating talons)
 - [x] **Nanobot / ShibaClaw evaluation**: Cloned both to `claws/nanobot/` and `claws/shibaclaw/`. Posted security audit to zeroclaw-labs/zeroclaw/discussions/4876. Not integrating yet.
@@ -232,3 +252,5 @@ Known config requirements for provisioned agents, by framework. The provisioner 
 - [ ] **Project templates**: Pre-built team compositions (e.g., "SaaS Launch" = Captain + dev + marketing + research Talons)
 - [ ] **Agent-to-agent protocol**: Define coordination patterns (shared context, task handoffs, status updates)
 - [ ] **Server middleware layer**: Request logging, panic recovery, and rate limiting middleware — per PLAN.md `internal/server/middleware.go`. Currently all 52 routes are registered bare with no central error handling or observability.
+- [ ] **GitHub Actions release workflow**: On tag push, build frontend + cross-compile Go binary (macOS arm64/x86, Linux amd64, Windows) and upload pre-built binaries to GitHub Releases. Eliminates the build-from-source requirement for end users — just download and run. Update README install section with `curl` one-liner or download link.
+- [ ] **Electron desktop app**: Package Eyrie as a standalone desktop app using Electron. Bundle pre-compiled Go binary inside app resources, spawn as child process on launch. Eliminates Go/Node prerequisites for end users. Includes code signing + notarization for macOS, auto-update via electron-updater, and cross-platform builds (macOS arm64/x86, Windows, Linux).

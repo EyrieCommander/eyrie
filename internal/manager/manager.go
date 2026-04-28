@@ -12,6 +12,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/Audacity88/eyrie/internal/config"
 )
 
 type LifecycleAction string
@@ -32,6 +34,8 @@ func Execute(ctx context.Context, framework string, action LifecycleAction) erro
 		return executeOpenClaw(ctx, action)
 	case "hermes":
 		return executeHermes(ctx, action)
+	case "picoclaw":
+		return executePicoClaw(ctx, action)
 	case "embedded":
 		// Embedded agents run in-process as goroutines — lifecycle is managed
 		// by the adapter, not by external CLI commands. This is a no-op.
@@ -127,14 +131,14 @@ func compareNodeVersions(a, b string) int {
 	return 0
 }
 
-// node22Env returns a copy of os.Environ() with Node 22 prepended to PATH,
+// node22Env returns config.EnrichedEnv() with Node 22 prepended to PATH,
 // or nil if no v22 installation is found.
 func node22Env() []string {
 	binDir := node22BinDir()
 	if binDir == "" {
 		return nil
 	}
-	env := os.Environ()
+	env := config.EnrichedEnv()
 	for i, e := range env {
 		if strings.HasPrefix(e, "PATH=") {
 			env[i] = "PATH=" + binDir + string(os.PathListSeparator) + e[5:]
@@ -147,7 +151,7 @@ func node22Env() []string {
 // runWithNode22 runs a command with Node.js v22 at the front of PATH.
 // Falls back to the default PATH if no v22 installation is found.
 func runWithNode22(ctx context.Context, command string, args ...string) error {
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, config.LookPathEnriched(command), args...)
 	if env := node22Env(); env != nil {
 		cmd.Env = env
 	}
@@ -177,6 +181,22 @@ func executeHermes(ctx context.Context, action LifecycleAction) error {
 	}
 }
 
+func executePicoClaw(ctx context.Context, action LifecycleAction) error {
+	switch action {
+	case ActionStart:
+		// Run as a detached daemon so the manager doesn't block.
+		// Matches ExecuteWithConfig's behaviour for provisioned instances.
+		return runDetached(ctx, "", "picoclaw", "gateway")
+	case ActionStop:
+		return run(ctx, "picoclaw", "gateway", "stop")
+	case ActionRestart:
+		_ = run(ctx, "picoclaw", "gateway", "stop")
+		return runDetached(ctx, "", "picoclaw", "gateway")
+	default:
+		return fmt.Errorf("unsupported action %q for PicoClaw", action)
+	}
+}
+
 // hermesServiceInstalled checks if the Hermes launchd service is installed
 func hermesServiceInstalled(ctx context.Context) bool {
 	home := os.Getenv("HOME")
@@ -188,7 +208,9 @@ func hermesServiceInstalled(ctx context.Context) bool {
 func serviceInstalled(ctx context.Context, framework string) bool {
 	switch framework {
 	case "zeroclaw":
-		out, err := exec.CommandContext(ctx, "zeroclaw", "service", "status").CombinedOutput()
+		statusCmd := exec.CommandContext(ctx, config.LookPathEnriched("zeroclaw"), "service", "status")
+		statusCmd.Env = config.EnrichedEnv()
+		out, err := statusCmd.CombinedOutput()
 		if err != nil {
 			return false
 		}
@@ -201,7 +223,8 @@ func serviceInstalled(ctx context.Context, framework string) bool {
 }
 
 func run(ctx context.Context, command string, args ...string) error {
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, config.LookPathEnriched(command), args...)
+	cmd.Env = config.EnrichedEnv()
 	output, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%s %s: %w\n%s", command, strings.Join(args, " "), err, strings.TrimSpace(string(output)))
@@ -224,10 +247,12 @@ func runDetached(ctx context.Context, logDir string, command string, args ...str
 // runDetachedWithEnv starts a detached daemon process. The context parameter is
 // intentionally unused because the process must outlive the caller's context.
 func runDetachedWithEnv(_ context.Context, logDir string, env []string, command string, args ...string) error {
-	cmd := exec.Command(command, args...)
+	cmd := exec.Command(config.LookPathEnriched(command), args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if env != nil {
 		cmd.Env = env
+	} else {
+		cmd.Env = config.EnrichedEnv()
 	}
 
 	var logFile *os.File
@@ -296,8 +321,10 @@ func processExistsByConfigDir(configDir string) (bool, error) {
 
 // ExecuteWithConfigEnv runs a lifecycle action for a framework using a specific
 // config path, with extra environment variables appended. Starts from
-// os.Environ() and appends extraEnv — never replaces the full environment.
-// This is the primary entry point when vault env vars need injection.
+// config.EnrichedEnv() (which itself extends os.Environ() with tool-directory
+// PATH entries for cargo/go/npm/etc) via mergeEnv, then appends extraEnv —
+// never replaces the full environment. This is the primary entry point when
+// vault env vars need injection.
 func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, action LifecycleAction, extraEnv []string) error {
 	switch framework {
 	case "zeroclaw":
@@ -350,6 +377,19 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 			return runDetachedWithEnv(ctx, hLogDir, mergeEnv(extraEnv), "hermes", "gateway", string(action), "--config", configPath)
 		}
 		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	case "picoclaw":
+		pcLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+		switch action {
+		case ActionStart:
+			return runDetachedWithEnv(ctx, pcLogDir, mergeEnv(extraEnv), "picoclaw", "gateway", "--config", configPath)
+		case ActionStop:
+			return run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
+		case ActionRestart:
+			_ = run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
+			return runDetachedWithEnv(ctx, pcLogDir, mergeEnv(extraEnv), "picoclaw", "gateway", "--config", configPath)
+		default:
+			return fmt.Errorf("unknown action %q for picoclaw", action)
+		}
 	case "embedded":
 		return nil
 	default:
@@ -357,10 +397,10 @@ func ExecuteWithConfigEnv(ctx context.Context, framework, configPath string, act
 	}
 }
 
-// mergeEnv starts from os.Environ() and appends extra env vars. If extraEnv
-// is nil or empty, returns os.Environ() unchanged.
+// mergeEnv starts from config.EnrichedEnv() and appends extra env vars. If extraEnv
+// is nil or empty, returns config.EnrichedEnv() unchanged.
 func mergeEnv(extraEnv []string) []string {
-	env := os.Environ()
+	env := config.EnrichedEnv()
 	if len(extraEnv) == 0 {
 		return env
 	}
@@ -415,6 +455,19 @@ func ExecuteWithConfig(ctx context.Context, framework, configPath string, action
 			return runDetached(ctx, hLogDir, "hermes", "gateway", string(action), "--config", configPath)
 		}
 		return run(ctx, "hermes", "gateway", string(action), "--config", configPath)
+	case "picoclaw":
+		pcLogDir := filepath.Join(filepath.Dir(configPath), "logs")
+		switch action {
+		case ActionStart:
+			return runDetached(ctx, pcLogDir, "picoclaw", "gateway", "--config", configPath)
+		case ActionStop:
+			return run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
+		case ActionRestart:
+			_ = run(ctx, "picoclaw", "gateway", "stop", "--config", configPath)
+			return runDetached(ctx, pcLogDir, "picoclaw", "gateway", "--config", configPath)
+		default:
+			return fmt.Errorf("unknown action %q for picoclaw", action)
+		}
 	case "embedded":
 		// Embedded agents have no external process — lifecycle is managed
 		// by the adapter's Start/Stop/Restart methods directly.
@@ -436,6 +489,8 @@ func CommandString(framework string, action LifecycleAction) string {
 			return "hermes gateway start"
 		}
 		return fmt.Sprintf("adapter.%s() (PID-based)", strings.Title(string(action)))
+	case "picoclaw":
+		return "picoclaw gateway " + string(action)
 	default:
 		return fmt.Sprintf("<unknown framework %q> %s", framework, action)
 	}

@@ -322,7 +322,12 @@ func (s *Server) handleProjectChatMessages(w http.ResponseWriter, r *http.Reques
 	projectID := r.PathValue("id")
 	cs := s.chatStore
 	if cs == nil {
-		writeJSON(w, http.StatusOK, []project.ChatMessage{})
+		// Misconfiguration: pretending there are zero messages would silently
+		// hide a real problem. Surface it so the operator knows to look.
+		slog.Warn("project chat requested but chatStore is nil — server misconfigured", "project", projectID)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{
+			"error": "chat store is unavailable; see server logs",
+		})
 		return
 	}
 	messages, err := cs.Messages(projectID, 0)
@@ -362,7 +367,7 @@ func (s *Server) handleProjectChatSend(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
 		} else {
 			slog.Error("failed to load project for chat", "project", projectID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 		return
 	}
@@ -503,7 +508,7 @@ func (s *Server) handleProjectActivity(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "project not found"})
 		} else {
 			slog.Error("failed to load project for activity", "project", projectID, "error", err)
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal server error"})
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
 		}
 		return
 	}
@@ -667,6 +672,23 @@ func (s *Server) ensureCaptainBriefing(proj *project.Project, force ...bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
 
+	// Re-fetch the project after the sleep — it may have been deleted, had
+	// its captain swapped, or had its goal/description edited. Using the
+	// stale pointer would brief against the wrong context (or a captain
+	// the project no longer owns).
+	if s.projectStore != nil && proj != nil {
+		fresh, err := s.projectStore.Get(proj.ID)
+		if err != nil || fresh == nil {
+			slog.Debug("ensureCaptainBriefing: project gone after delay, skipping", "project", proj.ID, "error", err)
+			return
+		}
+		proj = fresh
+	}
+	if proj == nil || proj.OrchestratorID == "" {
+		slog.Debug("ensureCaptainBriefing: project has no captain, skipping")
+		return
+	}
+
 	disc := s.runDiscovery(ctx)
 	var found *discovery.AgentResult
 	for i := range disc.Agents {
@@ -706,8 +728,11 @@ func (s *Server) ensureCaptainBriefing(proj *project.Project, force ...bool) {
 	briefing := composeCaptainBriefing(proj)
 	agentName := proj.OrchestratorID
 	if _, err := agent.SendMessage(ctx, briefing, "eyrie-captain-briefing"); err != nil {
+		// Keep the full error in logs but don't leak backend details into
+		// the project chat — users see a generic message and operators
+		// check the server logs for diagnostics.
 		slog.Warn("ensureCaptainBriefing: briefing failed", "captain", agentName, "error", err)
-		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing failed for %s: %v", agentName, err))
+		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing failed for %s (see server logs for details)", agentName))
 	} else {
 		slog.Info("ensureCaptainBriefing: captain briefed", "captain", agentName, "project", proj.ID)
 		s.injectSystemMessage(proj.ID, fmt.Sprintf("general briefing sent to %s", agentName))
@@ -844,9 +869,9 @@ func (s *Server) handleProjectReset(w http.ResponseWriter, r *http.Request) {
 	}
 	go func() { wg.Wait(); close(resultCh) }()
 	var destroyed []string
-	for r := range resultCh {
-		if r.ok {
-			destroyed = append(destroyed, r.name)
+	for res := range resultCh {
+		if res.ok {
+			destroyed = append(destroyed, res.name)
 		}
 	}
 

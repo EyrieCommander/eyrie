@@ -171,14 +171,26 @@ func installBinary(ctx context.Context, fw *registry.Framework) error {
 		return runInstallScript(ctx, fw.InstallCmd)
 
 	case "cargo":
+		if fw.IsCustomInstallCmd() {
+			fmt.Printf("Running: %s\n", fw.InstallCmd)
+			return runInstallScript(ctx, fw.InstallCmd)
+		}
 		fmt.Printf("Running: cargo install %s\n", fw.ID)
 		return runCommand(ctx, "cargo", "install", fw.ID)
 
 	case "npm":
+		if fw.IsCustomInstallCmd() {
+			fmt.Printf("Running: %s\n", fw.InstallCmd)
+			return runInstallScript(ctx, fw.InstallCmd)
+		}
 		fmt.Printf("Running: npm install -g %s\n", fw.ID)
 		return runCommand(ctx, "npm", "install", "-g", fw.ID)
 
 	case "pip":
+		if fw.IsCustomInstallCmd() {
+			fmt.Printf("Running: %s\n", fw.InstallCmd)
+			return runInstallScript(ctx, fw.InstallCmd)
+		}
 		fmt.Printf("Running: pip install %s\n", fw.ID)
 		return runCommand(ctx, "pip", "install", fw.ID)
 
@@ -195,6 +207,7 @@ func installBinary(ctx context.Context, fw *registry.Framework) error {
 
 func runInstallScript(ctx context.Context, scriptURL string) error {
 	cmd := exec.CommandContext(ctx, "bash", "-c", scriptURL)
+	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	cmd.Stdin = os.Stdin
@@ -202,7 +215,8 @@ func runInstallScript(ctx context.Context, scriptURL string) error {
 }
 
 func runCommand(ctx context.Context, name string, args ...string) error {
-	cmd := exec.CommandContext(ctx, name, args...)
+	cmd := exec.CommandContext(ctx, config.LookPathEnriched(name), args...)
+	cmd.Env = config.EnrichedEnv()
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

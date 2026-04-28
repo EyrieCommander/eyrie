@@ -73,7 +73,7 @@ function AgentCard({
 export default function ProjectDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { agents, projects: ctxProjects, instances: ctxInstances, commander: ctxCommander, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
+  const { agents, projects: ctxProjects, instances: ctxInstances, loading: ctxLoading, refresh: ctxRefresh, backendDown } = useData();
   const [showAddAgent, setShowAddAgent] = useState(false);
   const [showSetOrchestrator, setShowSetOrchestrator] = useState(false);
   const [loadError, setLoadError] = useState("");
@@ -94,9 +94,7 @@ export default function ProjectDetail() {
     : [];
   const loading = ctxLoading && !hasLoadedRef.current;
 
-  // Commander comes from DataContext — no separate fetch needed
-  const commanderName = ctxCommander?.name ?? "";
-  const commanderStatus = ctxCommander?.status ?? "";
+  // Commander is always Eyrie (built-in) — no agent lookup needed.
 
   const refresh = useCallback(async () => {
     if (!id) return;
@@ -184,11 +182,16 @@ export default function ProjectDetail() {
     try {
       if (isInstance) await instanceAction(agentId, "start");
       else await agentAction(agentId, "start");
+      // Clear any prior interval AND timeout before scheduling new ones
+      // so an older timer can't fire mid-poll and stop the new one.
+      if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+      if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
       // Poll until the agent shows as running
       const poll = setInterval(refresh, 2000);
       pollRef.current.interval = poll;
       pollRef.current.timeout = setTimeout(() => {
         clearInterval(poll);
+        pollRef.current.timeout = null;
         setStartingAgent("");
       }, 30000);
     } catch (e) {
@@ -201,7 +204,16 @@ export default function ProjectDetail() {
   const needsStart: { name: string; role: string; isInstance: boolean; id: string }[] = [];
   // WHY no commander check: Commander is a system-level agent, not required
   // for project chat. Only the captain and talons need to be running.
-  if (captainInstance && captainInstance.status !== "running") {
+  // Skip transient states ("starting", "created", "provisioning") so we
+  // don't prompt the user to start a captain that's already booting —
+  // mirrors the talon loop logic below.
+  if (
+    captainInstance &&
+    captainInstance.status !== "running" &&
+    captainInstance.status !== "starting" &&
+    captainInstance.status !== "created" &&
+    captainInstance.status !== "provisioning"
+  ) {
     needsStart.push({ name: captainInstance.display_name || captainInstance.name, role: "captain", isInstance: true, id: captainInstance.id });
   }
   if (captainAgent && !captainAgent.alive) {
@@ -286,34 +298,20 @@ export default function ProjectDetail() {
 
           <div className="h-px w-full bg-border" />
 
-          {/* Commander */}
-          {commanderName && (
-            <div>
-              <div className="mb-2">
-                <span className="text-[10px] font-medium text-text-muted">// commander</span>
-              </div>
-              {(() => {
-                const cmdAgent = agents.find((a) => a.name === commanderName);
-                return cmdAgent ? (
-                  <button
-                    onClick={() => navigate(`/agents/${commanderName}/chat`)}
-                    className="flex w-full items-center gap-2.5 rounded border border-border bg-transparent px-3 py-2.5 text-left text-xs transition-all hover:border-accent/30 hover:bg-surface-hover/50"
-                  >
-                    <span className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${commanderStatus === "running" ? "bg-green" : "bg-text-muted"}`} />
-                    <div className="flex-1 min-w-0">
-                      <div className="font-medium text-text truncate">{cmdAgent.display_name || cmdAgent.name}</div>
-                      <div className="text-text-muted truncate">{cmdAgent.framework} · :{cmdAgent.port}</div>
-                    </div>
-                    <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400 opacity-50 hover:opacity-100" />
-                  </button>
-                ) : (
-                  <div className="rounded border border-dashed border-border px-3 py-3 text-center text-[10px] text-text-muted">
-                    commander not found
-                  </div>
-                );
-              })()}
+          {/* Commander — always Eyrie (built-in) */}
+          <div>
+            <div className="mb-2">
+              <span className="text-[10px] font-medium text-text-muted">// commander</span>
             </div>
-          )}
+            <div className="flex items-center gap-2.5 rounded border border-border px-3 py-2.5 text-xs">
+              <span className="h-1.5 w-1.5 flex-shrink-0 rounded-full bg-green" />
+              <div className="flex-1 min-w-0">
+                <div className="font-medium text-text">Eyrie</div>
+                <div className="text-text-muted">built-in commander</div>
+              </div>
+              <MessageSquare className="h-3 w-3 flex-shrink-0 text-purple-400" />
+            </div>
+          </div>
 
           <div className="h-px w-full bg-border" />
 
@@ -429,12 +427,11 @@ export default function ProjectDetail() {
               <span className="text-[10px] font-medium text-text-muted">// hierarchy</span>
             </div>
             <ProjectHierarchy
-              commander={commanderName ? {
-                name: commanderName,
+              commander={{
+                name: "Eyrie",
                 role: "commander",
-                status: commanderStatus === "running" ? "running" : "stopped",
-                onClick: () => navigate(`/agents/${commanderName}/chat`),
-              } : null}
+                status: "running",
+              }}
               captain={captainInstance ? {
                 name: captainInstance.display_name || captainInstance.name,
                 role: "captain",
@@ -495,25 +492,41 @@ export default function ProjectDetail() {
                     disabled={!!startingAgent}
                     onClick={async () => {
                       setStartingAgent("all");
-                      try {
-                        // Start all agents in parallel
-                        await Promise.all(needsStart.map(async (a) => {
-                          if (a.isInstance) await instanceAction(a.id, "start");
-                          else await agentAction(a.id, "start");
-                        }));
-                        // Single shared poll for all agents to come online
-                        if (pollRef.current.interval) clearInterval(pollRef.current.interval);
-                        if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
-                        const poll = setInterval(refresh, 2000);
-                        pollRef.current.interval = poll;
-                        pollRef.current.timeout = setTimeout(() => {
-                          clearInterval(poll);
-                          setStartingAgent("");
-                        }, 30000);
-                      } catch (e) {
-                        setLoadError(e instanceof Error ? e.message : "failed to start agents");
-                        setStartingAgent("");
+                      // allSettled (not all) so one failure doesn't abort the
+                      // rest — start as many as we can, then surface which
+                      // failed. Polling still runs for the agents that DID
+                      // start; refresh() will reveal their status.
+                      const results = await Promise.allSettled(
+                        needsStart.map((a) =>
+                          a.isInstance ? instanceAction(a.id, "start") : agentAction(a.id, "start"),
+                        ),
+                      );
+                      const failures = results
+                        .map((r, i) => ({ r, a: needsStart[i] }))
+                        .filter(({ r }) => r.status === "rejected");
+                      if (failures.length > 0) {
+                        const msg = failures
+                          .map(({ r, a }) => {
+                            const reason = (r as PromiseRejectedResult).reason;
+                            const txt = reason instanceof Error ? reason.message : String(reason);
+                            return `${a.name}: ${txt}`;
+                          })
+                          .join("; ");
+                        setLoadError(`failed to start ${failures.length}/${needsStart.length} agent${failures.length === 1 ? "" : "s"}: ${msg}`);
                       }
+                      // Clear any prior interval AND timeout — otherwise
+                      // an older setTimeout could fire mid-poll and
+                      // prematurely stop the new one.
+                      if (pollRef.current.interval) clearInterval(pollRef.current.interval);
+                      if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
+                      // Single shared poll for all agents to come online
+                      const poll = setInterval(refresh, 2000);
+                      pollRef.current.interval = poll;
+                      pollRef.current.timeout = setTimeout(() => {
+                        clearInterval(poll);
+                        pollRef.current.timeout = null;
+                        setStartingAgent("");
+                      }, 30000);
                     }}
                     className="rounded bg-accent px-4 py-1.5 text-xs font-medium text-white hover:bg-accent/80 disabled:opacity-50"
                   >

@@ -6,11 +6,14 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
 
-var Version = "dev"
+var Version = "0.2.1"
 
 type Config struct {
 	Dashboard DashboardConfig `toml:"dashboard"`
@@ -119,6 +122,39 @@ func ExpandHome(path string) string {
 	return filepath.Join(home, path[2:])
 }
 
+// LookPathEnriched resolves a command name against the enriched PATH
+// (the same dirs added by EnrichedEnv). Use this before exec.Command so
+// binaries in ~/go/bin, ~/.cargo/bin, etc. are found even when the Eyrie
+// process's own PATH doesn't include them.
+func LookPathEnriched(command string) string {
+	// If it's already an absolute path, return as-is.
+	if filepath.IsAbs(command) {
+		return command
+	}
+	// Check the enriched dirs first, then fall back to the original command
+	// (let exec.Command try the system PATH).
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return command
+	}
+	dirs := []string{
+		filepath.Join(home, ".cargo", "bin"),
+		filepath.Join(home, "go", "bin"),
+		filepath.Join(home, ".local", "bin"),
+		"/usr/local/bin",
+	}
+	if runtime.GOOS == "darwin" {
+		dirs = append(dirs, "/opt/homebrew/bin")
+	}
+	for _, d := range dirs {
+		p := filepath.Join(d, command)
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return command
+}
+
 // ParseJSONFile reads and unmarshals a JSON file into the given target.
 func ParseJSONFile(path string, target any) error {
 	data, err := os.ReadFile(path)
@@ -177,4 +213,79 @@ func Save(cfg Config) error {
 	}
 
 	return nil
+}
+
+// EnrichedEnv returns a copy of the current environment with common tool
+// directories prepended to PATH. This ensures exec.Command can find binaries
+// like cargo, go, npm, pip, etc. even when the Eyrie server is started from
+// a non-interactive shell (e.g., launchd, systemd) that doesn't source
+// ~/.bashrc or ~/.zshrc.
+func EnrichedEnv() []string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return os.Environ()
+	}
+
+	extraDirs := []string{
+		filepath.Join(home, ".cargo", "bin"),      // Rust/cargo
+		filepath.Join(home, "go", "bin"),           // Go binaries
+		filepath.Join(home, ".local", "bin"),       // pip, pipx, user installs
+		"/usr/local/bin",                           // Homebrew (Intel Mac), manual installs
+	}
+	if runtime.GOOS == "darwin" {
+		extraDirs = append(extraDirs, "/opt/homebrew/bin") // Homebrew (Apple Silicon)
+	}
+
+	// Find NVM Node.js v22 if available. Pick the highest-patched v22.*
+	// by numerically comparing minor/patch instead of relying on the
+	// directory listing's lexicographic order (which would prefer
+	// v22.9.0 over v22.10.0).
+	nvmDir := filepath.Join(home, ".nvm", "versions", "node")
+	if entries, err := os.ReadDir(nvmDir); err == nil {
+		bestName := ""
+		var bestMinor, bestPatch int
+		for _, e := range entries {
+			name := e.Name()
+			if !strings.HasPrefix(name, "v22.") {
+				continue
+			}
+			parts := strings.Split(strings.TrimPrefix(name, "v"), ".")
+			if len(parts) < 3 {
+				continue
+			}
+			minor, err1 := strconv.Atoi(parts[1])
+			patch, err2 := strconv.Atoi(parts[2])
+			if err1 != nil || err2 != nil {
+				continue
+			}
+			if bestName == "" || minor > bestMinor || (minor == bestMinor && patch > bestPatch) {
+				bestName, bestMinor, bestPatch = name, minor, patch
+			}
+		}
+		if bestName != "" {
+			extraDirs = append(extraDirs, filepath.Join(nvmDir, bestName, "bin"))
+		}
+	}
+
+	// Filter to directories that actually exist
+	var existing []string
+	for _, d := range extraDirs {
+		if info, err := os.Stat(d); err == nil && info.IsDir() {
+			existing = append(existing, d)
+		}
+	}
+	if len(existing) == 0 {
+		return os.Environ()
+	}
+
+	extra := strings.Join(existing, string(os.PathListSeparator))
+	env := os.Environ()
+	for i, e := range env {
+		if strings.HasPrefix(e, "PATH=") {
+			env[i] = "PATH=" + extra + string(os.PathListSeparator) + e[5:]
+			return env
+		}
+	}
+	// No PATH found — add one
+	return append(env, "PATH="+extra)
 }

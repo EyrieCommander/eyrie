@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -131,9 +132,17 @@ func migrateZeroClaw(configPath string) ([]string, error) {
 		changed = true
 	}
 
-	// Ensure allowed_private_hosts includes localhost
-	if ensurePrivateHosts(cfg) {
+	// Ensure allowed_private_hosts includes localhost and that the legacy
+	// field name gets cleaned up. Report which actually changed.
+	switch ensurePrivateHosts(cfg) {
+	case privateHostsAddedLocalhost:
 		applied = append(applied, "http_request.allow_private_hosts: added localhost")
+		changed = true
+	case privateHostsCleanedLegacy:
+		applied = append(applied, "http_request.allow_private_hosts: migrated entries from legacy allowed_private_hosts key")
+		changed = true
+	case privateHostsBothChanged:
+		applied = append(applied, "http_request.allow_private_hosts: added localhost and migrated legacy allowed_private_hosts entries")
 		changed = true
 	}
 
@@ -164,33 +173,27 @@ func migrateZeroClaw(configPath string) ([]string, error) {
 // setNestedValue sets a dot-path key in a nested map. Returns true if the
 // value was changed (i.e., it was different or missing).
 func setNestedValue(m map[string]any, path string, value any) bool {
+	// Read existing value for change detection before writing.
+	// If any intermediate key doesn't resolve to a map, the path doesn't
+	// exist yet — treat that as "changed" so the write proceeds and the
+	// migration is logged.
 	parts := strings.Split(path, ".")
-	current := m
-	for i := 0; i < len(parts)-1; i++ {
-		existing, exists := current[parts[i]]
-		if !exists {
-			// Create missing intermediate maps
-			next := make(map[string]any)
-			current[parts[i]] = next
-			current = next
-			continue
-		}
-		next, ok := existing.(map[string]any)
+	existing := m
+	resolved := true
+	for _, p := range parts[:len(parts)-1] {
+		next, ok := existing[p].(map[string]any)
 		if !ok {
-			// Key exists but is not a map — log and abort to avoid data loss
-			slog.Warn("migration: key exists but is not a map, skipping", "path", path, "key", parts[i])
+			resolved = false
+			break
+		}
+		existing = next
+	}
+	if resolved && len(parts) > 0 {
+		if old := existing[parts[len(parts)-1]]; fmt.Sprintf("%v", old) == fmt.Sprintf("%v", value) {
 			return false
 		}
-		current = next
 	}
-	key := parts[len(parts)-1]
-
-	existing := current[key]
-	if fmt.Sprintf("%v", existing) == fmt.Sprintf("%v", value) {
-		return false // already correct
-	}
-	current[key] = value
-	return true
+	return econfig.SetNestedValue(m, path, value)
 }
 
 // getNestedInt reads an integer from a dot-path in a nested map.
@@ -236,10 +239,15 @@ func ensureAllowedCommands(cfg map[string]any) []string {
 		}
 	}
 
-	// Add missing ones
+	// Add missing ones — sort existing keys for deterministic output
 	var added []string
-	var result []any
+	sorted := make([]string, 0, len(existing))
 	for k := range existing {
+		sorted = append(sorted, k)
+	}
+	sort.Strings(sorted)
+	result := make([]any, 0, len(sorted))
+	for _, k := range sorted {
 		result = append(result, k)
 	}
 	for _, cmd := range zeroClawEnsureCommands {
@@ -254,45 +262,79 @@ func ensureAllowedCommands(cfg map[string]any) []string {
 	return added
 }
 
+// privateHostsChange reports which kind of change ensurePrivateHosts made.
+type privateHostsChange int
+
+const (
+	privateHostsNoChange privateHostsChange = iota
+	privateHostsAddedLocalhost
+	privateHostsCleanedLegacy
+	privateHostsBothChanged
+)
+
 // ensurePrivateHosts makes sure http_request.allow_private_hosts includes "localhost".
 // WHY allow_private_hosts (not allowed_private_hosts): ZeroClaw's http_request
 // config struct uses "allow_private_hosts". The web_fetch struct uses
 // "allowed_private_hosts" — different field names on different structs.
-func ensurePrivateHosts(cfg map[string]any) bool {
+// Old configs written by earlier provisioners may have entries under the wrong
+// name; merge both into allow_private_hosts so user-added hosts aren't lost.
+// Returns a status enum so callers can report accurately whether localhost
+// was actually added, the legacy key was cleaned up, or both.
+func ensurePrivateHosts(cfg map[string]any) privateHostsChange {
 	hr, ok := cfg["http_request"].(map[string]any)
 	if !ok {
 		hr = make(map[string]any)
 		cfg["http_request"] = hr
 	}
 
-	// Merge both field names — old configs may use the wrong one.
-	// Collect all unique hosts from both keys before overwriting.
+	correct, _ := hr["allow_private_hosts"].([]any)
+	legacy, hasLegacy := hr["allowed_private_hosts"].([]any)
+
+	// Merge and dedupe hosts from both keys
+	merged := make([]any, 0, len(correct)+len(legacy))
 	seen := make(map[string]bool)
-	for _, key := range []string{"allow_private_hosts", "allowed_private_hosts"} {
-		if arr, ok := hr[key].([]any); ok {
-			for _, h := range arr {
-				if s, ok := h.(string); ok {
-					seen[s] = true
-				}
+	for _, src := range [][]any{correct, legacy} {
+		for _, h := range src {
+			s, ok := h.(string)
+			if !ok || seen[s] {
+				continue
 			}
+			seen[s] = true
+			merged = append(merged, s)
 		}
 	}
-	if seen["localhost"] {
-		return false // already present
+
+	hadLocalhost := seen["localhost"]
+	// Already correct: localhost present and no legacy key to clean up
+	if hadLocalhost && !hasLegacy {
+		return privateHostsNoChange
 	}
-	seen["localhost"] = true
-	merged := make([]any, 0, len(seen))
-	for h := range seen {
-		merged = append(merged, h)
+	addedLocalhost := !hadLocalhost
+	if addedLocalhost {
+		merged = append(merged, "localhost")
 	}
 	hr["allow_private_hosts"] = merged
 	delete(hr, "allowed_private_hosts")
-	return true
+
+	switch {
+	case addedLocalhost && hasLegacy:
+		return privateHostsBothChanged
+	case addedLocalhost:
+		return privateHostsAddedLocalhost
+	default:
+		return privateHostsCleanedLegacy
+	}
 }
 
 // removeBlockingFlags strips autonomy flags that override the allowed_commands
 // allowlist. These were added by a previous provisioner version but break shell
 // access because ZeroClaw classifies curl as high-risk.
+//
+// WHY auto_approve is NOT in this list: the provisioner intentionally sets
+// auto_approve to a list of unblocked tools (Bash, Read, Write, http_request,
+// web_fetch) because headless agents have no terminal to click "approve".
+// Deleting it would cause Bash calls to hang waiting for approval. See
+// provisioner.go.
 func removeBlockingFlags(cfg map[string]any) bool {
 	aut, ok := cfg["autonomy"].(map[string]any)
 	if !ok {
@@ -303,7 +345,6 @@ func removeBlockingFlags(cfg map[string]any) bool {
 		"block_high_risk_commands",
 		"require_approval_for_medium_risk",
 		"require_approval_for_actions",
-		"auto_approve",
 	} {
 		if _, exists := aut[key]; exists {
 			delete(aut, key)

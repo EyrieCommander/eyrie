@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,13 +13,34 @@ import (
 )
 
 const (
-	// DefaultRegistryURL points to the canonical Eyrie registry
-	// TODO: Update this to the actual hosted registry URL
-	DefaultRegistryURL = "file:///Users/natalie/Development/eyrie/registry.example.json"
-
 	// CacheTTL defines how long cached registry data is valid
 	CacheTTL = 24 * time.Hour
 )
+
+// defaultRegistryURL returns the registry URL, resolving ~ to the user's home directory.
+// Looks for ~/.eyrie/registry.json first, then falls back to ~/.eyrie/cache/registry.json.
+// TODO: Update this to the actual hosted registry URL for production.
+func defaultRegistryURL() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	// Prefer user-provided registry, fall back to cached copy
+	for _, rel := range []string{
+		filepath.Join(".eyrie", "registry.json"),
+		filepath.Join(".eyrie", "cache", "registry.json"),
+	} {
+		p := filepath.Join(home, rel)
+		if _, err := os.Stat(p); err == nil {
+			slashed := filepath.ToSlash(p)
+			if len(slashed) > 0 && slashed[0] != '/' {
+				slashed = "/" + slashed
+			}
+			return (&url.URL{Scheme: "file", Path: slashed}).String()
+		}
+	}
+	return ""
+}
 
 // Client fetches and caches the Claw frameworks registry
 type Client struct {
@@ -30,7 +52,10 @@ type Client struct {
 // NewClient creates a new registry client
 func NewClient(registryURL string) (*Client, error) {
 	if registryURL == "" {
-		registryURL = DefaultRegistryURL
+		registryURL = defaultRegistryURL()
+	}
+	if registryURL == "" {
+		return nil, fmt.Errorf("no registry found: place registry.json in ~/.eyrie/ or set a registry URL")
 	}
 
 	cacheDir, err := getCacheDir()
@@ -47,17 +72,30 @@ func NewClient(registryURL string) (*Client, error) {
 
 // Fetch retrieves the registry, using cache if available and not expired
 func (c *Client) Fetch(ctx context.Context, forceRefresh bool) (*Registry, error) {
-	// Try cache first unless force refresh
-	if !forceRefresh {
+	isLocal := strings.HasPrefix(c.registryURL, "file://")
+
+	// Try cache first unless force refresh. Skip cache for local files —
+	// they're already on disk, and caching them prevents edits to
+	// ~/.eyrie/registry.json from taking effect until the 24h TTL expires.
+	if !forceRefresh && !isLocal {
 		if reg, err := c.loadCache(); err == nil {
 			return reg, nil
 		}
 	}
 
-	// Handle file:// URLs for local testing
-	if strings.HasPrefix(c.registryURL, "file://") {
-		path := strings.TrimPrefix(c.registryURL, "file://")
-		data, err := os.ReadFile(path)
+	// Handle file:// URLs for local registries
+	if isLocal {
+		u, parseErr := url.Parse(c.registryURL)
+		if parseErr != nil {
+			return nil, fmt.Errorf("invalid registry URL: %w", parseErr)
+		}
+		localPath := u.Path
+		// On Windows, strip leading slash from /C:/... paths
+		if len(localPath) >= 3 && localPath[0] == '/' && localPath[2] == ':' {
+			localPath = localPath[1:]
+		}
+		localPath = filepath.FromSlash(localPath)
+		data, err := os.ReadFile(localPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to read local registry: %w", err)
 		}
@@ -65,11 +103,6 @@ func (c *Client) Fetch(ctx context.Context, forceRefresh bool) (*Registry, error
 		var reg Registry
 		if err := json.Unmarshal(data, &reg); err != nil {
 			return nil, fmt.Errorf("failed to parse registry: %w", err)
-		}
-
-		// Cache it
-		if err := c.saveCache(&reg); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: failed to cache registry: %v\n", err)
 		}
 
 		return &reg, nil

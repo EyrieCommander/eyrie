@@ -7,6 +7,7 @@ import Sidebar from "./components/Sidebar";
 import AgentDetail from "./components/AgentDetail";
 import PersonasPage from "./components/PersonasPage";
 import HierarchyPage from "./components/HierarchyPage";
+import OnboardingFlow from "./components/OnboardingFlow";
 import AgentsPage from "./components/AgentsPage";
 import ProjectListPage from "./components/ProjectListPage";
 import ProjectDetail from "./components/ProjectDetail";
@@ -14,6 +15,7 @@ import SettingsPage from "./components/SettingsPage";
 import FrameworkDetail from "./components/FrameworkDetail";
 import AgentCompare from "./components/AgentCompare";
 import FrameworkCompare from "./components/FrameworkCompare";
+import CommanderChat from "./components/CommanderChat";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
 
@@ -34,7 +36,7 @@ function AppContent() {
     <div className="flex h-screen overflow-hidden">
       <Sidebar />
 
-      <main className="flex-1 overflow-hidden">
+      <main className="flex-1 overflow-hidden min-w-0">
         {/* Persistent banner when backend is unreachable — shown across all
             routes so the user always knows why data isn't updating. */}
         {backendDown && (
@@ -56,7 +58,7 @@ function AppContent() {
                 </div>
               )}
               <Routes>
-                <Route path="/" element={<Navigate to="/mission-control" replace />} />
+                <Route path="/" element={<OnboardingFlow />} />
                 <Route path="/hierarchy" element={<Navigate to="/mission-control" replace />} />
                 <Route path="/mission-control" element={<HierarchyPage />} />
                 <Route path="/mission-control/agents" element={<AgentsPage />} />
@@ -87,6 +89,8 @@ function AppContent() {
           } />
         </Routes>
       </main>
+
+      <CommanderChat />
     </div>
   );
 }

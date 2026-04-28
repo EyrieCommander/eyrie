@@ -81,10 +81,19 @@ func (s *Server) handleSetKey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Reset the commander so it re-initializes with the new key.
+	// Without this, rotating a key leaves the commander using the old one.
+	s.commanderMu.Lock()
+	s.commander = nil
+	s.commanderMu.Unlock()
+
+	// Valid reflects whether validation actually ran and passed. When the
+	// client asked to skip validation we haven't proved anything about the
+	// key, so don't claim Valid: true.
 	writeJSON(w, http.StatusOK, setKeyResponse{
 		Provider:  provider,
 		MaskedKey: maskKey(body.Key),
-		Valid:     true,
+		Valid:     verified,
 		Verified:  verified,
 	})
 }
@@ -102,6 +111,13 @@ func (s *Server) handleDeleteKey(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to delete key: " + err.Error()})
 		return
 	}
+
+	// Reset the commander so it re-checks the vault on next request.
+	// If the deleted key was the one powering the commander, lazy init
+	// will fail and the UI shows the setup card again.
+	s.commanderMu.Lock()
+	s.commander = nil
+	s.commanderMu.Unlock()
 
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }

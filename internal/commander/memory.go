@@ -122,7 +122,8 @@ func (m *MemoryStore) Remember(key, value string) (MemoryEntry, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UTC()
-	entry, existed := m.data[norm]
+	prevEntry, existed := m.data[norm]
+	entry := prevEntry
 	entry.Key = norm
 	entry.Value = value
 	entry.UpdatedAt = now
@@ -131,6 +132,12 @@ func (m *MemoryStore) Remember(key, value string) (MemoryEntry, error) {
 	}
 	m.data[norm] = entry
 	if err := m.flush(); err != nil {
+		// Revert in-memory state so it stays consistent with disk.
+		if existed {
+			m.data[norm] = prevEntry
+		} else {
+			delete(m.data, norm)
+		}
 		return MemoryEntry{}, err
 	}
 	return entry, nil
@@ -168,9 +175,15 @@ func (m *MemoryStore) Forget(key string) error {
 	norm := NormalizeKey(key)
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if _, ok := m.data[norm]; !ok {
+	existing, ok := m.data[norm]
+	if !ok {
 		return ErrMemoryNotFound
 	}
 	delete(m.data, norm)
-	return m.flush()
+	if err := m.flush(); err != nil {
+		// Restore in-memory state so it stays consistent with disk.
+		m.data[norm] = existing
+		return err
+	}
+	return nil
 }

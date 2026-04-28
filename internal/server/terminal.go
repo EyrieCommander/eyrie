@@ -8,17 +8,35 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"regexp"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
 	"nhooyr.io/websocket"
 )
 
-// handleShellTerminal spawns a plain shell (not agent-specific).
-// Used for onboarding and setup commands when no agent is running yet.
-// GET /api/terminal/ws
+// validSessionName restricts tmux session names to a safe subset.
+// Rejects path separators, shell metacharacters, and anything that
+// could be misinterpreted by tmux or the shell.
+var validSessionName = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+// handleShellTerminal spawns a shell terminal session.
+// If tmux is available and a ?session= param is provided, the session persists
+// across WebSocket reconnections (navigate away, come back, output is still there).
+// Falls back to a plain shell if tmux is not installed.
+// GET /api/terminal/ws?session=eyrie-zeroclaw
 func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
+	// Validate session name BEFORE upgrading so we can return a clean 400.
+	sessionName := r.URL.Query().Get("session")
+	if sessionName != "" && !validSessionName.MatchString(sessionName) {
+		http.Error(w, fmt.Sprintf("invalid session name %q: only [a-zA-Z0-9_-]+ allowed", sessionName), http.StatusBadRequest)
+		return
+	}
+
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -30,23 +48,81 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 
 	ctx := context.Background()
 
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "/bin/zsh"
+	useTmux := sessionName != "" && hasTmux()
+
+	var cmd *exec.Cmd
+	if useTmux {
+		confPath, confErr := ensureTmuxConfig()
+		socketPath, sockErr := tmuxSocketPath()
+		if confErr != nil || sockErr != nil {
+			slog.Warn("tmux config/socket unavailable, falling back to plain shell", "confErr", confErr, "sockErr", sockErr)
+			useTmux = false
+		} else {
+			// Push vault env vars into the tmux session so that commands
+			// started later (e.g., "start gateway" in the launch step) see
+			// keys that were added after the session was created.
+			if vault := config.GetKeyVault(); vault != nil {
+				for _, kv := range vault.EnvSlice() {
+					if k, v, ok := strings.Cut(kv, "="); ok {
+						setenvCmd := exec.CommandContext(ctx, "tmux", "-S", socketPath, "setenv", "-t", sessionName, k, v)
+						_ = setenvCmd.Run() // best-effort: fails silently if session doesn't exist yet
+					}
+				}
+			}
+			// -A: attach if session exists, create if not
+			cmd = exec.CommandContext(ctx, "tmux", "-f", confPath, "-S", socketPath, "new-session", "-A", "-s", sessionName)
+			slog.Info("Starting tmux session", "session", sessionName, "socket", socketPath)
+		}
+	}
+	if !useTmux {
+		// Prefer $SHELL; otherwise probe a POSIX-portable candidate list.
+		// Hard-coding /bin/zsh is macOS-centric — many Linux systems don't
+		// ship zsh at all, so fall back to bash, then sh.
+		shell := os.Getenv("SHELL")
+		if shell == "" {
+			for _, candidate := range []string{"/bin/bash", "/bin/sh", "/bin/zsh"} {
+				if _, err := os.Stat(candidate); err == nil {
+					shell = candidate
+					break
+				}
+			}
+		}
+		if shell == "" {
+			shell = "/bin/sh" // last resort; POSIX guarantees this path
+		}
+		cmd = exec.CommandContext(ctx, shell, "-l")
+		if sessionName != "" {
+			slog.Info("tmux not available, falling back to plain shell", "session", sessionName, "shell", shell)
+		}
 	}
 
-	cmd := exec.CommandContext(ctx, shell, "-l")
-	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
+	env := append(os.Environ(), "TERM=xterm-256color")
+	// Inject vault API keys so frameworks started from the onboarding
+	// terminal can reach their LLM provider without the user having to
+	// manually export env vars.
+	if vault := config.GetKeyVault(); vault != nil {
+		env = append(env, vault.EnvSlice()...)
+	}
+	cmd.Env = env
 
 	ptmx, err := pty.Start(cmd)
 	if err != nil {
-		slog.Error("Failed to start shell PTY", "error", err)
+		slog.Error("Failed to start shell PTY", "error", err, "tmux", useTmux)
 		return
 	}
 	defer func() {
 		ptmx.Close()
 		if cmd.Process != nil {
-			cmd.Process.Kill()
+			if useTmux {
+				// For tmux: closing the PTY fd detaches the client but the
+				// tmux session stays alive in the background. Send SIGHUP
+				// which tmux interprets as "client detached" (SIGKILL
+				// would kill the wrapping client process harder than
+				// needed, though the session itself survives either way).
+				cmd.Process.Signal(syscall.SIGHUP)
+			} else {
+				cmd.Process.Kill()
+			}
 		}
 	}()
 

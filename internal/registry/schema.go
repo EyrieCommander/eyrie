@@ -1,6 +1,9 @@
 package registry
 
-import "time"
+import (
+	"encoding/json"
+	"time"
+)
 
 // Registry represents the complete Claw frameworks registry
 type Registry struct {
@@ -23,6 +26,10 @@ type Framework struct {
 	InstallMethod string   `json:"install_method"` // "script", "cargo", "npm", "pip", "manual"
 	InstallCmd    string   `json:"install_cmd"`    // Command or script URL
 	Requirements  []string `json:"requirements"`   // ["python>=3.11", "node>=22"]
+
+	// Version constraints (optional — empty means "no constraint" / "unknown")
+	MinVersion    string `json:"min_version,omitempty"`    // Minimum compatible version (e.g. "0.7.0")
+	LatestVersion string `json:"latest_version,omitempty"` // Latest known release version
 
 	// Configuration
 	ConfigFormat string        `json:"config_format"` // "toml", "json", "yaml"
@@ -51,6 +58,29 @@ type Framework struct {
 	LogFormat string `json:"log_format"` // "text", "json"
 }
 
+// DefaultInstallCmd returns the default package-manager command for this
+// framework (e.g. "cargo install zeroclaw"). Returns "" for non-package-manager
+// install methods (script, manual).
+func (fw Framework) DefaultInstallCmd() string {
+	switch fw.InstallMethod {
+	case "cargo":
+		return "cargo install " + fw.ID
+	case "npm":
+		return "npm install -g " + fw.ID
+	case "pip":
+		return "pip install " + fw.ID
+	default:
+		return ""
+	}
+}
+
+// IsCustomInstallCmd reports whether the registry specifies a non-default
+// install command for this framework (e.g. --git, @version, custom flags).
+func (fw Framework) IsCustomInstallCmd() bool {
+	dflt := fw.DefaultInstallCmd()
+	return dflt != "" && fw.InstallCmd != "" && fw.InstallCmd != dflt
+}
+
 // ConfigSchema defines editable configuration fields for a framework
 type ConfigSchema struct {
 	CommonFields []ConfigField `json:"common_fields"` // Editable fields for the config form
@@ -59,13 +89,17 @@ type ConfigSchema struct {
 
 // ConfigField represents a single editable configuration field
 type ConfigField struct {
-	Key         string   `json:"key"`         // Config key (dot notation for nested: "gateway.port")
-	Label       string   `json:"label"`       // Display label
-	Type        string   `json:"type"`        // "text", "number", "select", "checkbox", "multiselect"
-	Default     any      `json:"default,omitempty"` // Default value
-	Required    bool     `json:"required"`    // Whether field is required
-	Description string   `json:"description"` // Help text
-	Options     []string `json:"options,omitempty"` // For select/multiselect types
-	Min         *int     `json:"min,omitempty"` // For number types
-	Max         *int     `json:"max,omitempty"` // For number types
+	Key         string   `json:"key"`                    // Config key (dot notation for nested: "gateway.port")
+	Label       string   `json:"label"`                  // Display label
+	Type        string   `json:"type"`                   // "text", "number", "select", "checkbox", "multiselect"
+	Default     any      `json:"default,omitempty"`       // Default value
+	Required    bool     `json:"required"`               // Whether field is required
+	Description string   `json:"description"`            // Help text
+	Options     []string `json:"options,omitempty"`       // For select/multiselect types
+	Suggestions     json.RawMessage `json:"suggestions,omitempty"`      // string[] or map[string]string[] for provider-keyed models
+	SuggestionsKey  string          `json:"suggestions_key,omitempty"`  // field key to select from suggestions map
+	Min         *int     `json:"min,omitempty"`           // For number types
+	Max         *int     `json:"max,omitempty"`           // For number types
+	Advanced    bool     `json:"advanced,omitempty"`      // Hide behind "advanced" toggle in quick setup
+	Group       string   `json:"group,omitempty"`         // Layout group: same-group fields render side-by-side
 }

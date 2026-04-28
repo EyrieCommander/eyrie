@@ -10,18 +10,20 @@
       "repository": "https://github.com/zeroclaw-labs/zeroclaw",
       "website": "https://zeroclawlabs.ai",
       "install_method": "cargo",
-      "install_cmd": "cargo install zeroclaw",
+      "install_cmd": "cargo install --git https://github.com/zeroclaw-labs/zeroclaw zeroclawlabs",
       "requirements": ["rust>=1.70"],
+      "min_version": "0.7.0",
+      "latest_version": "0.7.3",
       "config_format": "toml",
       "config_path": "~/.zeroclaw/config.toml",
       "config_dir": "~/.zeroclaw",
       "binary_path": "~/.cargo/bin/zeroclaw",
       "adapter_type": "http",
       "default_port": 42617,
-      "start_cmd": "zeroclaw service start",
+      "start_cmd": "zeroclaw daemon",
       "stop_cmd": "zeroclaw service stop",
       "status_cmd": "zeroclaw service status",
-      "restart_cmd": "zeroclaw service restart",
+      "restart_cmd": "zeroclaw daemon",
       "health_url": "http://localhost:42617/health",
       "log_dir": "~/.zeroclaw/logs",
       "log_format": "text",
@@ -35,7 +37,8 @@
             "required": true,
             "description": "port for gateway HTTP API",
             "min": 1024,
-            "max": 65535
+            "max": 65535,
+            "advanced": true
           },
           {
             "key": "gateway.host",
@@ -43,24 +46,33 @@
             "type": "text",
             "default": "127.0.0.1",
             "required": true,
-            "description": "host address for gateway to bind to"
+            "description": "host address for gateway to bind to",
+            "advanced": true
           },
           {
-            "key": "default_provider",
+            "key": "providers.fallback",
             "label": "LLM provider",
             "type": "select",
             "options": ["openrouter", "anthropic", "openai"],
             "default": "openrouter",
             "required": true,
-            "description": "which LLM provider to use"
+            "description": "which LLM provider to use",
+            "group": "llm"
           },
           {
-            "key": "default_model",
+            "key": "providers.models.openrouter.model",
             "label": "model",
             "type": "text",
-            "default": "moonshotai/kimi-k2.5",
+            "default": "anthropic/claude-sonnet-4.6",
             "required": true,
-            "description": "model identifier (provider-specific)"
+            "description": "model identifier (provider-specific)",
+            "group": "llm",
+            "suggestions_key": "providers.fallback",
+            "suggestions": {
+              "openrouter": ["anthropic/claude-sonnet-4.6", "anthropic/claude-opus-4.6", "moonshotai/kimi-k2.5", "google/gemini-2.5-pro", "openai/gpt-4.1"],
+              "anthropic": ["claude-sonnet-4.6", "claude-opus-4.6"],
+              "openai": ["gpt-4.1", "gpt-4.1-mini", "o3", "o4-mini"]
+            }
           },
           {
             "key": "workspace.path",
@@ -68,7 +80,8 @@
             "type": "text",
             "default": "~/.zeroclaw/workspace",
             "required": false,
-            "description": "directory for agent workspace files"
+            "description": "directory for agent workspace files",
+            "advanced": true
           },
           {
             "key": "memory.backend",
@@ -77,7 +90,8 @@
             "options": ["sqlite", "memory"],
             "default": "sqlite",
             "required": true,
-            "description": "storage backend for conversation memory"
+            "description": "storage backend for conversation memory",
+            "advanced": true
           }
         ],
         "api_key_hint": "set OPENROUTER_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY environment variable before starting zeroclaw"
@@ -116,7 +130,8 @@
             "required": true,
             "description": "port for gateway WebSocket RPC",
             "min": 1024,
-            "max": 65535
+            "max": 65535,
+            "advanced": true
           },
           {
             "key": "gateway.bind",
@@ -124,7 +139,8 @@
             "type": "text",
             "default": "127.0.0.1",
             "required": true,
-            "description": "address for gateway to bind to"
+            "description": "address for gateway to bind to",
+            "advanced": true
           },
           {
             "key": "provider",
@@ -133,7 +149,8 @@
             "options": ["vercel-ai-gateway", "openrouter", "anthropic", "openai"],
             "default": "vercel-ai-gateway",
             "required": true,
-            "description": "primary LLM provider for agent"
+            "description": "primary LLM provider for agent",
+            "group": "llm"
           },
           {
             "key": "model",
@@ -141,7 +158,15 @@
             "type": "text",
             "default": "vercel-ai-gateway/perplexity/sonar-pro",
             "required": true,
-            "description": "model identifier (provider-specific format)"
+            "description": "model identifier (provider-specific format)",
+            "group": "llm",
+            "suggestions_key": "provider",
+            "suggestions": {
+              "vercel-ai-gateway": ["vercel-ai-gateway/perplexity/sonar-pro", "vercel-ai-gateway/anthropic/claude-sonnet-4"],
+              "openrouter": ["anthropic/claude-sonnet-4-20250514", "anthropic/claude-opus-4-20250514", "openai/gpt-4.1"],
+              "anthropic": ["claude-sonnet-4-20250514", "claude-opus-4-20250514"],
+              "openai": ["gpt-4.1", "gpt-4.1-mini", "o3"]
+            }
           },
           {
             "key": "tools.profile",
@@ -150,7 +175,8 @@
             "options": ["coding", "research", "assistant", "custom"],
             "default": "coding",
             "required": false,
-            "description": "pre-configured toolset profile"
+            "description": "pre-configured toolset profile",
+            "advanced": true
           },
           {
             "key": "channels",
@@ -199,7 +225,8 @@
             "options": ["anthropic", "openrouter", "openai", "nous-portal", "z.ai"],
             "default": "anthropic",
             "required": true,
-            "description": "LLM provider to use for agent"
+            "description": "LLM provider to use for agent",
+            "group": "llm"
           },
           {
             "key": "model",
@@ -207,7 +234,16 @@
             "type": "text",
             "default": "claude-opus-4",
             "required": true,
-            "description": "model identifier for the selected provider"
+            "description": "model identifier for the selected provider",
+            "group": "llm",
+            "suggestions_key": "provider",
+            "suggestions": {
+              "anthropic": ["claude-opus-4", "claude-sonnet-4"],
+              "openrouter": ["anthropic/claude-opus-4-20250514", "anthropic/claude-sonnet-4-20250514", "openai/gpt-4.1"],
+              "openai": ["gpt-4.1", "gpt-4.1-mini", "o3"],
+              "nous-portal": ["claude-opus-4", "deepseek-r1"],
+              "z.ai": ["claude-opus-4"]
+            }
           },
           {
             "key": "terminal.backend",
@@ -216,7 +252,8 @@
             "options": ["local", "ssh", "docker", "modal"],
             "default": "local",
             "required": true,
-            "description": "execution environment for agent commands"
+            "description": "execution environment for agent commands",
+            "advanced": true
           },
           {
             "key": "agent.max_turns",
@@ -226,7 +263,8 @@
             "required": false,
             "description": "maximum conversation turns before reset",
             "min": 1,
-            "max": 1000
+            "max": 1000,
+            "advanced": true
           },
           {
             "key": "agent.reasoning_effort",
@@ -235,7 +273,8 @@
             "options": ["low", "medium", "high"],
             "default": "medium",
             "required": false,
-            "description": "how much reasoning the agent should apply"
+            "description": "how much reasoning the agent should apply",
+            "advanced": true
           },
           {
             "key": "platforms",
@@ -259,7 +298,7 @@
       "website": "https://picoclaw.io",
       "install_method": "script",
       "install_cmd": "curl -fsSL https://github.com/sipeed/picoclaw/releases/latest/download/picoclaw_$(uname -s)_$(uname -m).tar.gz | tar xz -C ${HOME}/go/bin picoclaw && echo 'Installed picoclaw to ~/go/bin/picoclaw'",
-      "requirements": [],
+      "requirements": ["go>=1.21"],
       "config_format": "json",
       "config_path": "~/.picoclaw/config.json",
       "config_dir": "~/.picoclaw",
@@ -283,7 +322,8 @@
             "required": true,
             "description": "port for the gateway health and channel servers",
             "min": 1024,
-            "max": 65535
+            "max": 65535,
+            "advanced": true
           },
           {
             "key": "gateway.host",
@@ -291,7 +331,8 @@
             "type": "text",
             "default": "127.0.0.1",
             "required": true,
-            "description": "host address for gateway to bind to"
+            "description": "host address for gateway to bind to",
+            "advanced": true
           },
           {
             "key": "agents.defaults.provider",
@@ -300,7 +341,8 @@
             "options": ["anthropic", "openai", "openrouter", "ollama"],
             "default": "openrouter",
             "required": true,
-            "description": "which LLM provider to use"
+            "description": "which LLM provider to use",
+            "group": "llm"
           },
           {
             "key": "agents.defaults.model_name",
@@ -308,7 +350,15 @@
             "type": "text",
             "default": "anthropic/claude-sonnet-4-20250514",
             "required": true,
-            "description": "model identifier (provider/model format)"
+            "description": "model identifier (provider/model format)",
+            "group": "llm",
+            "suggestions_key": "agents.defaults.provider",
+            "suggestions": {
+              "openrouter": ["openrouter-auto", "openrouter-gpt-5.4"],
+              "anthropic": ["claude-sonnet-4.6"],
+              "openai": ["gpt-5.4"],
+              "ollama": ["llama3", "llama-3.3-70b"]
+            }
           },
           {
             "key": "agents.defaults.restrict_to_workspace",
@@ -316,16 +366,8 @@
             "type": "checkbox",
             "default": true,
             "required": false,
-            "description": "restrict file and shell access to the workspace directory"
-          },
-          {
-            "key": "channels",
-            "label": "enabled channels",
-            "type": "multiselect",
-            "options": ["telegram", "discord", "slack", "whatsapp", "weixin", "feishu", "dingtalk"],
-            "default": [],
-            "required": false,
-            "description": "messaging platforms to enable"
+            "description": "restrict file and shell access to the workspace directory",
+            "advanced": true
           }
         ],
         "api_key_hint": "store API keys in ~/.picoclaw/.security.yml (chmod 600) or set PICOCLAW_CHANNELS_* environment variables"

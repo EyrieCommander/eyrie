@@ -100,18 +100,22 @@ export default function AgentsPage() {
         </button>
       </div>
 
-      {/* Commander section */}
+      {/* Commander — always Eyrie (built-in, not an agent instance) */}
       <div className="space-y-3">
         <span className="text-[10px] font-medium uppercase tracking-wider text-text-muted">// commander</span>
-        <AgentCard
-          displayName={hierarchy.commander?.display_name || "Eyrie"}
-          role="commander"
-          roleBadgeColor="bg-purple-400/10 text-purple-400"
-          roleIcon={Crown}
-          status="running"
-          framework=""
-          onClick={() => {}}
-        />
+        <div className="flex w-full items-center gap-4 rounded border border-border p-4 text-xs">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full shrink-0 bg-purple-500/20">
+            <Crown className="h-4 w-4 text-purple-400" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <span className={`h-1.5 w-1.5 rounded-full shrink-0 ${backendDown ? "bg-red" : "bg-green"}`} />
+              <span className="font-medium text-text">Eyrie</span>
+              <span className="rounded px-1.5 py-0.5 text-[9px] font-medium shrink-0 bg-purple-400/10 text-purple-400">commander</span>
+            </div>
+            <div className="mt-1 text-text-muted">{backendDown ? "offline" : "built-in"} · chat via panel &rarr;</div>
+          </div>
+        </div>
       </div>
 
       {/* Captains + Talons grouped by project */}

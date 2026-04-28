@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Audacity88/eyrie/internal/adapter"
 	"github.com/Audacity88/eyrie/internal/commander"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
@@ -42,12 +43,22 @@ type Server struct {
 	// commander is the built-in LLM-driven orchestrator. The user chats
 	// with it directly via /api/commander/chat. It has direct access to
 	// the project store via its tool registry.
-	commander *commander.Commander
+	//
+	// May be nil at startup if no API key is configured. The handler
+	// guard (commanderAvailable) attempts lazy initialization on each
+	// request so the user can add a key via the Settings page and the
+	// commander comes online without a server restart.
+	commander   *commander.Commander
+	commanderMu sync.Mutex
 
 	// activeChats stores cancel functions for in-flight project chat
 	// orchestrations. Keyed by project ID. Used by the stop endpoint
 	// to cancel the detached agent context.
 	activeChats sync.Map // map[string]context.CancelFunc
+
+	// pairAttempted tracks which agents we've already tried to auto-pair
+	// so we don't spawn goroutines on every discovery poll.
+	pairAttempted sync.Map // map[string]bool
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -92,11 +103,15 @@ func New(cfg config.Config) (*Server, error) {
 		Discovery:     s.runDiscovery,
 		SendToProject: s.sendCommanderMessageToProject,
 		RestartAgent:  s.restartAgentByName,
+		Vault:         vault,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("commander: %w", err)
+		// Non-fatal: the server runs without a commander. The chat
+		// endpoints return 503 and the UI shows a "configure API key"
+		// card. The user can set a key via the Settings page and restart.
+		slog.Warn("commander unavailable (set OPENROUTER_API_KEY or ANTHROPIC_API_KEY)", "error", err)
 	}
-	s.commander = cmd
+	s.commander = cmd // may be nil
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
@@ -135,6 +150,11 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/registry/frameworks/{id}", s.handleFrameworkDetail)
 	s.mux.HandleFunc("POST /api/registry/install", s.handleInstallFramework)
 	s.mux.HandleFunc("GET /api/registry/install/status", s.handleInstallStatus)
+	s.mux.HandleFunc("GET /api/registry/install/{id}/logs", s.handleInstallLogs)
+	s.mux.HandleFunc("POST /api/registry/uninstall", s.handleUninstallFramework)
+	s.mux.HandleFunc("GET /api/registry/frameworks/{id}/config", s.handleFrameworkConfigRead)
+	s.mux.HandleFunc("PUT /api/registry/frameworks/{id}/config", s.handleFrameworkConfigPatch)
+	s.mux.HandleFunc("GET /api/registry/frameworks/{id}/health", s.handleFrameworkHealthProxy)
 
 	// API reference (self-documenting, consumed by agents)
 	s.mux.HandleFunc("GET /api/reference", s.handleAPIReference)
@@ -232,9 +252,33 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	return s.server.Shutdown(ctx)
 }
 
-// runDiscovery is a helper used by API handlers.
+// runDiscovery is a helper used by API handlers. After discovery, it
+// triggers auto-pairing for any alive ZeroClaw agents that lack a token.
 func (s *Server) runDiscovery(ctx context.Context) discovery.Result {
-	return discovery.Run(ctx, s.cfg)
+	result := discovery.Run(ctx, s.cfg)
+
+	// Auto-pair alive ZeroClaw agents that have no token. The attempt map
+	// prevents concurrent pairing goroutines for the same agent. On failure,
+	// the entry is cleared so the next discovery cycle retries.
+	for _, ar := range result.Agents {
+		if ar.Alive && ar.Agent.Framework == adapter.FrameworkZeroClaw && ar.Agent.Token == "" {
+			if _, loaded := s.pairAttempted.LoadOrStore(ar.Agent.Name, true); !loaded {
+				agentName := ar.Agent.Name
+				go func() {
+					autoPairZeroClaw(agentName, ar.Agent.Port)
+					// Check if token was actually stored — if not, clear
+					// the flag so we retry on next discovery cycle.
+					if ts, err := config.NewTokenStore(); err == nil {
+						if ts.Get(agentName) == "" {
+							s.pairAttempted.Delete(agentName)
+						}
+					}
+				}()
+			}
+		}
+	}
+
+	return result
 }
 
 // corsHandler wraps a handler with CORS headers. Only localhost origins are
