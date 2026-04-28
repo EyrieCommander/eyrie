@@ -13,7 +13,7 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
-var Version = "dev"
+var Version = "0.2.1"
 
 type Config struct {
 	Dashboard DashboardConfig `toml:"dashboard"`

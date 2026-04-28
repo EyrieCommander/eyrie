@@ -6,7 +6,7 @@
 
 import { useEffect, useState, useRef, useCallback } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { ArrowLeft, ExternalLink, Download, Settings, Terminal as TerminalIcon, RefreshCw, ChevronRight, Search, Trash2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, Download, Settings, Terminal as TerminalIcon, RefreshCw, ChevronRight, Search, Trash2, RotateCcw } from "lucide-react";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import type { Framework } from "../lib/types";
 import { getFrameworkDetail } from "../lib/api";
@@ -92,9 +92,16 @@ export default function FrameworkDetail() {
     return () => clearInterval(interval);
   }, [id, needsPolling, pendingUninstall, refreshGlobal]);
 
-  // ── Uninstall ───────────────────────────────────────────────────────
+  // ── Reset / Uninstall ────────────────────────────────────────────────
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [showUninstallConfirm, setShowUninstallConfirm] = useState(false);
   const [uninstallPurge, setUninstallPurge] = useState(false);
+
+  const handleReset = () => {
+    if (!safeId) return;
+    setShowResetConfirm(false);
+    sendToTerminal(`eyrie reset ${safeId} -y`);
+  };
 
   // ── Derived state ──────────────────────────────────────────────────
   const fwAgents = agents.filter((a) => a.framework === id);
@@ -299,8 +306,34 @@ export default function FrameworkDetail() {
             <RefreshCw className="h-3 w-3" /> update
           </button>
         )}
+        {/* Reset config (keep binary) */}
+        {status?.isConfigured && !showResetConfirm && !showUninstallConfirm && (
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 border border-yellow/30 text-yellow/70 hover:text-yellow hover:border-yellow/50 rounded text-xs font-medium transition-colors"
+          >
+            <RotateCcw className="h-3 w-3" /> reset config
+          </button>
+        )}
+        {showResetConfirm && (
+          <>
+            <span className="text-xs text-text-muted">remove config & redo onboarding?</span>
+            <button
+              onClick={handleReset}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-yellow text-black rounded text-xs font-medium hover:bg-yellow/80 transition-colors"
+            >
+              <RotateCcw className="h-3 w-3" /> confirm
+            </button>
+            <button
+              onClick={() => setShowResetConfirm(false)}
+              className="text-xs text-text-muted hover:text-text transition-colors"
+            >
+              cancel
+            </button>
+          </>
+        )}
         {/* Uninstall */}
-        {(status?.isInstalled || status?.isConfigured) && !showUninstallConfirm && (
+        {(status?.isInstalled || status?.isConfigured) && !showUninstallConfirm && !showResetConfirm && (
           <button
             onClick={() => setShowUninstallConfirm(true)}
             className="flex items-center gap-1.5 px-3 py-1.5 border border-red/30 text-red/70 hover:text-red hover:border-red/50 rounded text-xs font-medium transition-colors"
