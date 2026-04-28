@@ -107,12 +107,17 @@ func New(cfg config.Config) (*Server, error) {
 	// Method values close over the receiver pointer, so the callbacks
 	// will have access to the fully-initialized server when invoked.
 	cmd, err := commander.NewDefault(commander.DefaultConfig{
-		Projects:      projStore,
-		Chat:          chatSt,
-		Discovery:     s.runDiscovery,
-		SendToProject: s.sendCommanderMessageToProject,
-		RestartAgent:  s.restartAgentByName,
-		Vault:         vault,
+		Projects:            projStore,
+		Chat:                chatSt,
+		Discovery:           s.runDiscovery,
+		SendToProject:       s.sendCommanderMessageToProject,
+		RestartAgent:        s.restartAgentByName,
+		Vault:               vault,
+		ListReviewTasks:     s.cmdListReviewTasks,
+		GetReviewTask:       s.cmdGetReviewTask,
+		CreateReviewTask:    s.cmdCreateReviewTask,
+		RunReviewTask:       s.cmdRunReviewTask,
+		ListReviewArtifacts: s.cmdListReviewArtifacts,
 	})
 	if err != nil {
 		// Non-fatal: the server runs without a commander. The chat

@@ -25,12 +25,17 @@ func (s *Server) commanderAvailable(w http.ResponseWriter) bool {
 	}
 	// Attempt lazy init — selectProvider re-reads the vault.
 	cmd, err := commander.NewDefault(commander.DefaultConfig{
-		Projects:      s.projectStore,
-		Chat:          s.chatStore,
-		Discovery:     s.runDiscovery,
-		SendToProject: s.sendCommanderMessageToProject,
-		RestartAgent:  s.restartAgentByName,
-		Vault:         s.vault,
+		Projects:            s.projectStore,
+		Chat:                s.chatStore,
+		Discovery:           s.runDiscovery,
+		SendToProject:       s.sendCommanderMessageToProject,
+		RestartAgent:        s.restartAgentByName,
+		Vault:               s.vault,
+		ListReviewTasks:     s.cmdListReviewTasks,
+		GetReviewTask:       s.cmdGetReviewTask,
+		CreateReviewTask:    s.cmdCreateReviewTask,
+		RunReviewTask:       s.cmdRunReviewTask,
+		ListReviewArtifacts: s.cmdListReviewArtifacts,
 	})
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{

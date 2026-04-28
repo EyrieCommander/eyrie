@@ -27,7 +27,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   ArrowLeft, Plus, Trash2, Briefcase, Crown,
-  MessageSquare, Pause, Target,
+  MessageSquare, Pause, Target, ListTodo, Network,
 } from "lucide-react";
 import type { AgentInstance, ReviewTask, ReviewTaskKind, ReviewArtifact } from "../lib/types";
 import { deleteProject, resetProject, agentAction, instanceAction, createReviewTask, fetchReviewTasks, runReviewTask, fetchReviewTaskArtifacts } from "../lib/api";
@@ -79,6 +79,7 @@ export default function ProjectDetail() {
   const [loadError, setLoadError] = useState("");
   const [startingAgent, setStartingAgent] = useState("");
   const [chatKey, setChatKey] = useState(0); // increment to remount ProjectChat
+  const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "hierarchy">("chat");
   const [reviewTasks, setReviewTasks] = useState<ReviewTask[]>([]);
   const [reviewKind, setReviewKind] = useState<ReviewTaskKind>("review_pr");
   const [reviewRepo, setReviewRepo] = useState("zeroclaw-labs/zeroclaw");
@@ -416,110 +417,6 @@ export default function ProjectDetail() {
 
           <div className="h-px w-full bg-border" />
 
-          <div className="space-y-2">
-            <span className="text-[10px] font-medium text-text-muted">// review ops</span>
-            <div className="space-y-1">
-              <select
-                value={reviewKind}
-                onChange={(e) => setReviewKind(e.target.value as ReviewTaskKind)}
-                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
-              >
-                <option value="triage_issue">triage_issue</option>
-                <option value="review_pr">review_pr</option>
-                <option value="rereview_pr">rereview_pr</option>
-                <option value="respond_reviewer">respond_reviewer</option>
-              </select>
-              <input
-                value={reviewRepo}
-                onChange={(e) => setReviewRepo(e.target.value)}
-                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
-              />
-              <input
-                type="number"
-                min={1}
-                value={reviewTarget}
-                onChange={(e) => setReviewTarget(Number(e.target.value))}
-                className="w-full rounded border border-border bg-bg px-2 py-1 text-[10px] text-text"
-              />
-              <button
-                onClick={async () => {
-                  if (!id) return;
-                  try {
-                    const created = await createReviewTask({
-                      project_id: id,
-                      domain: "github",
-                      kind: reviewKind,
-                      repo: reviewRepo,
-                      target_number: reviewTarget,
-                    });
-                    setSelectedTaskID(created.id);
-                    await refreshReviewTasks();
-                  } catch (err) {
-                    setLoadError(err instanceof Error ? err.message : "Failed to create review task");
-                  }
-                }}
-                className="w-full rounded bg-accent px-2 py-1.5 text-[10px] font-medium text-white hover:bg-accent/80"
-              >
-                create task
-              </button>
-            </div>
-            <div className="max-h-36 space-y-1 overflow-y-auto">
-              {reviewTasks.map((task) => (
-                <button
-                  key={task.id}
-                  onClick={() => setSelectedTaskID(task.id)}
-                  className={`w-full rounded border px-2 py-1 text-left text-[10px] ${selectedTaskID === task.id ? "border-accent/50 bg-accent/10" : "border-border"}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <span className="font-medium text-text">{task.kind} #{task.target_number}</span>
-                    <span className="rounded px-1 py-0.5 text-[9px] bg-surface-hover text-text-muted">{task.status}</span>
-                  </div>
-                  <div className="text-text-muted">{task.repo}</div>
-                </button>
-              ))}
-            </div>
-            {selectedTaskID && (
-              <button
-                onClick={async () => {
-                  try {
-                    await runReviewTask(selectedTaskID);
-                    await refreshReviewTasks();
-                    const arts = await fetchReviewTaskArtifacts(selectedTaskID);
-                    setSelectedArtifacts(arts);
-                    setViewedArtifactIdx(arts.length > 0 ? arts.length - 1 : -1);
-                  } catch (err) {
-                    setLoadError(err instanceof Error ? err.message : "Failed to run task");
-                  }
-                }}
-                className="w-full rounded border border-border px-2 py-1 text-[10px] text-text-muted hover:bg-surface-hover"
-              >
-                run selected task
-              </button>
-            )}
-            {selectedArtifacts.length > 0 && (
-              <div className="space-y-1">
-                <div className="flex gap-1">
-                  {selectedArtifacts.map((art, idx) => (
-                    <button
-                      key={art.id}
-                      onClick={() => setViewedArtifactIdx(idx)}
-                      className={`rounded px-1.5 py-0.5 text-[9px] ${viewedArtifactIdx === idx ? "bg-accent/20 text-accent font-medium" : "bg-surface-hover text-text-muted hover:text-text"}`}
-                    >
-                      {art.kind === "source_context" ? "context" : "draft"}
-                    </button>
-                  ))}
-                </div>
-                {viewedArtifactIdx >= 0 && viewedArtifactIdx < selectedArtifacts.length && (
-                  <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg p-2 text-[10px] text-text-muted">
-                    {selectedArtifacts[viewedArtifactIdx].content}
-                  </pre>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="h-px w-full bg-border" />
-
           {/* Actions */}
           <div className="space-y-2">
             <span className="text-[10px] font-medium text-text-muted">// actions</span>
@@ -555,43 +452,9 @@ export default function ProjectDetail() {
               <Trash2 className="h-3 w-3" /> reset project
             </button>
           </div>
-
-          <div className="h-px w-full bg-border" />
-
-          {/* Hierarchy diagram */}
-          <div>
-            <div className="mb-2">
-              <span className="text-[10px] font-medium text-text-muted">// hierarchy</span>
-            </div>
-            <ProjectHierarchy
-              commander={{
-                name: "Eyrie",
-                role: "commander",
-                status: "running",
-              }}
-              captain={captainInstance ? {
-                name: captainInstance.display_name || captainInstance.name,
-                role: "captain",
-                status: captainInstance.status as any,
-                onClick: () => navigate(`/agents/${captainInstance.name}/chat`),
-              } : captainAgent ? {
-                name: captainAgent.name,
-                role: "captain",
-                status: captainAgent.alive ? "running" : "stopped",
-                onClick: () => navigate(`/agents/${captainAgent.name}/chat`),
-              } : null}
-              talons={roleAgents.map((a) => ({
-                name: a.display_name || a.name,
-                role: "talon" as const,
-                status: a.status as any,
-                onClick: () => navigate(`/agents/${a.name}/chat`),
-              }))}
-            />
-          </div>
         </div>
 
-        {/* Main workspace area — ProjectChat is ALWAYS mounted to preserve
-            streaming state. Setup prompts overlay on top when needed. */}
+        {/* Main workspace area — tabbed layout */}
         <div className="relative flex flex-1 flex-col overflow-hidden">
           {/* Setup overlays — commander is NOT required for project chat */}
           {hasLoadedRef.current && !hasCaptain && (
@@ -629,10 +492,6 @@ export default function ProjectDetail() {
                     disabled={!!startingAgent}
                     onClick={async () => {
                       setStartingAgent("all");
-                      // allSettled (not all) so one failure doesn't abort the
-                      // rest — start as many as we can, then surface which
-                      // failed. Polling still runs for the agents that DID
-                      // start; refresh() will reveal their status.
                       const results = await Promise.allSettled(
                         needsStart.map((a) =>
                           a.isInstance ? instanceAction(a.id, "start") : agentAction(a.id, "start"),
@@ -651,17 +510,12 @@ export default function ProjectDetail() {
                           .join("; ");
                         setLoadError(`failed to start ${failures.length}/${needsStart.length} agent${failures.length === 1 ? "" : "s"}: ${msg}`);
                       }
-                      // If every agent failed, don't bother polling — clear state immediately
                       if (failures.length === needsStart.length) {
                         setStartingAgent("");
                         return;
                       }
-                      // Clear any prior interval AND timeout — otherwise
-                      // an older setTimeout could fire mid-poll and
-                      // prematurely stop the new one.
                       if (pollRef.current.interval) clearInterval(pollRef.current.interval);
                       if (pollRef.current.timeout) clearTimeout(pollRef.current.timeout);
-                      // Single shared poll for all agents to come online
                       const poll = setInterval(refresh, 2000);
                       pollRef.current.interval = poll;
                       pollRef.current.timeout = setTimeout(() => {
@@ -679,16 +533,256 @@ export default function ProjectDetail() {
             </div>
           )}
 
-          {/* Always-mounted chat */}
-          <ProjectChat
-            key={chatKey}
-            projectId={project.id}
-            participants={[
-              ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
-              ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
-              ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
-            ]}
-          />
+          {/* Tab bar */}
+          <div className="flex items-center gap-1 border-b border-border bg-surface px-3 py-1">
+            <button
+              onClick={() => setActiveTab("chat")}
+              className={`flex items-center gap-1.5 rounded-t px-3 py-1.5 text-[11px] font-medium transition-colors ${activeTab === "chat" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"}`}
+            >
+              <MessageSquare className="h-3 w-3" /> Chat
+            </button>
+            <button
+              onClick={() => setActiveTab("tasks")}
+              className={`flex items-center gap-1.5 rounded-t px-3 py-1.5 text-[11px] font-medium transition-colors ${activeTab === "tasks" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"}`}
+            >
+              <ListTodo className="h-3 w-3" /> Tasks
+            </button>
+            <button
+              onClick={() => setActiveTab("hierarchy")}
+              className={`flex items-center gap-1.5 rounded-t px-3 py-1.5 text-[11px] font-medium transition-colors ${activeTab === "hierarchy" ? "border-b-2 border-accent text-accent" : "text-text-muted hover:text-text"}`}
+            >
+              <Network className="h-3 w-3" /> Hierarchy
+            </button>
+          </div>
+
+          {/* Tab content — Chat is ALWAYS mounted (CSS-hidden when inactive)
+              to preserve SSE connections and streaming state. */}
+          <div className="relative flex-1 overflow-hidden">
+            {/* Chat tab — always mounted, hidden via CSS */}
+            <div
+              className="absolute inset-0 flex flex-col"
+              style={{ visibility: activeTab === "chat" ? "visible" : "hidden" }}
+            >
+              <ProjectChat
+                key={chatKey}
+                projectId={project.id}
+                participants={[
+                  ...(captainInstance ? [{ name: captainInstance.name, role: "captain" }] : []),
+                  ...(captainAgent ? [{ name: captainAgent.name, role: "captain" }] : []),
+                  ...roleAgents.map((a) => ({ name: a.name, role: "talon" })),
+                ]}
+              />
+            </div>
+
+            {/* Tasks tab */}
+            {activeTab === "tasks" && (
+              <div className="absolute inset-0 overflow-y-auto p-4">
+                <div className="mx-auto max-w-3xl space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-sm font-bold text-text">Review Tasks</h2>
+                  </div>
+
+                  {/* Create task form */}
+                  <div className="rounded border border-border bg-surface p-3 space-y-2">
+                    <span className="text-[10px] font-medium text-text-muted">// create task</span>
+                    <div className="flex gap-2">
+                      <select
+                        value={reviewKind}
+                        onChange={(e) => setReviewKind(e.target.value as ReviewTaskKind)}
+                        className="rounded border border-border bg-bg px-2 py-1 text-[11px] text-text"
+                      >
+                        <option value="triage_issue">triage_issue</option>
+                        <option value="review_pr">review_pr</option>
+                        <option value="rereview_pr">rereview_pr</option>
+                        <option value="respond_reviewer">respond_reviewer</option>
+                      </select>
+                      <input
+                        value={reviewRepo}
+                        onChange={(e) => setReviewRepo(e.target.value)}
+                        placeholder="owner/repo"
+                        className="flex-1 rounded border border-border bg-bg px-2 py-1 text-[11px] text-text"
+                      />
+                      <input
+                        type="number"
+                        min={1}
+                        value={reviewTarget}
+                        onChange={(e) => setReviewTarget(Number(e.target.value))}
+                        placeholder="#"
+                        className="w-20 rounded border border-border bg-bg px-2 py-1 text-[11px] text-text"
+                      />
+                      <button
+                        onClick={async () => {
+                          if (!id) return;
+                          try {
+                            const created = await createReviewTask({
+                              project_id: id,
+                              domain: "github",
+                              kind: reviewKind,
+                              repo: reviewRepo,
+                              target_number: reviewTarget,
+                            });
+                            setSelectedTaskID(created.id);
+                            await refreshReviewTasks();
+                          } catch (err) {
+                            setLoadError(err instanceof Error ? err.message : "Failed to create review task");
+                          }
+                        }}
+                        className="rounded bg-accent px-3 py-1 text-[11px] font-medium text-white hover:bg-accent/80"
+                      >
+                        create
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Task list */}
+                  <div className="space-y-1">
+                    {reviewTasks.length === 0 ? (
+                      <div className="rounded border border-dashed border-border px-4 py-6 text-center text-xs text-text-muted">
+                        no tasks yet — create one above
+                      </div>
+                    ) : (
+                      reviewTasks.map((task) => (
+                        <button
+                          key={task.id}
+                          onClick={() => setSelectedTaskID(task.id)}
+                          className={`w-full rounded border px-3 py-2 text-left text-xs transition-colors ${selectedTaskID === task.id ? "border-accent/50 bg-accent/5" : "border-border hover:bg-surface-hover/50"}`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium text-text">{task.kind} #{task.target_number}</span>
+                            <span className={`rounded px-1.5 py-0.5 text-[10px] ${task.status === "draft_ready" ? "bg-green/10 text-green" : task.status === "running" ? "bg-yellow-400/10 text-yellow-400" : task.status === "failed" ? "bg-red/10 text-red" : "bg-surface-hover text-text-muted"}`}>
+                              {task.status}
+                            </span>
+                          </div>
+                          <div className="text-text-muted">{task.repo}</div>
+                        </button>
+                      ))
+                    )}
+                  </div>
+
+                  {/* Selected task details */}
+                  {selectedTaskID && (
+                    <div className="rounded border border-border bg-surface p-3 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-medium text-text-muted">// selected task</span>
+                        <button
+                          onClick={async () => {
+                            try {
+                              await runReviewTask(selectedTaskID);
+                              await refreshReviewTasks();
+                              const arts = await fetchReviewTaskArtifacts(selectedTaskID);
+                              setSelectedArtifacts(arts);
+                              setViewedArtifactIdx(arts.length > 0 ? arts.length - 1 : -1);
+                            } catch (err) {
+                              setLoadError(err instanceof Error ? err.message : "Failed to run task");
+                            }
+                          }}
+                          className="rounded border border-border px-2 py-1 text-[10px] text-text-muted hover:bg-surface-hover"
+                        >
+                          run task
+                        </button>
+                      </div>
+
+                      {/* Artifact selector */}
+                      {selectedArtifacts.length > 0 && (
+                        <div className="space-y-2">
+                          <div className="flex gap-1">
+                            {selectedArtifacts.map((art, idx) => (
+                              <button
+                                key={art.id}
+                                onClick={() => setViewedArtifactIdx(idx)}
+                                className={`rounded px-2 py-1 text-[10px] ${viewedArtifactIdx === idx ? "bg-accent/20 text-accent font-medium" : "bg-surface-hover text-text-muted hover:text-text"}`}
+                              >
+                                {art.kind === "source_context" ? "context" : art.kind === "task_result" ? "result" : "draft"}
+                              </button>
+                            ))}
+                          </div>
+
+                          {/* TaskResult summary for task_result artifacts */}
+                          {viewedArtifactIdx >= 0 && viewedArtifactIdx < selectedArtifacts.length && selectedArtifacts[viewedArtifactIdx].kind === "task_result" && (() => {
+                            try {
+                              const tr = JSON.parse(selectedArtifacts[viewedArtifactIdx].content);
+                              return (
+                                <div className="rounded border border-border bg-bg p-3 space-y-2 text-xs">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-text">{tr.summary}</span>
+                                    <span className={`rounded px-1.5 py-0.5 text-[10px] ${tr.severity === "critical" ? "bg-red/10 text-red" : tr.severity === "high" ? "bg-orange-400/10 text-orange-400" : tr.severity === "medium" ? "bg-yellow-400/10 text-yellow-400" : "bg-surface-hover text-text-muted"}`}>
+                                      {tr.severity}
+                                    </span>
+                                    <span className="text-text-muted text-[10px]">
+                                      confidence: {Math.round((tr.confidence || 0) * 100)}%
+                                    </span>
+                                  </div>
+                                  {tr.requires_human_review && (
+                                    <div className="text-[10px] text-yellow-400">requires human review</div>
+                                  )}
+                                  {tr.proposed_actions && tr.proposed_actions.length > 0 && (
+                                    <div className="space-y-1">
+                                      <span className="text-[10px] text-text-muted">proposed actions:</span>
+                                      {tr.proposed_actions.map((a: any, i: number) => (
+                                        <div key={i} className="flex items-center gap-2 rounded bg-surface-hover px-2 py-1 text-[10px]">
+                                          <span className="font-mono text-accent">{a.kind}</span>
+                                          <span className="text-text-muted">{a.description}</span>
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {tr.notes && (
+                                    <div className="text-[10px] text-text-muted">{tr.notes}</div>
+                                  )}
+                                </div>
+                              );
+                            } catch {
+                              return null;
+                            }
+                          })()}
+
+                          {/* Raw artifact content for non-task_result types */}
+                          {viewedArtifactIdx >= 0 && viewedArtifactIdx < selectedArtifacts.length && selectedArtifacts[viewedArtifactIdx].kind !== "task_result" && (
+                            <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded border border-border bg-bg p-3 text-[11px] text-text-muted">
+                              {selectedArtifacts[viewedArtifactIdx].content}
+                            </pre>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Hierarchy tab */}
+            {activeTab === "hierarchy" && (
+              <div className="absolute inset-0 overflow-y-auto p-4">
+                <div className="mx-auto max-w-3xl">
+                  <h2 className="mb-4 text-sm font-bold text-text">Project Hierarchy</h2>
+                  <ProjectHierarchy
+                    commander={{
+                      name: "Eyrie",
+                      role: "commander",
+                      status: "running",
+                    }}
+                    captain={captainInstance ? {
+                      name: captainInstance.display_name || captainInstance.name,
+                      role: "captain",
+                      status: captainInstance.status as any,
+                      onClick: () => navigate(`/agents/${captainInstance.name}/chat`),
+                    } : captainAgent ? {
+                      name: captainAgent.name,
+                      role: "captain",
+                      status: captainAgent.alive ? "running" : "stopped",
+                      onClick: () => navigate(`/agents/${captainAgent.name}/chat`),
+                    } : null}
+                    talons={roleAgents.map((a) => ({
+                      name: a.display_name || a.name,
+                      role: "talon" as const,
+                      status: a.status as any,
+                      onClick: () => navigate(`/agents/${a.name}/chat`),
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

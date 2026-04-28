@@ -40,6 +40,7 @@ type ArtifactKind string
 const (
 	ArtifactKindMarkdown      ArtifactKind = "markdown"
 	ArtifactKindSourceContext ArtifactKind = "source_context"
+	ArtifactKindTaskResult    ArtifactKind = "task_result"
 )
 
 type Task struct {

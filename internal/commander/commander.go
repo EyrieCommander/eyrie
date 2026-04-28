@@ -151,6 +151,12 @@ type DefaultConfig struct {
 	// Vault is the key vault to read API keys from. When nil,
 	// selectProvider falls back to config.GetKeyVault().
 	Vault         *config.KeyVault
+	// Review task callbacks (function fields to avoid import cycles).
+	ListReviewTasks     func(projectID string) ([]map[string]any, error)
+	GetReviewTask       func(taskID string) (map[string]any, error)
+	CreateReviewTask    func(projectID, domain, kind, repo string, targetNumber int) (map[string]any, error)
+	RunReviewTask       func(ctx context.Context, taskID string) (map[string]any, error)
+	ListReviewArtifacts func(taskID string) ([]map[string]any, error)
 }
 
 // NewDefault builds a Commander with the skeleton defaults: OpenRouter
@@ -198,12 +204,17 @@ func NewDefault(deps DefaultConfig) (*Commander, error) {
 		Audit:    audit,
 		Memory:   memory,
 		Tools: NewRegistry(RegistryDeps{
-			Projects:      deps.Projects,
-			Chat:          deps.Chat,
-			Discovery:     deps.Discovery,
-			SendToProject: deps.SendToProject,
-			RestartAgent:  deps.RestartAgent,
-			Memory:        memory,
+			Projects:            deps.Projects,
+			Chat:                deps.Chat,
+			Discovery:           deps.Discovery,
+			SendToProject:       deps.SendToProject,
+			RestartAgent:        deps.RestartAgent,
+			Memory:              memory,
+			ListReviewTasks:     deps.ListReviewTasks,
+			GetReviewTask:       deps.GetReviewTask,
+			CreateReviewTask:    deps.CreateReviewTask,
+			RunReviewTask:       deps.RunReviewTask,
+			ListReviewArtifacts: deps.ListReviewArtifacts,
 		}),
 	}), nil
 }

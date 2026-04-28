@@ -78,16 +78,29 @@ GET /api/review-tasks?project_id={id}
 ### Get task
 GET /api/review-tasks/{id}
 
-### Run task (stub + source context)
+### Run task (stub + source context + task_result)
 POST /api/review-tasks/{id}/run
 Transitions task to running. For GitHub-domain tasks, fetches read-only source
 context (issue/PR metadata + bounded comments) and persists a source_context
-artifact. Then writes the local stub draft artifact and marks task draft_ready.
-If the GitHub fetch fails, the draft is still created with a note about the
-failure. No GitHub writes are performed.
+artifact. Then builds a validated TaskResult JSON artifact with summary, severity,
+confidence, proposed actions, and human-review flag. Finally writes the human-
+readable markdown draft artifact and marks task draft_ready. Artifact order:
+source_context (when fetch succeeds) → task_result (JSON) → markdown (draft).
+If the GitHub fetch fails, the draft and task_result are still created with a
+note about the failure. No GitHub writes are performed.
+
+Artifact kinds: source_context, task_result, markdown.
 
 ### List task artifacts
 GET /api/review-tasks/{id}/artifacts
+
+### Commander tools for review tasks
+The following commander tools wrap the above REST endpoints:
+- list_review_tasks (auto-risk): list tasks for a project
+- get_review_task (auto-risk): get full task details by id
+- list_review_artifacts (auto-risk): list artifacts for a task
+- create_review_task (confirm-gated): create a new review task
+- run_review_task (confirm-gated): run a task (source context + result + draft)
 
 ## Agent Instances
 

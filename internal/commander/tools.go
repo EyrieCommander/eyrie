@@ -98,6 +98,14 @@ type RegistryDeps struct {
 	// Memory is the commander's persistent key-value note store, exposed
 	// through the remember/recall/forget tools.
 	Memory *MemoryStore
+	// ReviewTasks provides review task operations. These are function
+	// fields (not a store pointer) to avoid the commander package
+	// importing reviewops directly.
+	ListReviewTasks      func(projectID string) ([]map[string]any, error)
+	GetReviewTask        func(taskID string) (map[string]any, error)
+	CreateReviewTask     func(projectID, domain, kind, repo string, targetNumber int) (map[string]any, error)
+	RunReviewTask        func(ctx context.Context, taskID string) (map[string]any, error)
+	ListReviewArtifacts  func(taskID string) ([]map[string]any, error)
 }
 
 // Registry holds the tools available to the commander. The registry is
@@ -141,6 +149,22 @@ func NewRegistry(deps RegistryDeps) *Registry {
 		r.register(rememberTool(deps.Memory))
 		r.register(recallTool(deps.Memory))
 		r.register(forgetTool(deps.Memory))
+	}
+	// Review task tools
+	if deps.ListReviewTasks != nil {
+		r.register(listReviewTasksTool(deps.ListReviewTasks))
+	}
+	if deps.GetReviewTask != nil {
+		r.register(getReviewTaskTool(deps.GetReviewTask))
+	}
+	if deps.ListReviewArtifacts != nil {
+		r.register(listReviewArtifactsTool(deps.ListReviewArtifacts))
+	}
+	if deps.CreateReviewTask != nil {
+		r.register(createReviewTaskTool(deps.CreateReviewTask))
+	}
+	if deps.RunReviewTask != nil {
+		r.register(runReviewTaskTool(deps.RunReviewTask))
 	}
 	r.buildDefs()
 	return r
