@@ -132,7 +132,8 @@ func listFrameworks(ctx context.Context, client *registry.Client) error {
 		return fmt.Errorf("failed to fetch registry: %w", err)
 	}
 
-	fmt.Println("Available Claw frameworks:\n")
+	fmt.Println("Available Claw frameworks:")
+	fmt.Println()
 
 	for _, fw := range frameworks {
 		fmt.Printf("  %s\n", fw.ID)
