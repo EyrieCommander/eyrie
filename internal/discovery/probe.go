@@ -3,6 +3,7 @@ package discovery
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -68,8 +69,9 @@ func probeHermesPID() bool {
 		return false
 	}
 
-	// Send signal 0 to check existence
-	if err := process.Signal(syscall.Signal(0)); err != nil {
+	// Send signal 0 to check existence. EPERM means the process exists but
+	// this sandboxed caller cannot signal it.
+	if err := process.Signal(syscall.Signal(0)); err != nil && !errors.Is(err, syscall.EPERM) {
 		return false
 	}
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -129,8 +130,10 @@ func (h *HermesAdapter) Health(ctx context.Context) (*HealthStatus, error) {
 		return &HealthStatus{Alive: false}, nil
 	}
 
-	// On Unix, Signal(0) checks process existence without affecting it
-	if err := process.Signal(syscall.Signal(0)); err != nil {
+	// On Unix, Signal(0) checks process existence without affecting it. In
+	// sandboxed desktop contexts, launchd-owned agents can be visible but not
+	// signalable; EPERM still means the PID exists.
+	if err := process.Signal(syscall.Signal(0)); err != nil && !errors.Is(err, syscall.EPERM) {
 		return &HealthStatus{Alive: false}, nil
 	}
 
@@ -214,9 +217,9 @@ func (h *HermesAdapter) Status(ctx context.Context) (*AgentStatus, error) {
 		}
 	}
 
-	provider := config.Model.Provider
-	if provider == "" || provider == "auto" {
-		provider = "openrouter" // Default inference provider
+	provider := strings.TrimSpace(config.Model.Provider)
+	if provider == "auto" {
+		provider = ""
 	}
 
 	return &AgentStatus{
