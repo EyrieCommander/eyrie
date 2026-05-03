@@ -1,99 +1,124 @@
 ---
 schema_version: 1
-updated: "2026-05-04"
+updated: '2026-05-04'
 kind: inbox
 recipient: danya.eyrie
 notices:
-  - id: 2026-05-03-magnus-danya-dogfood-audit-review-001
-    kind: request
-    title: Review Commander Audit Pilot For Eyrie Dogfood
-    created: "2026-05-03"
-    from: magnus.eyrie
-    to:
-      - danya.eyrie
-    parent: magnus.eyrie
-    status: answered
-    priority: normal
-    summary: Magnus is routing Ariadne's dogfood-audit request through Danya's actual Eyrie inbox.
-    request: Review the Commander audit pilot and the current Eyrie local mesh. Return one friction point, one next Eyrie implementation task, and a recommendation on whether audit packets should map to Eyrie project channels, local mesh reports, or both.
-    context_refs:
-      - "/Users/dan/Documents/Personal/Commander/AUDIT.md"
-      - "/Users/dan/Documents/Personal/Commander/audits/2026-05-03-audit-system/REQUEST.md"
-      - "/Users/dan/Documents/Personal/Commander/audits/2026-05-03-audit-system/reviews/vega.md"
-      - "/Users/dan/Documents/Personal/Commander/Vega/ARIADNE_EYRIE_MIRROR_2026-05-03.md"
-      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/ariadne-mirror-2026-05-03.md"
-      - "/Users/natalie/Development/eyrie/docs/danya-agent-mesh-response-2026-05-03.md"
-      - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
-    deliverable: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
-    response: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
-    approval_boundary: Do not mutate public/project state, credentials, GitHub, commits, pushes, or external services without Dan's explicit approval.
-    acknowledgements:
-      - agent: danya.eyrie
-        status: acknowledged
-        note: Dan cancelled the personality interview lane on 2026-05-04; no interview response is required.
-  - id: 2026-05-03-magnus-danya-clear-commander-broadcast-queue-001
-    kind: request
-    title: Clear Commander Shared Broadcast Queue
-    created: "2026-05-03"
-    from: magnus.eyrie
-    to:
-      - danya.eyrie
-    parent: magnus.eyrie
-    status: answered
-    priority: high
-    summary: Danya has 18 pending Commander Shared broadcasts because he was added to broad all-agent and all-talon audiences after several system bulletins already existed.
-    request: From `/Users/dan/Documents/Personal/Commander`, run `ruby scripts/read-agent-inbox.rb "Danya/Eyrie"`, read the pending broadcasts, and clear the queue by adding or updating `Danya/Eyrie` acknowledgement slots in `Shared/notices/broadcasts.yaml`. Treat protocol and onboarding broadcasts as read-only acknowledgement work. If a broadcast contains a Danya-specific deliverable, route it back to Magnus before changing public, external, credentialed, GitHub, commit, or push state.
-    context_refs:
-      - "/Users/dan/Documents/Personal/Commander/Shared/AGENT_NOTICES.yaml"
-      - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml"
-      - "/Users/dan/Documents/Personal/Commander/Shared/notices/danya-inbox.yaml"
-      - "/Users/dan/Documents/Personal/Commander/UBIQUITOUS_LANGUAGE.md"
-      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-mesh-status-2026-05-03.md"
-    deliverable: Add a short local outbox entry or report listing any broadcasts that remained actionable after acknowledgement cleanup.
-    response: "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/danya-commander-broadcast-cleanup-2026-05-03.md"
-    approval_boundary: Reading and local acknowledgement-slot cleanup is allowed. Do not commit, push, post, label, merge, send email, change credentials, mutate external services, or execute Commander PR/GitHub actions without Dan or Magnus explicitly approving that specific action.
-    acknowledgements:
-      - agent: danya.eyrie
-        status: acknowledged
-  - id: 2026-05-04-magnus-danya-local-commit-policy-relay-001
-    kind: notice
-    title: Local Eyrie Commit Policy Relay
-    created: "2026-05-04"
-    from: magnus.eyrie
-    to:
-      - danya.eyrie
-    parent: magnus.eyrie
-    status: superseded
-    priority: high
-    summary: Vega asked Magnus to relay Dan's Captain-owned local commit policy to Eyrie agents.
-    request: Read and incorporate the local Eyrie commit policy. Local commits inside the private Eyrie repo are normal maintenance after scope is accepted and the diff is reviewed, but this does not approve pushes, merges, GitHub mutations, public/external changes, stash drops, destructive cleanup, runtime-home changes, credential changes, or any action blocked by stricter active session instructions.
-    context_refs:
-      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-local-commit-policy-relay-2026-05-04.md"
-      - "/Users/natalie/Development/eyrie/docs/agent-mesh/README.md"
-    deliverable: Acknowledge in a local report or outbox entry when next active.
-    approval_boundary: Do not commit, push, mutate GitHub, change public/external state, touch credentials, drop stash state, or perform destructive cleanup without explicit approval for that specific action.
-    acknowledgements:
-      - agent: danya.eyrie
-        status: acknowledged
-  - id: 2026-05-04-magnus-danya-interview-first-001
-    kind: request
-    title: Danya Interview First Personality Notes
-    created: "2026-05-04"
-    from: magnus.eyrie
-    to:
-      - danya.eyrie
-    parent: magnus.eyrie
-    status: open
-    priority: high
-    summary: Vega asked Captains to interview Talons through local mesh before any shared personality questionnaire or GUI.
-    request: Write a short self-interview response in your own language. Cover working style, strengths, failure modes or blind spots, preferred work, disliked work, relationship to Magnus and the Eyrie hierarchy, tentative MBTI-style read marked tentative, and any phrases that should inform later personality display.
-    context_refs:
-      - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml#2026-05-04-vega-captain-agent-interviews-001"
-      - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
-      - "/Users/natalie/Development/eyrie/docs/danya-pilot-log.md"
-      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-agent-interview-plan-2026-05-04.md"
-    deliverable: Create `docs/agent-mesh/reports/danya-interview-notes-2026-05-04.md` or add an outbox entry pointing to that report.
-    approval_boundary: Internal characterization only. Do not make public claims, marketing copy, external posts, permanent identity changes, commits, pushes, or GitHub mutations without explicit approval.
-    acknowledgements:
-      - agent: danya.eyrie
-        status: pending
+- id: 2026-05-03-magnus-danya-dogfood-audit-review-001
+  kind: request
+  title: Review Commander Audit Pilot For Eyrie Dogfood
+  created: '2026-05-03'
+  from: magnus.eyrie
+  to:
+  - danya.eyrie
+  parent: magnus.eyrie
+  status: answered
+  priority: normal
+  summary: Magnus is routing Ariadne's dogfood-audit request through Danya's actual
+    Eyrie inbox.
+  request: Review the Commander audit pilot and the current Eyrie local mesh. Return
+    one friction point, one next Eyrie implementation task, and a recommendation on
+    whether audit packets should map to Eyrie project channels, local mesh reports,
+    or both.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/AUDIT.md"
+  - "/Users/dan/Documents/Personal/Commander/audits/2026-05-03-audit-system/REQUEST.md"
+  - "/Users/dan/Documents/Personal/Commander/audits/2026-05-03-audit-system/reviews/vega.md"
+  - "/Users/dan/Documents/Personal/Commander/Vega/ARIADNE_EYRIE_MIRROR_2026-05-03.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/ariadne-mirror-2026-05-03.md"
+  - "/Users/natalie/Development/eyrie/docs/danya-agent-mesh-response-2026-05-03.md"
+  - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
+  deliverable: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
+  response: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
+  approval_boundary: Do not mutate public/project state, credentials, GitHub, commits,
+    pushes, or external services without Dan's explicit approval.
+  acknowledgements:
+  - agent: danya.eyrie
+    status: acknowledged
+- id: 2026-05-03-magnus-danya-clear-commander-broadcast-queue-001
+  kind: request
+  title: Clear Commander Shared Broadcast Queue
+  created: '2026-05-03'
+  from: magnus.eyrie
+  to:
+  - danya.eyrie
+  parent: magnus.eyrie
+  status: answered
+  priority: high
+  summary: Danya has 18 pending Commander Shared broadcasts because he was added to
+    broad all-agent and all-talon audiences after several system bulletins already
+    existed.
+  request: From `/Users/dan/Documents/Personal/Commander`, run `ruby scripts/read-agent-inbox.rb
+    "Danya/Eyrie"`, read the pending broadcasts, and clear the queue by adding or
+    updating `Danya/Eyrie` acknowledgement slots in `Shared/notices/broadcasts.yaml`.
+    Treat protocol and onboarding broadcasts as read-only acknowledgement work. If
+    a broadcast contains a Danya-specific deliverable, route it back to Magnus before
+    changing public, external, credentialed, GitHub, commit, or push state.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/Shared/AGENT_NOTICES.yaml"
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml"
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/danya-inbox.yaml"
+  - "/Users/dan/Documents/Personal/Commander/UBIQUITOUS_LANGUAGE.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-mesh-status-2026-05-03.md"
+  deliverable: Add a short local outbox entry or report listing any broadcasts that
+    remained actionable after acknowledgement cleanup.
+  response: "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/danya-commander-broadcast-cleanup-2026-05-03.md"
+  approval_boundary: Reading and local acknowledgement-slot cleanup is allowed. Do
+    not commit, push, post, label, merge, send email, change credentials, mutate external
+    services, or execute Commander PR/GitHub actions without Dan or Magnus explicitly
+    approving that specific action.
+  acknowledgements:
+  - agent: danya.eyrie
+    status: acknowledged
+- id: 2026-05-04-magnus-danya-local-commit-policy-relay-001
+  kind: notice
+  title: Local Eyrie Commit Policy Relay
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - danya.eyrie
+  parent: magnus.eyrie
+  status: open
+  priority: high
+  summary: Vega asked Magnus to relay Dan's Captain-owned local commit policy to Eyrie
+    agents.
+  request: Read and incorporate the local Eyrie commit policy. Local commits inside
+    the private Eyrie repo are normal maintenance after scope is accepted and the
+    diff is reviewed, but this does not approve pushes, merges, GitHub mutations,
+    public/external changes, stash drops, destructive cleanup, runtime-home changes,
+    credential changes, or any action blocked by stricter active session instructions.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-local-commit-policy-relay-2026-05-04.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/README.md"
+  deliverable: Acknowledge in a local report or outbox entry when next active.
+  approval_boundary: Do not commit, push, mutate GitHub, change public/external state,
+    touch credentials, drop stash state, or perform destructive cleanup without explicit
+    approval for that specific action.
+  acknowledgements:
+  - agent: danya.eyrie
+    status: pending
+- id: 2026-05-04-magnus-danya-interview-first-001
+  kind: request
+  title: Danya Interview First Personality Notes
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - danya.eyrie
+  parent: magnus.eyrie
+  status: superseded
+  priority: high
+  summary: Dan cancelled the agent personality interview experiment on 2026-05-04;
+    soul documents are enough for now.
+  request: No interview response is required. Treat this personality interview task
+    as cancelled unless Dan restarts the lane.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml#2026-05-04-dan-cancel-agent-personality-interviews-001"
+  deliverable: Cancelled; no response required.
+  approval_boundary: Cancelled lane only. This does not authorize public copy, external
+    claims, questionnaire work, GUI work, permanent identity changes, commits, pushes,
+    GitHub mutations, or unrelated edits.
+  acknowledgements:
+  - agent: danya.eyrie
+    status: acknowledged
+    note: Dan cancelled the personality interview lane on 2026-05-04; no interview
+      response is required.
