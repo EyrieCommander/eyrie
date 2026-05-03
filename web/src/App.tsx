@@ -15,6 +15,7 @@ import SettingsPage from "./components/SettingsPage";
 import FrameworkDetail from "./components/FrameworkDetail";
 import AgentCompare from "./components/AgentCompare";
 import FrameworkCompare from "./components/FrameworkCompare";
+import MeshStatusPage from "./components/MeshStatusPage";
 import CommanderChat from "./components/CommanderChat";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
@@ -62,6 +63,7 @@ function AppContent() {
                 <Route path="/hierarchy" element={<Navigate to="/mission-control" replace />} />
                 <Route path="/mission-control" element={<HierarchyPage />} />
                 <Route path="/mission-control/agents" element={<AgentsPage />} />
+                <Route path="/mission-control/mesh" element={<MeshStatusPage />} />
                 <Route path="/projects" element={<ProjectListPage />} />
             <Route
               path="/agents/overview"

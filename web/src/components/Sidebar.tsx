@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, LayoutDashboard, Layers, Settings, Users, Wind } from "lucide-react";
+import { BarChart3, Bird, Briefcase, Bot, ChevronDown, ChevronRight, Crown, LayoutDashboard, Layers, Network, Settings, Users, Wind } from "lucide-react";
 import { useData } from "../lib/DataContext";
 import { FRAMEWORK_EMOJI } from "../lib/types";
 import { fetchFrameworks } from "../lib/api";
@@ -194,6 +194,17 @@ export default function Sidebar() {
             >
               <BarChart3 className="h-3 w-3" />
               <span>compare agents</span>
+            </Link>
+            <Link
+              to="/mission-control/mesh"
+              className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                pathname === "/mission-control/mesh"
+                  ? "bg-surface-hover text-accent font-medium"
+                  : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+              }`}
+            >
+              <Network className="h-3 w-3" />
+              <span>mesh status</span>
             </Link>
           </div>
         )}

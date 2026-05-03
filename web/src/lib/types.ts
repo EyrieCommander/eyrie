@@ -278,6 +278,85 @@ export interface ProjectTree {
   talons: AgentInstance[];
 }
 
+// --- Local agent mesh types ---
+
+export interface MeshStatus {
+  available: boolean;
+  root?: string;
+  manifest_path?: string;
+  updated?: string;
+  status?: string;
+  project?: string;
+  project_id?: string;
+  owner?: string;
+  parent_agent?: MeshAgentSummary;
+  subordinates?: MeshAgentSummary[];
+  channels?: MeshChannelSummary;
+  inboxes?: MeshInboxSummary[];
+  latest_outbox?: MeshNoticeSummary;
+  reports?: MeshReportSummary[];
+  commander_refs?: MeshCommanderRef[];
+  generated_at: string;
+  unavailable_text?: string;
+}
+
+export interface MeshAgentSummary {
+  id: string;
+  display_name: string;
+  planned_framework: string;
+  role: string;
+  inbox?: string;
+}
+
+export interface MeshChannelSummary {
+  broadcasts?: string;
+  parent_inbox?: string;
+  outbox?: string;
+  reports?: string;
+  docs_inbox?: string;
+  danya_inbox?: string;
+  magnus_inbox?: string;
+}
+
+export interface MeshInboxSummary {
+  recipient: string;
+  path: string;
+  updated?: string;
+  total: number;
+  open: number;
+  pending_acknowledgements: number;
+  notices: MeshNoticeSummary[];
+}
+
+export interface MeshNoticeSummary {
+  id: string;
+  kind?: string;
+  title?: string;
+  created?: string;
+  from?: string;
+  to?: string[];
+  parent?: string;
+  status?: string;
+  priority?: string;
+  summary?: string;
+  request?: string;
+  deliverable?: string;
+  response?: string;
+  source_path?: string;
+}
+
+export interface MeshReportSummary {
+  path: string;
+  title: string;
+  modified_at: string;
+}
+
+export interface MeshCommanderRef {
+  path: string;
+  notice?: string;
+  source?: string;
+}
+
 export interface ProjectChatMessage {
   id: string;
   sender: string;

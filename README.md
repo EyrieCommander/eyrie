@@ -117,12 +117,21 @@ host = "127.0.0.1"
 [discovery]
 interval_seconds = 30
 
+[mesh]
+# Optional. Used by the read-only local agent mesh dashboard when Eyrie is
+# launched outside the repo checkout. `EYRIE_AGENT_MESH_DIR` takes precedence.
+agent_mesh_dir = "/Users/natalie/Development/eyrie/docs/agent-mesh"
+
 # Manually register remote agents
 [[agents]]
 name = "remote-zeroclaw"
 framework = "zeroclaw"
 url = "http://192.168.1.50:42617"
 ```
+
+Local mesh status lookup order: `EYRIE_AGENT_MESH_DIR`, then
+`[mesh].agent_mesh_dir`, then `docs/agent-mesh` under the current working
+directory or one of its parents.
 
 <img width="1323" height="749" alt="Screen Shot 2026-03-29 at 2 18 31 PM" src="https://github.com/user-attachments/assets/cdeab567-150e-48d4-b6dd-add402953a59" />
 

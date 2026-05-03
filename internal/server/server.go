@@ -200,6 +200,9 @@ func (s *Server) registerRoutes() {
 	s.mux.HandleFunc("GET /api/hierarchy/commander", s.handleGetCommander)
 	s.mux.HandleFunc("POST /api/projects/{id}/captain/brief", s.handleBriefCaptain)
 
+	// Local file-backed agent mesh
+	s.mux.HandleFunc("GET /api/mesh/status", s.handleMeshStatus)
+
 	// Key vault endpoints
 	s.mux.HandleFunc("GET /api/keys", s.handleListKeys)
 	s.mux.HandleFunc("PUT /api/keys/{provider}", s.handleSetKey)

@@ -14,6 +14,7 @@ import type {
   Project,
   CreateProjectRequest,
   HierarchyTree,
+  MeshStatus,
   ProjectChatMessage,
   KeyEntry,
   SetKeyResponse,
@@ -558,6 +559,12 @@ export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
   if (!res.ok) throw new Error(`Failed to fetch commander: ${res.statusText}`);
   const data = await res.json();
   return data.commander ?? null;
+}
+
+export async function fetchMeshStatus(): Promise<MeshStatus> {
+  const res = await fetchWithTimeout(`${BASE}/api/mesh/status`);
+  if (!res.ok) throw new Error(`Failed to fetch mesh status: ${res.statusText}`);
+  return res.json();
 }
 
 // --- Commander chat endpoints ---

@@ -109,6 +109,17 @@ Returns: commander, projects with their captains and talons.
 POST /api/hierarchy/commander
 Body: {"instance_id": "..."} or {"agent_name": "..."}
 
+## Local Agent Mesh
+
+### Get local mesh status
+GET /api/mesh/status
+
+Returns a read-only summary of docs/agent-mesh: manifest ownership, inbox counts,
+open requests, latest outbox entry, reports, and Commander Shared notice refs.
+This endpoint never writes mesh files. Mesh root lookup uses EYRIE_AGENT_MESH_DIR,
+then [mesh].agent_mesh_dir in ~/.eyrie/config.toml, then docs/agent-mesh under
+the current working directory or one of its parents.
+
 ## Registry
 
 ### List available personas

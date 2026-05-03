@@ -18,6 +18,7 @@ var Version = "0.2.1"
 type Config struct {
 	Dashboard DashboardConfig `toml:"dashboard"`
 	Discovery DiscoveryConfig `toml:"discovery"`
+	Mesh      MeshConfig      `toml:"mesh"`
 	Agents    []ManualAgent   `toml:"agents"`
 }
 
@@ -30,6 +31,10 @@ type DashboardConfig struct {
 type DiscoveryConfig struct {
 	IntervalSeconds int      `toml:"interval_seconds"`
 	ConfigPaths     []string `toml:"config_paths"`
+}
+
+type MeshConfig struct {
+	AgentMeshDir string `toml:"agent_mesh_dir"`
 }
 
 type ManualAgent struct {
@@ -254,10 +259,10 @@ func EnrichedEnv() []string {
 	}
 
 	extraDirs := []string{
-		filepath.Join(home, ".cargo", "bin"),      // Rust/cargo
-		filepath.Join(home, "go", "bin"),           // Go binaries
-		filepath.Join(home, ".local", "bin"),       // pip, pipx, user installs
-		"/usr/local/bin",                           // Homebrew (Intel Mac), manual installs
+		filepath.Join(home, ".cargo", "bin"), // Rust/cargo
+		filepath.Join(home, "go", "bin"),     // Go binaries
+		filepath.Join(home, ".local", "bin"), // pip, pipx, user installs
+		"/usr/local/bin",                     // Homebrew (Intel Mac), manual installs
 	}
 	if runtime.GOOS == "darwin" {
 		extraDirs = append(extraDirs, "/opt/homebrew/bin") // Homebrew (Apple Silicon)
