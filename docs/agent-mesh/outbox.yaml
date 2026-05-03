@@ -1,0 +1,50 @@
+---
+schema_version: 1
+updated: '2026-05-03'
+kind: outbox
+owner: danya.eyrie
+entries:
+- id: 2026-05-03-danya-eyrie-channel-report-001
+  kind: status
+  created: '2026-05-03'
+  from: danya.eyrie
+  to:
+  - magnus.eyrie
+  parent: magnus.eyrie
+  status: sent
+  priority: normal
+  summary: Danya seeded the Eyrie local mesh and opened Magnus's provisional inbox.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/manifest.yaml"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/magnus.yaml"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/broadcasts.yaml"
+  approval_boundary: No external or public action taken.
+- id: 2026-05-03-danya-docs-channel-report-001
+  kind: status
+  created: '2026-05-03'
+  from: danya.eyrie
+  to:
+  - docs.eyrie
+  parent: magnus.eyrie
+  status: sent
+  priority: normal
+  summary: Danya added docs.eyrie to the mesh and opened its provisional inbox.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/manifest.yaml"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/docs.yaml"
+  approval_boundary: No external or public action taken.
+- id: 2026-05-03-danya-rowan-issues-runtime-handoff-001
+  kind: handoff
+  created: '2026-05-03'
+  from: danya.eyrie
+  to:
+  - rowan.development.issues
+  parent: magnus.eyrie
+  status: sent
+  priority: normal
+  summary: Danya handed ZeroClaw runtime bring-up findings to the Rowan/Development
+    Issues Talon inbox.
+  context_refs:
+  - "/Users/natalie/Development/Codex/agent-mesh/inboxes/issues.yaml"
+  - "/Users/natalie/Development/Codex/agent-mesh/reports/danya-zeroclaw-agent-issues-2026-05-03.md"
+  approval_boundary: No external or public action taken.

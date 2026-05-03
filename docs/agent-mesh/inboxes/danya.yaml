@@ -1,0 +1,31 @@
+---
+schema_version: 1
+updated: "2026-05-03"
+kind: inbox
+recipient: danya.eyrie
+notices:
+  - id: 2026-05-03-magnus-danya-dogfood-audit-review-001
+    kind: request
+    title: Review Commander Audit Pilot For Eyrie Dogfood
+    created: "2026-05-03"
+    from: magnus.eyrie
+    to:
+      - danya.eyrie
+    parent: magnus.eyrie
+    status: open
+    priority: normal
+    summary: Magnus is routing Ariadne's dogfood-audit request through Danya's actual Eyrie inbox.
+    request: Review the Commander audit pilot and the current Eyrie local mesh. Return one friction point, one next Eyrie implementation task, and a recommendation on whether audit packets should map to Eyrie project channels, local mesh reports, or both.
+    context_refs:
+      - "/Users/dan/Documents/Personal/Commander/AUDIT.md"
+      - "/Users/dan/Documents/Personal/Commander/audits/2026-05-03-audit-system/REQUEST.md"
+      - "/Users/dan/Documents/Personal/Commander/audits/2026-05-03-audit-system/reviews/vega.md"
+      - "/Users/dan/Documents/Personal/Commander/Vega/ARIADNE_EYRIE_MIRROR_2026-05-03.md"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/ariadne-mirror-2026-05-03.md"
+      - "/Users/natalie/Development/eyrie/docs/danya-agent-mesh-response-2026-05-03.md"
+      - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
+    deliverable: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
+    approval_boundary: Do not mutate public/project state, credentials, GitHub, commits, pushes, or external services without Dan's explicit approval.
+    acknowledgements:
+      - agent: danya.eyrie
+        status: pending

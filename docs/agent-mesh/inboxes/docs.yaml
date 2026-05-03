@@ -1,0 +1,28 @@
+---
+schema_version: 1
+updated: "2026-05-03"
+kind: inbox
+recipient: docs.eyrie
+notices:
+  - id: 2026-05-03-danya-docs-channel-open-001
+    kind: request
+    title: Establish Eyrie Docs Mesh Channel
+    created: "2026-05-03"
+    from: danya.eyrie
+    to:
+      - docs.eyrie
+    parent: magnus.eyrie
+    status: open
+    priority: normal
+    summary: Danya is opening a durable file-backed channel with the Eyrie docs lane.
+    request: Please treat this inbox as the provisional docs communication channel for Eyrie mesh work. When active, acknowledge the channel and propose the smallest docs update that would make the Danya/Magnus mesh visible to future Eyrie sessions.
+    context_refs:
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/manifest.yaml"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/magnus.yaml"
+      - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
+      - "/Users/natalie/Development/eyrie/docs/danya-agent-mesh-response-2026-05-03.md"
+    deliverable: Add a response entry to /Users/natalie/Development/eyrie/docs/agent-mesh/outbox.yaml or create a report under /Users/natalie/Development/eyrie/docs/agent-mesh/reports/.
+    approval_boundary: Do not mutate public/project state, credentials, or external services without Dan's explicit approval.
+    acknowledgements:
+      - agent: docs.eyrie
+        status: pending

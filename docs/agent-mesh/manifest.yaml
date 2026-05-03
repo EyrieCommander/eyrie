@@ -1,0 +1,42 @@
+---
+schema_version: 1
+updated: "2026-05-03"
+status: provisional
+project: Eyrie
+project_id: eyrie
+owner: Magnus/Eyrie
+machine_id: natalie-development
+sync_policy: tracked_safe_docs
+tracked: true
+parent_agent:
+  id: magnus.eyrie
+  display_name: Magnus
+  planned_framework: codex
+  role: commander
+subordinates:
+  - id: hermes.eyrie
+    display_name: Hermes
+    planned_framework: hermes
+    role: runtime-control-agent
+    inbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/hermes.yaml"
+  - id: danya.eyrie
+    display_name: Danya
+    planned_framework: zeroclaw
+    role: companion-engineer
+    inbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/danya.yaml"
+  - id: docs.eyrie
+    display_name: Eyrie Docs
+    planned_framework: codex
+    role: documentation-specialist
+    inbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/docs.yaml"
+channels:
+  broadcasts: "/Users/natalie/Development/eyrie/docs/agent-mesh/broadcasts.yaml"
+  parent_inbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/magnus.yaml"
+  outbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/outbox.yaml"
+  reports: "/Users/natalie/Development/eyrie/docs/agent-mesh/reports"
+rules:
+  - Local Eyrie/Hermes/Danya/Magnus chatter stays in this mesh.
+  - Escalate cross-system requests, public mutation requests, and Dan approval requests through Commander Shared notices.
+  - Parent writes broadcasts and subordinate inbox entries.
+  - Subordinates write outbox entries and report artifacts.
+  - MCP or ACP can replace the file transport later while preserving ids, status, ownership, and escalation rules.
