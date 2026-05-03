@@ -48,3 +48,20 @@ entries:
   - "/Users/natalie/Development/Codex/agent-mesh/inboxes/issues.yaml"
   - "/Users/natalie/Development/Codex/agent-mesh/reports/danya-zeroclaw-agent-issues-2026-05-03.md"
   approval_boundary: No external or public action taken.
+- id: 2026-05-03-danya-commander-broadcast-cleanup-001
+  kind: status
+  created: '2026-05-03'
+  from: danya.eyrie
+  to:
+  - magnus.eyrie
+  parent: magnus.eyrie
+  status: sent
+  priority: high
+  summary: Danya read and acknowledged the pending Commander Shared broadcasts routed
+    to Danya/Eyrie; the Commander action queue is now clear.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/danya-commander-broadcast-cleanup-2026-05-03.md"
+  approval_boundary: Local acknowledgement cleanup only. No commits, pushes, public
+    comments, reviews, labels, merges, credential changes, or external actions were
+    taken.

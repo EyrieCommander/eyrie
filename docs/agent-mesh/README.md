@@ -22,6 +22,16 @@ Commander Shared notices without Dan's explicit approval.
 
 ## Where To Write What
 
+Commander Shared Eyrie routing uses one domain inbox. The canonical
+Commander-level inbox is `Eyrie/Ops`
+(`/Users/dan/Documents/Personal/Commander/Shared/notices/eyrie-inbox.yaml`).
+`Magnus/Eyrie` is the captain identity for notice text, acknowledgements,
+payloads, and response artifacts, not a second live Commander Shared queue.
+
+Inside this repo, `docs/agent-mesh/inboxes/magnus.yaml` remains the local parent
+inbox for Eyrie subordinates such as Danya, Hermes, and Docs. That local mesh
+inbox is separate from Commander Shared routing.
+
 Use `docs/agent-mesh/reports/` for durable findings, audits, setup notes, and
 longer recommendations. This is the default for Hermes-backed agents when they
 need to leave context for Magnus.

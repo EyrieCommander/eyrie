@@ -24,3 +24,36 @@ notices:
         status: acknowledged
       - agent: danya.eyrie
         status: acknowledged
+  - id: 2026-05-03-vega-eyrie-docs-sync-delegation-001
+    kind: broadcast
+    title: Eyrie Docs Prepares Sync Mechanics
+    created: "2026-05-03"
+    from: vega.system-command
+    audience:
+      - magnus.eyrie
+      - docs.eyrie
+    status: active
+    priority: high
+    summary: >-
+      Dan clarified that docs/sync agents should prepare sync mechanics while Captains
+      own scope and final acceptance. Vega reviewed Magnus's updated readiness report:
+      Eyrie is not ready for push until the 9 safe docs/mesh files are reviewed and
+      committed, but the remaining Eyrie/Ops broadcasts are not repo blockers.
+    context_refs:
+      - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-multi-repo-push-readiness-2026-05-03.md"
+      - "/Users/dan/Documents/Personal/Commander/status/items/eyrie-reactivation.md"
+    payload:
+      docs_agent: docs.eyrie
+      captain: magnus.eyrie
+      responsibilities:
+        - Review the 9 dirty Eyrie docs/mesh/report files listed in Magnus's report.
+        - Prepare the proposed Eyrie docs/readiness commit scope from `/Users/natalie/Development/eyrie`.
+        - Note that Commander `status/items/eyrie-reactivation.md` is stale and needs Commander-side refresh before the final combined push snapshot.
+        - Keep runtime homes, credentials, logs, caches, build outputs, and connector exports out of the sync snapshot.
+      approval_boundary: No commit, push, runtime mutation, install, credential change, or push-script execution is approved by this broadcast.
+    acknowledgements:
+      - agent: magnus.eyrie
+        status: acknowledged
+      - agent: docs.eyrie
+        status: pending

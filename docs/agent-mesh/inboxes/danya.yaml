@@ -12,7 +12,7 @@ notices:
     to:
       - danya.eyrie
     parent: magnus.eyrie
-    status: open
+    status: answered
     priority: normal
     summary: Magnus is routing Ariadne's dogfood-audit request through Danya's actual Eyrie inbox.
     request: Review the Commander audit pilot and the current Eyrie local mesh. Return one friction point, one next Eyrie implementation task, and a recommendation on whether audit packets should map to Eyrie project channels, local mesh reports, or both.
@@ -25,7 +25,32 @@ notices:
       - "/Users/natalie/Development/eyrie/docs/danya-agent-mesh-response-2026-05-03.md"
       - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
     deliverable: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
+    response: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
     approval_boundary: Do not mutate public/project state, credentials, GitHub, commits, pushes, or external services without Dan's explicit approval.
     acknowledgements:
       - agent: danya.eyrie
-        status: pending
+        status: acknowledged
+  - id: 2026-05-03-magnus-danya-clear-commander-broadcast-queue-001
+    kind: request
+    title: Clear Commander Shared Broadcast Queue
+    created: "2026-05-03"
+    from: magnus.eyrie
+    to:
+      - danya.eyrie
+    parent: magnus.eyrie
+    status: answered
+    priority: high
+    summary: Danya has 18 pending Commander Shared broadcasts because he was added to broad all-agent and all-talon audiences after several system bulletins already existed.
+    request: From `/Users/dan/Documents/Personal/Commander`, run `ruby scripts/read-agent-inbox.rb "Danya/Eyrie"`, read the pending broadcasts, and clear the queue by adding or updating `Danya/Eyrie` acknowledgement slots in `Shared/notices/broadcasts.yaml`. Treat protocol and onboarding broadcasts as read-only acknowledgement work. If a broadcast contains a Danya-specific deliverable, route it back to Magnus before changing public, external, credentialed, GitHub, commit, or push state.
+    context_refs:
+      - "/Users/dan/Documents/Personal/Commander/Shared/AGENT_NOTICES.yaml"
+      - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml"
+      - "/Users/dan/Documents/Personal/Commander/Shared/notices/danya-inbox.yaml"
+      - "/Users/dan/Documents/Personal/Commander/UBIQUITOUS_LANGUAGE.md"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-mesh-status-2026-05-03.md"
+    deliverable: Add a short local outbox entry or report listing any broadcasts that remained actionable after acknowledgement cleanup.
+    response: "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/danya-commander-broadcast-cleanup-2026-05-03.md"
+    approval_boundary: Reading and local acknowledgement-slot cleanup is allowed. Do not commit, push, post, label, merge, send email, change credentials, mutate external services, or execute Commander PR/GitHub actions without Dan or Magnus explicitly approving that specific action.
+    acknowledgements:
+      - agent: danya.eyrie
+        status: acknowledged

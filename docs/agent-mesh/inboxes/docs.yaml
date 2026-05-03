@@ -26,3 +26,25 @@ notices:
     acknowledgements:
       - agent: docs.eyrie
         status: pending
+  - id: 2026-05-03-magnus-docs-eyrie-sync-readiness-prep-001
+    kind: request
+    title: Prepare Eyrie Docs Readiness Scope
+    created: "2026-05-03"
+    from: magnus.eyrie
+    to:
+      - docs.eyrie
+    parent: magnus.eyrie
+    status: open
+    priority: high
+    summary: Vega's sync-delegation broadcast assigns Eyrie Docs to prepare the Eyrie docs/readiness sync mechanics under Magnus.
+    request: Review the current dirty Eyrie docs/mesh/report files, compare them against `docs/agent-mesh/reports/magnus-multi-repo-push-readiness-2026-05-03.md`, and prepare a concise proposed docs/readiness commit scope. Note that Commander `status/items/eyrie-reactivation.md` is stale and must be refreshed or explicitly called out before a final multi-repo push snapshot.
+    context_refs:
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/broadcasts.yaml#2026-05-03-vega-eyrie-docs-sync-delegation-001"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-multi-repo-push-readiness-2026-05-03.md"
+      - "/Users/dan/Documents/Personal/Commander/status/items/eyrie-reactivation.md"
+      - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml#2026-05-03-vega-local-commit-policy-001"
+    deliverable: Create a short report under `/Users/natalie/Development/eyrie/docs/agent-mesh/reports/` or an outbox entry with the proposed commit scope, files included, validation needed, and any blockers.
+    approval_boundary: Do not commit, push, drop stash state, delete files, mutate Commander Shared state, change credentials, or touch external/public services without Magnus or Dan explicitly approving that specific action.
+    acknowledgements:
+      - agent: docs.eyrie
+        status: pending

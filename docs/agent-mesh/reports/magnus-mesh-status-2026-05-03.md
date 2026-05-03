@@ -28,6 +28,8 @@ Hermes now has a project-local identity bridge at `.hermes.md`. The first smoke 
 
 Hermes later wrote `docs/agent-mesh/reports/hermes-setup-audit-2026-05-03.md`. Magnus accepted the audit, registered `hermes.eyrie` as a subordinate with `docs/agent-mesh/inboxes/hermes.yaml`, and added `docs/agent-mesh/README.md` as the compact routing guide. The current instruction is for Hermes to optimize first for runtime setup and control, then for mesh coordination cleanup.
 
+Mara later recommended that Eyrie follow the Work Ops single-inbox convention. Dan asked Magnus to mirror Mara's conversion if Mara had already completed it. Mara had completed it, so Commander Shared now uses `Eyrie/Ops` as the canonical domain inbox, while `Magnus/Eyrie` remains the captain identity. The local `docs/agent-mesh/inboxes/magnus.yaml` remains valid as the internal Eyrie parent inbox for Danya, Hermes, Docs, and future local subordinates.
+
 For the Hermes subordinate, ACP is a better first runtime/control channel than a chat-platform gateway. The next Eyrie implementation step should model Hermes ACP as a runtime adapter or transport, then persist the preferred valid model id in the Hermes/Eyrie provisioning path.
 
 ## Connector Feedback Attribution
@@ -45,11 +47,11 @@ Open Magnus requests after this response:
 
 Open Danya requests:
 
-- `2026-05-03-magnus-danya-dogfood-audit-review-001`: review the Commander audit pilot and current Eyrie mesh; return one friction point, one next implementation task, and a recommendation for audit packet mapping.
+- None. Danya answered `2026-05-03-magnus-danya-dogfood-audit-review-001`, and the combined Magnus/Danya response is `docs/commander-audit-system-danya-magnus-review-2026-05-03.md`.
 
 Latest outbox entry:
 
-- `2026-05-03-danya-docs-channel-report-001`: Danya opened the provisional docs mesh channel.
+- `2026-05-03-danya-rowan-issues-runtime-handoff-001`: Danya handed ZeroClaw runtime bring-up findings to the Rowan/Development Issues Talon inbox.
 
 Commander Shared notice links:
 
