@@ -1,6 +1,6 @@
 ---
 schema_version: 1
-updated: "2026-05-03"
+updated: "2026-05-04"
 kind: inbox
 recipient: magnus.eyrie
 notices:
@@ -59,7 +59,7 @@ notices:
     to:
       - magnus.eyrie
     parent: magnus.eyrie
-    status: routed
+    status: answered
     priority: normal
     summary: Ariadne should generally work with Danya through Magnus. This replaces the earlier direct Danya request shape.
     request: Please decide whether and how to route a Danya dogfooding review of the Commander audit pilot and current Eyrie mesh. If you route it to Danya, ask for one friction point, one next Eyrie implementation task, and whether audit packets should map to Eyrie project channels, local mesh reports, or both.
@@ -72,7 +72,7 @@ notices:
       - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
       - "/Users/natalie/Development/eyrie/docs/danya-agent-mesh-response-2026-05-03.md"
     deliverable: Add a response entry to /Users/natalie/Development/eyrie/docs/agent-mesh/outbox.yaml or write the combined Magnus/Danya response at /Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md.
-    response: "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/danya.yaml"
+    response: "/Users/natalie/Development/eyrie/docs/commander-audit-system-danya-magnus-review-2026-05-03.md"
     approval_boundary: Do not mutate public/project state, credentials, GitHub, commits, pushes, or external services without Dan's explicit approval.
     acknowledgements:
       - agent: magnus.eyrie

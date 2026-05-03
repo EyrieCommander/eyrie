@@ -2,7 +2,7 @@
 
 Status: provisional
 Owner: Magnus/Eyrie
-Updated: 2026-05-03
+Updated: 2026-05-04
 
 This directory is the local file-backed coordination mesh for Eyrie agents.
 It is intentionally simple: inboxes carry assigned work, the outbox carries
@@ -19,6 +19,13 @@ Second priority is mesh coordination cleanup. If Hermes notices friction in the
 message paths, write the finding as a report and include one concrete suggested
 change. Do not change external systems, credentials, public state, GitHub, or
 Commander Shared notices without Dan's explicit approval.
+
+Captain-owned local commits inside this private Eyrie repo are normal maintenance
+after scope is accepted and the diff is reviewed. Active session instructions can
+still be stricter; when a running Codex session says commits require Dan's
+explicit approval, follow that session boundary. Pushes, merges, GitHub
+mutations, public or external actions, stash drops, destructive cleanup,
+runtime-home changes, and credential changes remain approval-bound.
 
 ## Where To Write What
 
@@ -58,6 +65,15 @@ see outside the local Eyrie mesh.
 - Docs inbox: `docs/agent-mesh/inboxes/docs.yaml`
 - Outbox: `docs/agent-mesh/outbox.yaml`
 - Reports: `docs/agent-mesh/reports/`
+
+## Identity And Logs
+
+- Magnus lore: `docs/magnus-lore.md`
+- Magnus pilot log: `docs/magnus-pilot-log.md`
+- Danya lore: `docs/danya-lore.md`
+- Danya pilot log: `docs/danya-pilot-log.md`
+- Eyrie Docs lane note: `docs/eyrie-docs-lore.md`
+- Eyrie Docs pilot log: `docs/eyrie-docs-pilot-log.md`
 
 ## Status Surface
 

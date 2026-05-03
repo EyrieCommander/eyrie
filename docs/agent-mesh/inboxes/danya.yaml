@@ -1,6 +1,6 @@
 ---
 schema_version: 1
-updated: "2026-05-03"
+updated: "2026-05-04"
 kind: inbox
 recipient: danya.eyrie
 notices:
@@ -30,6 +30,7 @@ notices:
     acknowledgements:
       - agent: danya.eyrie
         status: acknowledged
+        note: Dan cancelled the personality interview lane on 2026-05-04; no interview response is required.
   - id: 2026-05-03-magnus-danya-clear-commander-broadcast-queue-001
     kind: request
     title: Clear Commander Shared Broadcast Queue
@@ -54,3 +55,45 @@ notices:
     acknowledgements:
       - agent: danya.eyrie
         status: acknowledged
+  - id: 2026-05-04-magnus-danya-local-commit-policy-relay-001
+    kind: notice
+    title: Local Eyrie Commit Policy Relay
+    created: "2026-05-04"
+    from: magnus.eyrie
+    to:
+      - danya.eyrie
+    parent: magnus.eyrie
+    status: superseded
+    priority: high
+    summary: Vega asked Magnus to relay Dan's Captain-owned local commit policy to Eyrie agents.
+    request: Read and incorporate the local Eyrie commit policy. Local commits inside the private Eyrie repo are normal maintenance after scope is accepted and the diff is reviewed, but this does not approve pushes, merges, GitHub mutations, public/external changes, stash drops, destructive cleanup, runtime-home changes, credential changes, or any action blocked by stricter active session instructions.
+    context_refs:
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-local-commit-policy-relay-2026-05-04.md"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/README.md"
+    deliverable: Acknowledge in a local report or outbox entry when next active.
+    approval_boundary: Do not commit, push, mutate GitHub, change public/external state, touch credentials, drop stash state, or perform destructive cleanup without explicit approval for that specific action.
+    acknowledgements:
+      - agent: danya.eyrie
+        status: acknowledged
+  - id: 2026-05-04-magnus-danya-interview-first-001
+    kind: request
+    title: Danya Interview First Personality Notes
+    created: "2026-05-04"
+    from: magnus.eyrie
+    to:
+      - danya.eyrie
+    parent: magnus.eyrie
+    status: open
+    priority: high
+    summary: Vega asked Captains to interview Talons through local mesh before any shared personality questionnaire or GUI.
+    request: Write a short self-interview response in your own language. Cover working style, strengths, failure modes or blind spots, preferred work, disliked work, relationship to Magnus and the Eyrie hierarchy, tentative MBTI-style read marked tentative, and any phrases that should inform later personality display.
+    context_refs:
+      - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml#2026-05-04-vega-captain-agent-interviews-001"
+      - "/Users/natalie/Development/eyrie/docs/danya-lore.md"
+      - "/Users/natalie/Development/eyrie/docs/danya-pilot-log.md"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-agent-interview-plan-2026-05-04.md"
+    deliverable: Create `docs/agent-mesh/reports/danya-interview-notes-2026-05-04.md` or add an outbox entry pointing to that report.
+    approval_boundary: Internal characterization only. Do not make public claims, marketing copy, external posts, permanent identity changes, commits, pushes, or GitHub mutations without explicit approval.
+    acknowledgements:
+      - agent: danya.eyrie
+        status: pending

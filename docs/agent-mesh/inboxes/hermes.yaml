@@ -1,6 +1,27 @@
 ---
 schema_version: 1
-updated: "2026-05-03"
+updated: "2026-05-04"
 kind: inbox
 recipient: hermes.eyrie
-notices: []
+notices:
+  - id: 2026-05-04-magnus-hermes-runtime-interview-001
+    kind: request
+    title: Hermes Runtime Agent Interview Notes
+    created: "2026-05-04"
+    from: magnus.eyrie
+    to:
+      - hermes.eyrie
+    parent: magnus.eyrie
+    status: superseded
+    priority: normal
+    summary: Vega's interview-first broadcast allows Hermes to be interviewed if Magnus considers the runtime agent ready.
+    request: If a Hermes runtime session is available, write a narrow runtime-agent self-interview. Focus on what Hermes can actually do here, what work it is best suited for, current setup blockers, preferred routing from Magnus, likely failure modes, and a tentative personality read marked tentative. Do not claim permanent identity beyond the current runtime-control role.
+    context_refs:
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/hermes-setup-audit-2026-05-03.md"
+      - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-agent-interview-plan-2026-05-04.md"
+    deliverable: Create `docs/agent-mesh/reports/hermes-runtime-interview-notes-2026-05-04.md` or add an outbox entry pointing to that report.
+    approval_boundary: Internal characterization and setup reporting only. Do not mutate git, runtime homes, credentials, public/external state, GitHub, or Commander Shared notices without explicit approval.
+    acknowledgements:
+      - agent: hermes.eyrie
+        status: acknowledged
+        note: Dan cancelled the personality interview lane on 2026-05-04; no interview response is required.

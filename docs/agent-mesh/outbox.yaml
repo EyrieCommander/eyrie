@@ -1,6 +1,6 @@
 ---
 schema_version: 1
-updated: '2026-05-03'
+updated: '2026-05-04'
 kind: outbox
 owner: danya.eyrie
 entries:
@@ -65,3 +65,47 @@ entries:
   approval_boundary: Local acknowledgement cleanup only. No commits, pushes, public
     comments, reviews, labels, merges, credential changes, or external actions were
     taken.
+- id: 2026-05-04-magnus-today-and-interviews-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: high
+  summary: Magnus created the Eyrie TODAY doc and routed interview-first work to Danya and Hermes through the local mesh.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/TODAY.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-agent-interview-plan-2026-05-04.md"
+  approval_boundary: Internal docs and local mesh routing only. No public, external, GitHub, credential, runtime-home, commit, push, merge, or destructive action was taken.
+- id: 2026-05-04-magnus-policy-relay-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: high
+  summary: Magnus relayed the local Eyrie commit policy to Danya and Eyrie Docs and recorded Hermes as a non-commit-owner runtime agent.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-local-commit-policy-relay-2026-05-04.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/danya.yaml"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/README.md"
+  approval_boundary: Local policy relay only. Active session commit approval remains stricter until Dan approves a specific commit.
+- id: 2026-05-04-magnus-readiness-refresh-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - docs.eyrie
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: normal
+  summary: Magnus refreshed stale Eyrie readiness state and superseded the prior dirty-repo sync blocker.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-readiness-refresh-2026-05-04.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-multi-repo-push-readiness-2026-05-03.md"
+  approval_boundary: Readiness reporting only. No commit, push, public, external, GitHub, credential, runtime-home, or destructive action was taken.
