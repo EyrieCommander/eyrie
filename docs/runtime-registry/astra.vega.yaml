@@ -1,0 +1,115 @@
+---
+schema_version: 1
+runtime_id: astra.vega
+display_name: Astra
+status: hermes_acp_provider_configured
+canonical_inbox: "/Users/dan/Documents/Personal/Commander/Shared/notices/astra-inbox.yaml"
+parent_agent: Vega/System Command
+owning_domain: Commander
+role: persistent-watch-officer
+framework: hermes-acp
+runtime_wrapper: hermes-acp
+transport:
+  primary: acp
+  fallback: filesystem
+workspace: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra"
+live_chat:
+  command: "python3 scripts/astra-acp-chat.py"
+  runtime_brief: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/.hermes.md"
+  transcript_dir: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/live/transcripts"
+  default_model: "bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  fallback_model: "openai-codex:gpt-5.4-mini"
+  mode: one-shot-read-only
+commander_files:
+  home: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/README.md"
+  today: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/TODAY.md"
+  watch_scope: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/watch-scope.yaml"
+  reports: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/reports"
+read_scope:
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/"
+  - "/Users/dan/Documents/Personal/Commander/Shared/AGENT_NOTICES.yaml"
+  - "/Users/dan/Documents/Personal/Commander/Shared/AGENT_HIERARCHY.md"
+  - "/Users/dan/Documents/Personal/Commander/status/"
+  - "/Users/dan/Documents/Personal/Commander/TODAY.md"
+  - "/Users/dan/Documents/Personal/Commander/HANDOFF.md"
+  - "/Users/dan/Documents/Personal/Commander/TODO.md"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/"
+  - "/Users/natalie/Development/eyrie/docs/runtime-registry/"
+write_scope:
+  - "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/reports/"
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/astra-inbox.yaml"
+repo_watch:
+  - name: Commander
+    path: "/Users/dan/Documents/Personal/Commander"
+    mode: git
+  - name: Development
+    path: "/Users/natalie/Development"
+    mode: git
+  - name: Eyrie
+    path: "/Users/natalie/Development/eyrie"
+    mode: git
+  - name: Work Ops
+    path: "/Users/dan/Documents/Work"
+    mode: status-docs
+mesh_intake:
+  canonical_address: Astra/Vega Runtime
+  accepts:
+    - repo-status checks
+    - notice-mesh health checks
+    - pending broadcast drift checks
+    - generated manifest freshness checks
+    - board/source freshness checks
+    - missed-notification risk reports
+  does_not_accept:
+    - priority decisions
+    - Captain bypass
+    - public or external mutation requests
+    - commits, pushes, labels, reviews, merges, or email sends
+allowed_actions:
+  - read local indexed notices and broadcasts
+  - read local generated manifests and source docs
+  - read local git status for Commander and Eyrie
+  - read local git status for Development when available
+  - read Work Ops status docs
+  - write concise reports in Astra's reports folder
+  - update Astra's own inbox acknowledgement and response pointers
+  - recommend a wakeup notice to Vega
+approval_boundary:
+  - read and summarize first
+  - no GitHub, email, public, or external mutation
+  - no commits, pushes, merges, labels, reviews, or PR edits
+  - no credentials, runtime-home mutation, launchd jobs, cron jobs, or installs
+  - no priority overrides; route judgment to Vega
+scan_checks:
+  - vega_inbox_action_queue
+  - captain_inbox_action_queues
+  - pending_high_priority_broadcasts
+  - commander_board_priority_items
+  - commander_git_dirty_state
+  - eyrie_git_dirty_state
+  - generated_manifest_freshness
+escalation_rules:
+  - If Vega has open high-priority inbox work, report it first.
+  - If a Captain has high-priority unacknowledged work, report the Captain and notice id.
+  - If generated manifests are stale, report the source files newer than the manifest.
+  - If dirty git state includes runtime homes, credentials, or private dumps, flag immediately.
+  - If a domain-specific item needs action, route through the owning Captain instead of bypassing them.
+health:
+  mode: hermes-acp-provider-configured
+  last_seen: "2026-05-04"
+  last_report: "/Users/dan/Documents/Personal/Commander/Vega/agents/astra/reports/2026-05-04-live-chat-setup.md"
+current_assignment: Automatable repo and mesh monitoring through read-only Hermes ACP live chat
+registration:
+  created: "2026-05-04"
+  created_by: Magnus/Eyrie
+  source_notice: "/Users/dan/Documents/Personal/Commander/Shared/notices/eyrie-inbox.yaml#2026-05-04-vega-eyrie-register-astra-runtime-001"
+  evaluation: "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-astra-hermes-evaluation-2026-05-04.md"
+provider:
+  configured_default: "bedrock:us.anthropic.claude-haiku-4-5-20251001-v1:0"
+  fallback: "openai-codex:gpt-5.4-mini"
+  rationale: "OpenAI Codex auth exists but the last Astra smoke hit a provider 429; Bedrock Haiku previously succeeded through Hermes ACP."
+  secrets: "No secret values are stored in this registry."
+notes:
+  - Read-only Hermes ACP wrapper is configured for one-shot live chat.
+  - No Hermes gateway, daemon, scheduler, credential edit, or runtime-home mutation is approved by this registry entry.
+  - Astra reports to Vega/System Command and must not bypass Captains.

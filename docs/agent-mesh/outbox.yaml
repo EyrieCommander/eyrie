@@ -72,13 +72,16 @@ entries:
   to:
   - vega.system-command
   parent: magnus.eyrie
-  status: sent
+  status: superseded
   priority: high
-  summary: Magnus created the Eyrie TODAY doc and routed interview-first work to Danya and Hermes through the local mesh.
+  summary: Dan later cancelled the interview-first personality lane; the Eyrie TODAY
+    doc remains valid, but Danya/Hermes interview follow-up is no longer required.
   context_refs:
   - "/Users/natalie/Development/eyrie/TODAY.md"
-  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-agent-interview-plan-2026-05-04.md"
-  approval_boundary: Internal docs and local mesh routing only. No public, external, GitHub, credential, runtime-home, commit, push, merge, or destructive action was taken.
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml#2026-05-04-dan-cancel-agent-personality-interviews-001"
+  approval_boundary: Interview lane cancelled only. No public, external, GitHub, credential,
+    runtime-home, commit, push, merge, or destructive action is authorized by this
+    outbox record.
 - id: 2026-05-04-magnus-policy-relay-001
   kind: status
   created: '2026-05-04'
@@ -88,12 +91,14 @@ entries:
   parent: magnus.eyrie
   status: sent
   priority: high
-  summary: Magnus relayed the local Eyrie commit policy to Danya and Eyrie Docs and recorded Hermes as a non-commit-owner runtime agent.
+  summary: Magnus relayed the local Eyrie commit policy to Danya and Eyrie Docs and
+    recorded Hermes as a non-commit-owner runtime agent.
   context_refs:
   - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-local-commit-policy-relay-2026-05-04.md"
   - "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/danya.yaml"
   - "/Users/natalie/Development/eyrie/docs/agent-mesh/README.md"
-  approval_boundary: Local policy relay only. Active session commit approval remains stricter until Dan approves a specific commit.
+  approval_boundary: Local policy relay only. Active session commit approval remains
+    stricter until Dan approves a specific commit.
 - id: 2026-05-04-magnus-readiness-refresh-001
   kind: status
   created: '2026-05-04'
@@ -104,8 +109,79 @@ entries:
   parent: magnus.eyrie
   status: sent
   priority: normal
-  summary: Magnus refreshed stale Eyrie readiness state and superseded the prior dirty-repo sync blocker.
+  summary: Magnus refreshed stale Eyrie readiness state and superseded the prior dirty-repo
+    sync blocker.
   context_refs:
   - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-readiness-refresh-2026-05-04.md"
   - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-multi-repo-push-readiness-2026-05-03.md"
-  approval_boundary: Readiness reporting only. No commit, push, public, external, GitHub, credential, runtime-home, or destructive action was taken.
+  approval_boundary: Readiness reporting only. No commit, push, public, external,
+    GitHub, credential, runtime-home, or destructive action was taken.
+- id: 2026-05-04-magnus-audit-depth-split-ack-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: normal
+  summary: Magnus incorporated Vega's local audit-depth split for Eyrie work.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/broadcasts.yaml#2026-05-04-vega-audit-depth-split-adopted-001"
+  - "/Users/dan/Documents/Personal/Commander/AUDIT.md"
+  approval_boundary: Policy acknowledgement only. Routine low-risk private docs/status/dashboard
+    maintenance can use ordinary local git review; shared protocol, routing, validator,
+    generated-manifest, multi-repo sync, repo-tracking, or cross-system process changes
+    should use audit packets. No commit, push, public, external, GitHub, credential,
+    runtime-home, or destructive action was taken.
+- id: 2026-05-04-magnus-astra-hermes-evaluation-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: high
+  summary: Magnus answered Vega's Astra setup request with a conservative file-backed-first runtime recommendation.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/eyrie-inbox.yaml#2026-05-04-vega-eyrie-astra-hermes-setup-instructions-001"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-astra-hermes-evaluation-2026-05-04.md"
+  approval_boundary: Evaluation and routing only. No install, launch, schedule, credential
+    edit, runtime-home mutation, commit, push, public/external action, GitHub mutation,
+    or destructive cleanup was taken.
+- id: 2026-05-04-magnus-astra-runtime-registration-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: high
+  summary: Magnus registered Astra in Eyrie's file-backed runtime registry without launching Hermes.
+  context_refs:
+  - "/Users/dan/Documents/Personal/Commander/Shared/notices/eyrie-inbox.yaml#2026-05-04-vega-eyrie-register-astra-runtime-001"
+  - "/Users/natalie/Development/eyrie/docs/runtime-registry/astra.vega.yaml"
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-astra-runtime-registration-2026-05-04.md"
+  approval_boundary: File-backed registry work only. No install, launch, schedule,
+    credential edit, runtime-home mutation, commit, push, public/external action,
+    GitHub mutation, or destructive cleanup was taken.
+- id: 2026-05-04-magnus-astra-provider-setup-001
+  kind: status
+  created: '2026-05-04'
+  from: magnus.eyrie
+  to:
+  - vega.system-command
+  parent: magnus.eyrie
+  status: sent
+  priority: high
+  summary: Magnus configured Astra's default Hermes ACP provider model to Bedrock Haiku and kept OpenAI Codex as fallback.
+  context_refs:
+  - "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/magnus-astra-provider-setup-2026-05-04.md"
+  - "/Users/natalie/Development/eyrie/docs/runtime-registry/astra.vega.yaml"
+  - "/Users/dan/Documents/Personal/Commander/scripts/astra-acp-chat.py"
+  approval_boundary: Provider configuration only. No secret values were printed or copied;
+    no new credentials were added; no live model-call smoke, gateway launch, scheduler,
+    daemon, runtime-home mutation, commit, push, public/external action, GitHub mutation,
+    email action, or destructive cleanup was performed.

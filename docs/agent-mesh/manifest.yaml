@@ -34,9 +34,11 @@ channels:
   parent_inbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/magnus.yaml"
   outbox: "/Users/natalie/Development/eyrie/docs/agent-mesh/outbox.yaml"
   reports: "/Users/natalie/Development/eyrie/docs/agent-mesh/reports"
+  runtime_registry: "/Users/natalie/Development/eyrie/docs/runtime-registry"
 rules:
   - Local Eyrie/Hermes/Danya/Magnus chatter stays in this mesh.
   - Escalate cross-system requests, public mutation requests, and Dan approval requests through Commander Shared notices.
   - Parent writes broadcasts and subordinate inbox entries.
   - Subordinates write outbox entries and report artifacts.
+  - Runtime registry entries describe owned runtime agents without launching or mutating runtime state.
   - MCP or ACP can replace the file transport later while preserving ids, status, ownership, and escalation rules.
