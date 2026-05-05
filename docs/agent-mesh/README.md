@@ -77,7 +77,13 @@ see outside the local Eyrie mesh.
 
 ## Status Surface
 
-The in-progress read-only status surface should summarize the manifest, open
-inbox requests, latest outbox entry, report links, and Commander Shared notice
-references. It should remain read-only until Dan explicitly approves write
-operations through Eyrie.
+The Eyrie Captain Board now owns durable local status and task state under
+`status/`.
+
+- Canonical local items: `status/items/*.md`
+- Generated Captain manifest: `status/eyrie-command-board.json`
+- Local board page: `status/eyrie-command-board.html`
+
+Commander imports only items marked `commander_visible: true`. Local-only
+subordinate queue state can stay visible on the Eyrie board without becoming a
+Commander notification or global board card.

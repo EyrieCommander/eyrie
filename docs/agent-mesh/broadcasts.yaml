@@ -91,6 +91,7 @@ notices:
       - agent: docs.eyrie
         status: acknowledged
       - agent: danya.eyrie
-        status: pending
+        status: acknowledged
+        note: Danya read and incorporated the local Eyrie commit policy on 2026-05-06; active session approval boundaries still control commits, pushes, GitHub mutations, runtime-home changes, credentials, and destructive cleanup.
       - agent: hermes.eyrie
         status: pending
