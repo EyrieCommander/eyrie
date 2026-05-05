@@ -1,7 +1,7 @@
 window.eyrieCommandBoard = {
   "schema_version": 1,
   "kind": "captain-command-board",
-  "generated_at": "2026-05-05T20:49:00.313Z",
+  "generated_at": "2026-05-05T21:12:42.584Z",
   "captain": "Magnus/Eyrie",
   "domain": "Eyrie",
   "board_profile": "eyrie",
@@ -29,16 +29,16 @@ window.eyrieCommandBoard = {
   "attention_snapshot": {
     "Commander-visible": [
       "Astra Runtime Watch Officer: Keep Astra one-shot and read-only until Vega or Dan approves scheduler, daemon, runtime-home, or provider changes.",
-      "Eyrie Agent Mesh: Route new subordinate work through local inboxes and promote only cross-system or Commander-visible summaries.",
+      "Eyrie Agent Mesh: Keep routine work local, get Hermes's remaining policy acknowledgement, and promote only cross-system or Commander-visible summaries.",
+      "Eyrie Board Intake Mode: Decide whether this is the next Eyrie board implementation slice before resuming broader product work.",
       "Eyrie Captain Board: Maintain the board as Eyrie's durable task surface; add new items there first and expose only Commander-relevant summaries with commander_visible true.",
       "Eyrie Commander Loop: Keep this visible as the post-board implementation lane, but do not start it until the board surface is stable."
     ],
     "Local-only": [
-      "Danya Local Queue: Danya should report what is confusing or missing when using the local-only queue and board as daily task intake."
+      "Danya Local Queue: Magnus should review Danya's report and decide whether to implement the Eyrie Board Intake Mode item next."
     ],
     "Active or waiting": [
       "Astra Runtime Watch Officer: Astra is registered as Vega's read-only Hermes ACP watch officer with Bedrock Haiku as the working default provider, but remains manual and approval-bound.",
-      "Danya Local Queue: Danya has a local-only queue item and should dogfood the Eyrie board from a subordinate-agent perspective.",
       "Eyrie Agent Mesh: Maintain the local Magnus, Danya, Hermes, and Docs file-backed mesh as Eyrie's coordination layer."
     ]
   },
@@ -102,20 +102,20 @@ window.eyrieCommandBoard = {
     {
       "id": "danya-local-queue",
       "title": "Danya Local Queue",
-      "status": "active",
+      "status": "done",
       "priority": "normal",
-      "lane": "local",
+      "lane": "monitoring",
       "column": "sync-mesh",
-      "captain_column": "local",
+      "captain_column": "monitoring",
       "commander_column": "sync-mesh",
       "owner": "Eyrie/Ops",
       "primary_agent": "Danya/Eyrie",
       "posted_by": "Magnus/Eyrie",
       "source_label": "Eyrie Local Mesh",
       "source": "/Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/danya.yaml",
-      "summary": "Danya has a local-only queue item and should dogfood the Eyrie board from a subordinate-agent perspective.",
-      "next_action": "Danya should report what is confusing or missing when using the local-only queue and board as daily task intake.",
-      "task_state": "active",
+      "summary": "Danya completed the local board-dogfood task and reported that subordinate-agent intake needs clearer queue, source, and stale-state signals.",
+      "next_action": "Magnus should review Danya's report and decide whether to implement the Eyrie Board Intake Mode item next.",
+      "task_state": "done",
       "task_id": "eyrie-board-state-dogfood",
       "assigned_to": "Danya/Eyrie",
       "accountable_agent": "Magnus/Eyrie",
@@ -132,7 +132,7 @@ window.eyrieCommandBoard = {
       "local_item_url": "status/eyrie-command-board.html#item=danya-local-queue",
       "local_manifest_ref": "/Users/natalie/Development/eyrie/status/eyrie-command-board.json",
       "updated": "2026-05-06",
-      "details": "Danya Local Queue\n\nDanya's local mesh inbox now contains a board-dogfood assignment. Vega asked\nMagnus to have Danya use the local-only queue and board as an agent using the\nsystem, then report what is confusing or missing. This is a local subordinate\nqueue item, not a Commander-visible Eyrie blocker.\n\nCurrent Goal\n\nKeep subordinate queue state visible on the Eyrie board without inflating\nCommander notification counts.\n\nNext Action\n\nDanya should write a short local report on what fields, filters, or intake cues\nwould make the board easier to use as daily task intake. Magnus should only\nescalate if the findings block Eyrie work or need Dan/Vega attention.\n\nApproval Boundary\n\nDanya may read and acknowledge local Eyrie mesh policy notices. Commits, pushes,\nGitHub actions, credential changes, runtime-home changes, external actions, and\ndestructive cleanup require explicit approval."
+      "details": "Danya Local Queue\n\nDanya completed the board-dogfood assignment and wrote\ndocs/agent-mesh/reports/danya-board-dogfood-2026-05-06.md.\n\nCurrent Goal\n\nKeep completed subordinate queue state visible without inflating Commander\nnotification counts or leaving stale active-work language behind.\n\nNext Action\n\nMagnus should review the report and decide whether to implement the Eyrie Board\nIntake Mode item next. Danya's key request is a subordinate-agent \"my queue\"\nview with source links, deliverable and response paths, approval boundaries, and\nstale-state checks between local inboxes and board summaries.\n\nApproval Boundary\n\nDanya may read and acknowledge local Eyrie mesh policy notices. Commits, pushes,\nGitHub actions, credential changes, runtime-home changes, external actions, and\ndestructive cleanup require explicit approval."
     },
     {
       "id": "eyrie-agent-mesh",
@@ -149,7 +149,7 @@ window.eyrieCommandBoard = {
       "source_label": "Eyrie",
       "source": "/Users/natalie/Development/eyrie/docs/agent-mesh/README.md",
       "summary": "Maintain the local Magnus, Danya, Hermes, and Docs file-backed mesh as Eyrie's coordination layer.",
-      "next_action": "Route new subordinate work through local inboxes and promote only cross-system or Commander-visible summaries.",
+      "next_action": "Keep routine work local, get Hermes's remaining policy acknowledgement, and promote only cross-system or Commander-visible summaries.",
       "task_state": "active",
       "assigned_to": "Magnus/Eyrie",
       "accountable_agent": "Magnus/Eyrie",
@@ -162,7 +162,41 @@ window.eyrieCommandBoard = {
       "local_item_url": "status/eyrie-command-board.html#item=eyrie-agent-mesh",
       "local_manifest_ref": "/Users/natalie/Development/eyrie/status/eyrie-command-board.json",
       "updated": "2026-05-06",
-      "details": "Eyrie Agent Mesh\n\nEyrie's local mesh under docs/agent-mesh/ remains the coordination layer for\nMagnus, Danya, Hermes, and Eyrie Docs. Commander Shared notices are for cross-\nsystem routing; local mesh inboxes and reports are for Eyrie-owned work.\n\nCurrent Goal\n\nKeep routine Eyrie traffic local, but preserve clear escalation paths to Vega\nand Commander when work is cross-system, approval-bound, priority-changing, or\npublic/external.\n\nNext Action\n\nUse the board to track durable local work and keep notices as wakeups or\nreceipts. Danya's open local policy-relay acknowledgement remains Danya-owned\nunless Dan or Magnus turns it into a broader Eyrie task.\n\nApproval Boundary\n\nLocal mesh docs and board items may be updated as private project maintenance.\nDo not mutate Commander Shared notices, GitHub, credentials, public services, or\nruntime homes without explicit approval for that action."
+      "details": "Eyrie Agent Mesh\n\nEyrie's local mesh under docs/agent-mesh/ remains the coordination layer for\nMagnus, Danya, Hermes, and Eyrie Docs. Commander Shared notices are for cross-\nsystem routing; local mesh inboxes and reports are for Eyrie-owned work.\n\nCurrent Goal\n\nKeep routine Eyrie traffic local, but preserve clear escalation paths to Vega\nand Commander when work is cross-system, approval-bound, priority-changing, or\npublic/external.\n\nNext Action\n\nUse the board to track durable local work and keep notices as wakeups or\nreceipts. Danya's local queue is clear after the dogfood report; Hermes still\nneeds to acknowledge the local commit-policy relay when next active.\n\nApproval Boundary\n\nLocal mesh docs and board items may be updated as private project maintenance.\nDo not mutate Commander Shared notices, GitHub, credentials, public services, or\nruntime homes without explicit approval for that action."
+    },
+    {
+      "id": "eyrie-board-intake-mode",
+      "title": "Eyrie Board Intake Mode",
+      "status": "capture",
+      "priority": "normal",
+      "lane": "backlog",
+      "column": "sync-mesh",
+      "captain_column": "backlog",
+      "commander_column": "sync-mesh",
+      "owner": "Eyrie/Ops",
+      "primary_agent": "Magnus/Eyrie",
+      "posted_by": "Magnus/Eyrie",
+      "source_label": "Danya/Eyrie",
+      "source": "/Users/natalie/Development/eyrie/docs/agent-mesh/reports/danya-board-dogfood-2026-05-06.md",
+      "summary": "Danya's dogfood report recommends a subordinate-agent intake mode with my-queue filtering, source links, visible deliverables, and stale-state checks.",
+      "next_action": "Decide whether this is the next Eyrie board implementation slice before resuming broader product work.",
+      "task_state": "todo",
+      "assigned_to": "Magnus/Eyrie",
+      "accountable_agent": "Magnus/Eyrie",
+      "origin_notice_id": "2026-05-06-vega-eyrie-board-state-and-danya-dogfood-001",
+      "notification_refs": [
+        "2026-05-06-vega-eyrie-board-state-and-danya-dogfood-001"
+      ],
+      "commander_visible": true,
+      "source_id": "eyrie",
+      "captain": "Magnus/Eyrie",
+      "captain_board_profile": "eyrie",
+      "linked_item_ref": "/Users/natalie/Development/eyrie/status/items/eyrie-board-intake-mode.md",
+      "local_board_url": "status/eyrie-command-board.html",
+      "local_item_url": "status/eyrie-command-board.html#item=eyrie-board-intake-mode",
+      "local_manifest_ref": "/Users/natalie/Development/eyrie/status/eyrie-command-board.json",
+      "updated": "2026-05-06",
+      "details": "Eyrie Board Intake Mode\n\nDanya's board-dogfood report says the first Eyrie Captain Board slice is useful\nas a Captain-level status surface, but not yet sufficient as subordinate-agent\ndaily intake.\n\nCurrent Goal\n\nTrack the next board improvement as a concrete local implementation option\ninstead of leaving it buried in report prose.\n\nNext Action\n\nDecide whether to implement the next slice now. The proposed slice is:\n\n- a subordinate-agent \"my queue\" view;\n- card links to source artifacts;\n- visible deliverable, response path, origin notice, and approval boundary;\n- stale-state checks between local inboxes and generated board summaries.\n\nApproval Boundary\n\nLocal Eyrie board implementation and docs updates are allowed as private project\nmaintenance. Commits, pushes, public/GitHub mutations, credential changes,\nruntime-home changes, external calls, and destructive cleanup require explicit\napproval."
     },
     {
       "id": "eyrie-captain-board",
@@ -230,23 +264,22 @@ window.eyrieCommandBoard = {
     }
   ],
   "counts": {
-    "total": 5,
-    "commander_visible": 4,
+    "total": 6,
+    "commander_visible": 5,
     "local_only": 1,
     "by_status": {
       "waiting": 1,
-      "active": 2,
-      "done": 1,
-      "capture": 1
+      "done": 2,
+      "active": 1,
+      "capture": 2
     },
     "by_priority": {
-      "normal": 5
+      "normal": 6
     },
     "by_lane": {
-      "monitoring": 2,
-      "local": 1,
+      "monitoring": 3,
       "active": 1,
-      "backlog": 1
+      "backlog": 2
     }
   }
 };

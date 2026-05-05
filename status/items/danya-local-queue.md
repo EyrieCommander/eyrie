@@ -1,18 +1,18 @@
 ---
 id: danya-local-queue
 title: Danya Local Queue
-status: active
+status: done
 priority: normal
-captain_column: local
+captain_column: monitoring
 commander_column: sync-mesh
 owner: Eyrie/Ops
 primary_agent: Danya/Eyrie
 posted_by: Magnus/Eyrie
 source_label: Eyrie Local Mesh
 source: /Users/natalie/Development/eyrie/docs/agent-mesh/inboxes/danya.yaml
-summary: Danya has a local-only queue item and should dogfood the Eyrie board from a subordinate-agent perspective.
-next_action: Danya should report what is confusing or missing when using the local-only queue and board as daily task intake.
-task_state: active
+summary: Danya completed the local board-dogfood task and reported that subordinate-agent intake needs clearer queue, source, and stale-state signals.
+next_action: Magnus should review Danya's report and decide whether to implement the Eyrie Board Intake Mode item next.
+task_state: done
 task_id: eyrie-board-state-dogfood
 assigned_to: Danya/Eyrie
 accountable_agent: Magnus/Eyrie
@@ -25,21 +25,20 @@ updated: 2026-05-06
 
 # Danya Local Queue
 
-Danya's local mesh inbox now contains a board-dogfood assignment. Vega asked
-Magnus to have Danya use the local-only queue and board as an agent using the
-system, then report what is confusing or missing. This is a local subordinate
-queue item, not a Commander-visible Eyrie blocker.
+Danya completed the board-dogfood assignment and wrote
+`docs/agent-mesh/reports/danya-board-dogfood-2026-05-06.md`.
 
 ## Current Goal
 
-Keep subordinate queue state visible on the Eyrie board without inflating
-Commander notification counts.
+Keep completed subordinate queue state visible without inflating Commander
+notification counts or leaving stale active-work language behind.
 
 ## Next Action
 
-Danya should write a short local report on what fields, filters, or intake cues
-would make the board easier to use as daily task intake. Magnus should only
-escalate if the findings block Eyrie work or need Dan/Vega attention.
+Magnus should review the report and decide whether to implement the Eyrie Board
+Intake Mode item next. Danya's key request is a subordinate-agent "my queue"
+view with source links, deliverable and response paths, approval boundaries, and
+stale-state checks between local inboxes and board summaries.
 
 ## Approval Boundary
 

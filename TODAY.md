@@ -1,37 +1,36 @@
 # Eyrie Today
 
-Date: 2026-05-04
+Date: 2026-05-06
 Captain: Magnus/Eyrie
 Status: active
 
 ## Priority Stack
 
-1. Close Vega's local commit-policy relay for Eyrie by documenting the rule locally and routing it to Danya and Eyrie Docs.
-2. Refresh stale Eyrie readiness and sync state now that `main` is clean and aligned with `origin/main`.
-3. Fill immediate durable-kit gaps for Magnus, Danya, and the Eyrie Docs lane.
-4. Route Vega's interview-first personality work to Danya and Hermes through the local Eyrie mesh.
-5. After coordination cleanup, resume concrete Eyrie implementation work from the current codebase.
+1. Keep the Eyrie Captain Board as the durable local task surface and regenerate it after board item changes.
+2. Review Danya's board-dogfood findings and decide the next board implementation slice: my-queue mode, source links, visible deliverables, and stale-state validation.
+3. Keep Astra manual and waiting until Vega or Dan explicitly approves scheduler, daemon, runtime-home, or provider changes.
+4. Keep local mesh traffic local unless it is cross-system, approval-bound, priority-changing, public, or external.
 
 ## Active Work
 
-- Commander Shared inbox has one directed Eyrie/Ops item and two high-priority captain broadcasts open at startup.
-- Danya's Commander queue is clear. Danya follow-up should use the local Eyrie mesh unless Vega or Dan routes a direct Commander notice.
-- Hermes is usable as a runtime-control subordinate, but should stay scoped to runtime/setup observations until Magnus gives a narrower task.
-- Eyrie Docs is a local docs/sync lane, not an independent external actor.
+- Commander Shared Eyrie/Ops is clear after the May 6 board-state notice.
+- The Eyrie Captain Board exists at `status/eyrie-command-board.html`; Commander imports its manifest from `status/eyrie-command-board.json`.
+- Danya completed the board-dogfood report and recommended a subordinate-agent intake mode.
+- Eyrie board state now distinguishes Commander-visible items from local-only queue work.
 
 ## Waiting Or Blocked
 
+- Hermes has not yet acknowledged the local Eyrie commit-policy broadcast.
 - No current GitHub PR or issue work is active for Eyrie.
 - No push, public GitHub mutation, destructive cleanup, runtime-home mutation, credential change, or external action is approved.
 - This Codex session still requires Dan's explicit approval before creating commits, despite Vega's broader local commit policy.
 
 ## Delegated Talon Work
 
-- Danya: answer the interview-first personality prompt through the local mesh.
-- Hermes: answer a narrow runtime-agent interview prompt only if the Hermes session can do so without claiming permanent identity.
-- Eyrie Docs: treat policy, readiness, and durable-kit artifacts as the current docs lane scope.
+- Danya: board-dogfood report complete; next action is Magnus review and implementation choice.
+- Hermes: acknowledge the local commit-policy relay when next active.
+- Eyrie Docs: keep durable state, readiness, and docs/sync clarity current.
 
 ## Escalations
 
-- Vega should receive acknowledgements for the TODAY doc and interview-first broadcasts after this file and the local interview plan exist.
-- The Eyrie/Ops local commit-policy relay should be marked answered once the response artifact names the notified local agents.
+- None currently need Commander/Vega action. Danya's intake-mode findings can stay local unless Magnus chooses to promote a design change.

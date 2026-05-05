@@ -11,7 +11,7 @@ posted_by: Magnus/Eyrie
 source_label: Eyrie
 source: /Users/natalie/Development/eyrie/docs/agent-mesh/README.md
 summary: Maintain the local Magnus, Danya, Hermes, and Docs file-backed mesh as Eyrie's coordination layer.
-next_action: Route new subordinate work through local inboxes and promote only cross-system or Commander-visible summaries.
+next_action: Keep routine work local, get Hermes's remaining policy acknowledgement, and promote only cross-system or Commander-visible summaries.
 task_state: active
 assigned_to: Magnus/Eyrie
 accountable_agent: Magnus/Eyrie
@@ -34,8 +34,8 @@ public/external.
 ## Next Action
 
 Use the board to track durable local work and keep notices as wakeups or
-receipts. Danya's open local policy-relay acknowledgement remains Danya-owned
-unless Dan or Magnus turns it into a broader Eyrie task.
+receipts. Danya's local queue is clear after the dogfood report; Hermes still
+needs to acknowledge the local commit-policy relay when next active.
 
 ## Approval Boundary
 
