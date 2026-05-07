@@ -114,11 +114,12 @@ Body: {"instance_id": "..."} or {"agent_name": "..."}
 ### Get local mesh status
 GET /api/mesh/status
 
-Returns a read-only summary of docs/agent-mesh: manifest ownership, inbox counts,
-open requests, latest outbox entry, reports, and Commander Shared notice refs.
-This endpoint never writes mesh files. Mesh root lookup uses EYRIE_AGENT_MESH_DIR,
-then [mesh].agent_mesh_dir in ~/.eyrie/config.toml, then docs/agent-mesh under
-the current working directory or one of its parents.
+Returns a read-only summary of a configured local agent mesh: manifest ownership,
+inbox counts, open requests, latest outbox entry, reports, and Commander Shared
+notice refs. This endpoint never writes mesh files. Mesh root lookup uses
+EYRIE_AGENT_MESH_DIR, then [mesh].agent_mesh_dir in ~/.eyrie/config.toml, then an
+optional local-only docs/agent-mesh under the current working directory or one of
+its parents.
 
 ## Registry
 

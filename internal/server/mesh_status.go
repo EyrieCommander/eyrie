@@ -156,7 +156,7 @@ func readMeshStatus() (meshStatusResponse, error) {
 			return meshStatusResponse{
 				Available:       false,
 				GeneratedAt:     now,
-				UnavailableText: "docs/agent-mesh/manifest.yaml was not found from the current Eyrie working directory",
+				UnavailableText: "No local agent mesh is configured. Set EYRIE_AGENT_MESH_DIR or [mesh].agent_mesh_dir in ~/.eyrie/config.toml to a private mesh directory.",
 			}, nil
 		}
 		return meshStatusResponse{}, err

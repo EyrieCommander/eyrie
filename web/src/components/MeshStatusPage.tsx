@@ -39,6 +39,7 @@ function shortPath(path?: string): string {
   if (!path) return "-";
   return path
     .replace("/Users/natalie/Development/eyrie/", "")
+    .replace(/^.*\/EyrieOps\//, "EyrieOps/")
     .replace("/Users/dan/Documents/Personal/Commander/", "Commander/");
 }
 
