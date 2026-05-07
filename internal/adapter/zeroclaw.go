@@ -50,8 +50,8 @@ func NewZeroClawAdapter(id, name, baseURL, token, configPath string) *ZeroClawAd
 
 func (z *ZeroClawAdapter) ID() string        { return z.id }
 func (z *ZeroClawAdapter) Name() string      { return z.name }
-func (z *ZeroClawAdapter) Framework() string  { return "zeroclaw" }
-func (z *ZeroClawAdapter) BaseURL() string    { return z.baseURL }
+func (z *ZeroClawAdapter) Framework() string { return "zeroclaw" }
+func (z *ZeroClawAdapter) BaseURL() string   { return z.baseURL }
 
 func (z *ZeroClawAdapter) Health(ctx context.Context) (*HealthStatus, error) {
 	var resp struct {
@@ -1153,13 +1153,36 @@ func (z *ZeroClawAdapter) loadEnrichedMessages(sessionKey string) []ChatMessage 
 	return messages
 }
 
-
-
 // Interrupt asks ZeroClaw to cancel an in-flight response.
-// TODO: Call POST /api/sessions/{id}/abort once upstream ships zeroclaw-labs/zeroclaw#XXXX.
-// Until then, this is a no-op — context cancellation on the WS connection is
-// the only way to stop receiving, but the agent continues processing.
-func (z *ZeroClawAdapter) Interrupt(_ context.Context, _ string) error {
+func (z *ZeroClawAdapter) Interrupt(ctx context.Context, sessionKey string) error {
+	sessionKey = strings.TrimSpace(sessionKey)
+	if sessionKey == "" {
+		return fmt.Errorf("cannot interrupt ZeroClaw response without session key")
+	}
+
+	path := "/api/sessions/" + url.PathEscape(sessionKey) + "/abort"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, z.baseURL+path, nil)
+	if err != nil {
+		return fmt.Errorf("creating abort request: %w", err)
+	}
+	if z.token != "" {
+		req.Header.Set("Authorization", "Bearer "+z.token)
+	}
+
+	resp, err := z.client.Do(req)
+	if err != nil {
+		return wrapConnError(err, "aborting session %s", sessionKey)
+	}
+	defer resp.Body.Close()
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading abort response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return httpStatusError(resp.StatusCode, "%s returned %d: %s", path, resp.StatusCode, strings.TrimSpace(string(data)))
+	}
 	return nil
 }
 
