@@ -17,6 +17,7 @@ import AgentCompare from "./components/AgentCompare";
 import FrameworkCompare from "./components/FrameworkCompare";
 import MeshStatusPage from "./components/MeshStatusPage";
 import CommanderChat from "./components/CommanderChat";
+import CommandRoomPage from "./components/CommandRoomPage";
 import { useFont } from "./lib/useFont";
 import { useTheme } from "./lib/useTheme";
 
@@ -49,6 +50,7 @@ function AppContent() {
         <Routes>
           {/* Full-width routes (no padding/max-width) */}
           <Route path="/projects/:id" element={<ProjectDetail />} />
+          <Route path="/mission-control/command-room" element={<CommandRoomPage />} />
 
           {/* Constrained routes */}
           <Route path="*" element={

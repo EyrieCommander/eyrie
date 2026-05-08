@@ -45,13 +45,14 @@ type meshAgentSummary struct {
 }
 
 type meshChannelSummary struct {
-	Broadcasts  string `json:"broadcasts,omitempty" yaml:"broadcasts"`
-	ParentInbox string `json:"parent_inbox,omitempty" yaml:"parent_inbox"`
-	Outbox      string `json:"outbox,omitempty" yaml:"outbox"`
-	Reports     string `json:"reports,omitempty" yaml:"reports"`
-	DocsInbox   string `json:"docs_inbox,omitempty"`
-	DanyaInbox  string `json:"danya_inbox,omitempty"`
-	MagnusInbox string `json:"magnus_inbox,omitempty"`
+	Broadcasts      string `json:"broadcasts,omitempty" yaml:"broadcasts"`
+	ParentInbox     string `json:"parent_inbox,omitempty" yaml:"parent_inbox"`
+	Outbox          string `json:"outbox,omitempty" yaml:"outbox"`
+	Reports         string `json:"reports,omitempty" yaml:"reports"`
+	RuntimeRegistry string `json:"runtime_registry,omitempty" yaml:"runtime_registry"`
+	DocsInbox       string `json:"docs_inbox,omitempty"`
+	DanyaInbox      string `json:"danya_inbox,omitempty"`
+	MagnusInbox     string `json:"magnus_inbox,omitempty"`
 }
 
 type meshInboxSummary struct {
@@ -174,7 +175,7 @@ func readMeshStatus() (meshStatusResponse, error) {
 		switch agent.ID {
 		case "danya.eyrie":
 			channels.DanyaInbox = agent.Inbox
-		case "docs.eyrie":
+		case "clio.eyrie", "docs.eyrie":
 			channels.DocsInbox = agent.Inbox
 		}
 	}
@@ -411,7 +412,7 @@ func isOpenMeshStatus(status string) bool {
 	switch strings.ToLower(strings.TrimSpace(status)) {
 	case "", "open", "pending", "must_handle":
 		return true
-	case "answered", "acknowledged", "routed", "sent", "closed", "done", "complete", "completed":
+	case "answered", "acknowledged", "routed", "sent", "closed", "done", "complete", "completed", "superseded", "stale", "info-only", "imported", "cancelled", "canceled":
 		return false
 	default:
 		return true

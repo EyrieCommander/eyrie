@@ -42,6 +42,9 @@ notices:
     acknowledgements:
       - agent: magnus.eyrie
         status: acknowledged
+  - id: superseded-one
+    title: Superseded
+    status: superseded
 `)
 	writeTestFile(t, filepath.Join(meshRoot, "inboxes", "danya.yaml"), `---
 updated: "2026-05-03"
@@ -85,11 +88,18 @@ entries:
 	if len(status.Inboxes) != 2 {
 		t.Fatalf("inboxes = %d, want 2", len(status.Inboxes))
 	}
+	var magnus meshInboxSummary
 	var danya meshInboxSummary
 	for _, inbox := range status.Inboxes {
+		if inbox.Recipient == "magnus.eyrie" {
+			magnus = inbox
+		}
 		if inbox.Recipient == "danya.eyrie" {
 			danya = inbox
 		}
+	}
+	if magnus.Open != 0 {
+		t.Fatalf("magnus open = %d, want 0", magnus.Open)
 	}
 	if danya.Open != 1 {
 		t.Fatalf("danya open = %d, want 1", danya.Open)

@@ -29,6 +29,12 @@ function isOpenStatus(status?: string): boolean {
     case "done":
     case "complete":
     case "completed":
+    case "superseded":
+    case "stale":
+    case "info-only":
+    case "imported":
+    case "cancelled":
+    case "canceled":
       return false;
     default:
       return true;

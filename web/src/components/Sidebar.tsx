@@ -174,6 +174,17 @@ export default function Sidebar() {
         {missionControlExpanded && (
           <div id="mission-control-list" className="ml-4 border-l border-border pl-2 space-y-px">
             <Link
+              to="/mission-control/command-room"
+              className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
+                pathname === "/mission-control/command-room"
+                  ? "bg-surface-hover text-accent font-medium"
+                  : "text-text-secondary hover:text-text hover:bg-surface-hover/50"
+              }`}
+            >
+              <Layers className="h-3 w-3" />
+              <span>command room</span>
+            </Link>
+            <Link
               to="/mission-control/agents"
               className={`flex items-center gap-2 rounded px-3 py-1.5 text-xs transition-colors ${
                 pathname === "/mission-control/agents"

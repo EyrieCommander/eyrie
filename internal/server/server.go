@@ -202,6 +202,7 @@ func (s *Server) registerRoutes() {
 
 	// Local file-backed agent mesh
 	s.mux.HandleFunc("GET /api/mesh/status", s.handleMeshStatus)
+	s.mux.HandleFunc("GET /api/command-room", s.handleCommandRoom)
 
 	// Key vault endpoints
 	s.mux.HandleFunc("GET /api/keys", s.handleListKeys)

@@ -313,6 +313,7 @@ export interface MeshChannelSummary {
   parent_inbox?: string;
   outbox?: string;
   reports?: string;
+  runtime_registry?: string;
   docs_inbox?: string;
   danya_inbox?: string;
   magnus_inbox?: string;
@@ -355,6 +356,58 @@ export interface MeshCommanderRef {
   path: string;
   notice?: string;
   source?: string;
+}
+
+export interface CommandRoom {
+  generated_at: string;
+  mesh: MeshStatus;
+  board?: CommandRoomBoard;
+  runtime_registry: CommandRoomRuntime[];
+  data_sources: CommandRoomDataSource[];
+  approval_boundary: string[];
+}
+
+export interface CommandRoomBoard {
+  path: string;
+  generated_at?: string;
+  captain?: string;
+  domain?: string;
+  items: CommandRoomBoardItem[];
+}
+
+export interface CommandRoomBoardItem {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  lane: string;
+  owner: string;
+  primary_agent: string;
+  summary: string;
+  next_action: string;
+  commander_visible: boolean;
+  source?: string;
+  linked_item_ref?: string;
+}
+
+export interface CommandRoomRuntime {
+  id: string;
+  display_name: string;
+  status: string;
+  parent_agent: string;
+  owning_domain: string;
+  role: string;
+  framework: string;
+  transport: string;
+  workspace?: string;
+  current_assignment?: string;
+  path: string;
+}
+
+export interface CommandRoomDataSource {
+  label: string;
+  path?: string;
+  status: string;
 }
 
 export interface ProjectChatMessage {

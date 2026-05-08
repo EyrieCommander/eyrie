@@ -21,6 +21,7 @@ import type {
   ValidateKeyResponse,
   CommanderEvent,
   CommanderHistoryMessage,
+  CommandRoom,
   MemoryEntry,
 } from "./types";
 
@@ -564,6 +565,12 @@ export async function fetchCommander(): Promise<HierarchyTree["commander"]> {
 export async function fetchMeshStatus(): Promise<MeshStatus> {
   const res = await fetchWithTimeout(`${BASE}/api/mesh/status`);
   if (!res.ok) throw new Error(`Failed to fetch mesh status: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchCommandRoom(): Promise<CommandRoom> {
+  const res = await fetchWithTimeout(`${BASE}/api/command-room`);
+  if (!res.ok) throw new Error(`Failed to fetch command room: ${res.statusText}`);
   return res.json();
 }
 
