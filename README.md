@@ -218,6 +218,18 @@ commander-test -clear
 
 Requires an `openrouter` key in the Eyrie vault (`~/.eyrie/keys.json`) or the `OPENROUTER_API_KEY` environment variable. The default model is `anthropic/claude-sonnet-4.6`.
 
+### Running the ZeroClaw OpenRouter review gate
+
+Eyrie can also run ZeroClaw's optional OpenRouter/Grok review gate with the `openrouter` key from the Eyrie vault. The key is injected only into the child process and is not written to the result file.
+
+```bash
+eyrie review-gate \
+  --input /path/to/review-gate/gate-input-grok-... \
+  --out /path/to/review-gate/grok-gate-result.md
+```
+
+Use `--model` to override the runner default, or `--runner` if the ZeroClaw review-gate runner is not in the standard Development checkout.
+
 <img width="1334" height="772" alt="Screen Shot 2026-03-29 at 2 19 12 PM" src="https://github.com/user-attachments/assets/0cde0fdf-a030-434f-828a-0fa9dd03fa9a" />
 
 ## Troubleshooting
