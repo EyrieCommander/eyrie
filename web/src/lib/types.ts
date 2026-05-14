@@ -363,6 +363,8 @@ export interface CommandRoom {
   mesh: MeshStatus;
   board?: CommandRoomBoard;
   runtime_registry: CommandRoomRuntime[];
+  development_mesh?: CommandRoomDevelopment;
+  zeroclaw_agents: CommandRoomZeroClawAgent[];
   data_sources: CommandRoomDataSource[];
   approval_boundary: string[];
 }
@@ -402,6 +404,84 @@ export interface CommandRoomRuntime {
   workspace?: string;
   current_assignment?: string;
   path: string;
+}
+
+export interface CommandRoomDevelopment {
+  root: string;
+  scope: string;
+  status: string;
+  provenance: string;
+  assignments: CommandRoomDevelopmentNotice[];
+  work_items: CommandRoomDevelopmentWorkItem[];
+  runtime_smokes: CommandRoomRuntimeSmoke[];
+}
+
+export interface CommandRoomDevelopmentNotice {
+  id: string;
+  title: string;
+  status: string;
+  priority: string;
+  from: string;
+  owner: string;
+  worker: string;
+  summary: string;
+  request: string;
+  response_path?: string;
+  approval_boundary?: string;
+  context_refs?: string[];
+  source_path: string;
+  provenance: string;
+}
+
+export interface CommandRoomDevelopmentWorkItem {
+  id: string;
+  kind?: string;
+  title: string;
+  status: string;
+  priority: string;
+  lane?: string;
+  owner: string;
+  summary: string;
+  next_action: string;
+  source_refs?: string[];
+  updated?: string;
+  source_path: string;
+  provenance: string;
+}
+
+export interface CommandRoomRuntimeSmoke {
+  id: string;
+  title: string;
+  status: string;
+  summary: string;
+  source_path: string;
+  facts: CommandRoomFact[];
+  findings?: string[];
+  provenance: string;
+}
+
+export interface CommandRoomFact {
+  label: string;
+  value: string;
+  provenance: string;
+  source_path?: string;
+}
+
+export interface CommandRoomZeroClawAgent {
+  id: string;
+  name: string;
+  display_name: string;
+  status: string;
+  hierarchy_role?: string;
+  project_id?: string;
+  parent_id?: string;
+  port: number;
+  config_path?: string;
+  workspace_path?: string;
+  created_by?: string;
+  health_status?: string;
+  last_seen?: string;
+  provenance: string;
 }
 
 export interface CommandRoomDataSource {

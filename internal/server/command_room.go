@@ -15,6 +15,8 @@ type commandRoomResponse struct {
 	Mesh             meshStatusResponse      `json:"mesh"`
 	Board            *commandRoomBoard       `json:"board,omitempty"`
 	RuntimeRegistry  []commandRoomRuntime    `json:"runtime_registry"`
+	DevelopmentMesh  *commandRoomDevelopment `json:"development_mesh,omitempty"`
+	ZeroClawAgents   []commandRoomZeroClaw   `json:"zeroclaw_agents"`
 	DataSources      []commandRoomDataSource `json:"data_sources"`
 	ApprovalBoundary []string                `json:"approval_boundary"`
 }
@@ -100,11 +102,22 @@ func (s *Server) handleCommandRoom(w http.ResponseWriter, r *http.Request) {
 		Status: availabilityStatus(mesh.Available),
 	})
 
+	developmentRoot := locateCommandRoomDevelopmentMeshRoot()
+	developmentMesh := readCommandRoomDevelopmentMesh(developmentRoot)
+	sources = append(sources, commandRoomDataSource{
+		Label:  "development mesh",
+		Path:   developmentRoot,
+		Status: availabilityStatus(developmentMesh != nil),
+	})
+	zeroClawAgents := readCommandRoomZeroClawAgents(s.instanceStore)
+
 	writeJSON(w, http.StatusOK, commandRoomResponse{
 		GeneratedAt:     time.Now().UTC().Format(time.RFC3339),
 		Mesh:            mesh,
 		Board:           board,
 		RuntimeRegistry: runtimes,
+		DevelopmentMesh: developmentMesh,
+		ZeroClawAgents:  zeroClawAgents,
 		DataSources:     sources,
 		ApprovalBoundary: []string{
 			"read-only file-backed surface",

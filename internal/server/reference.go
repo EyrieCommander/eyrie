@@ -121,6 +121,23 @@ EYRIE_AGENT_MESH_DIR, then [mesh].agent_mesh_dir in ~/.eyrie/config.toml, then a
 optional local-only docs/agent-mesh under the current working directory or one of
 its parents.
 
+### Get command-room state
+GET /api/command-room
+
+Returns the command-room aggregate: local mesh status, Captain Board items,
+runtime registry entries, Development mesh import state, provisioned ZeroClaw
+agent metadata, data sources, and approval boundaries.
+
+### Dispatch a board item to a running agent
+POST /api/command-room/dispatch
+Body: {"target_agent":"captain-a","board_item":{"id":"...","title":"...","summary":"...","next_action":"..."},"note":"optional operator note"}
+
+Streams the target agent response through SSE. Eyrie builds the assignment
+envelope server-side and uses a stable session key of
+eyrie-command-room:<board-item-id>. This sends a runtime message to the selected
+agent, but it does not write mesh files, commit, push, mutate GitHub, change
+credentials, or launch/stop runtimes.
+
 ## Registry
 
 ### List available personas

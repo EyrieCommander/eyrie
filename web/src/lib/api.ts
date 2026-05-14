@@ -22,6 +22,7 @@ import type {
   CommanderEvent,
   CommanderHistoryMessage,
   CommandRoom,
+  CommandRoomBoardItem,
   MemoryEntry,
 } from "./types";
 
@@ -572,6 +573,54 @@ export async function fetchCommandRoom(): Promise<CommandRoom> {
   const res = await fetchWithTimeout(`${BASE}/api/command-room`);
   if (!res.ok) throw new Error(`Failed to fetch command room: ${res.statusText}`);
   return res.json();
+}
+
+export type CommandRoomDispatchEvent = ChatEvent | {
+  type: "dispatch";
+  agent: string;
+  session_key: string;
+  board_item: string;
+};
+
+export function streamCommandRoomDispatch(
+  targetAgent: string,
+  boardItem: CommandRoomBoardItem,
+  note: string,
+  onEvent: (event: CommandRoomDispatchEvent) => void,
+): AbortController {
+  const controller = new AbortController();
+  (async () => {
+    try {
+      const res = await fetchWithTimeout(`${BASE}/api/command-room/dispatch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          target_agent: targetAgent,
+          board_item: boardItem,
+          note,
+        }),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({ error: res.statusText }));
+        onEvent({
+          type: "error",
+          error: body.error || `Failed to dispatch: ${res.statusText}`,
+          code: body.code,
+        });
+        return;
+      }
+      await readSSEStream(res.body!, onEvent);
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        onEvent({
+          type: "error",
+          error: e instanceof Error ? e.message : "Dispatch failed",
+        });
+      }
+    }
+  })();
+  return controller;
 }
 
 // --- Commander chat endpoints ---
