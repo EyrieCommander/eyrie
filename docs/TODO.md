@@ -1,8 +1,15 @@
 # Eyrie TODO
 
-## Current State (2026-03-30)
+Status: active backlog with historical notes
+Updated: 2026-05-14
 
-**Branch:** `feature/project-orchestrator`
+This file remains a working backlog, but it also contains completed historical
+notes from earlier implementation phases. For the current unified onboarding and
+Eyrie-as-commander direction, treat `docs/plan-onboarding-flow.md` as the
+primary planning source and use this file for concrete follow-up tasks.
+
+## Current Direction
+
 **Vision:** Agentic factory with control room — agents drive, user oversees via real-time UI
 **Design:** `project-design.pen` (Pencil mockups), implementation plans in `docs/PLAN.md` and `docs/plan-onboarding-flow.md`.
 

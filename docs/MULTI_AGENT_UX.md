@@ -2,6 +2,14 @@
 **Current State, ZeroClaw Sub-Agents, RFC #5890 Analysis, and the Future of Factory Layers**  
 *April 2026 Research Report (Grok 4.3 beta)*
 
+Status: historical research reference
+Updated: 2026-05-14
+
+This report is useful background on the Claw ecosystem and why Eyrie needs a
+factory/control-plane layer. It discusses ZeroClaw RFC #5890 as an April 2026
+draft. Check current ZeroClaw and EyrieOps state before using this as present
+runtime truth.
+
 ---
 
 ### Executive Summary

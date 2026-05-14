@@ -1,5 +1,14 @@
 # Eyrie: Agentic Factory with Control Room
 
+Status: historical architecture reference with still-useful model notes
+Updated: 2026-05-14
+
+Current source of truth: `docs/plan-onboarding-flow.md` owns the unified
+onboarding and Eyrie-as-commander direction. This file preserves the broader
+agentic-factory architecture, hierarchy model, and early API/storage thinking.
+Treat commander-as-separate-agent details as superseded unless a later current
+doc explicitly revives them.
+
 ## Vision
 
 Transform Eyrie from a framework manager into an **agentic factory** with a three-tier agent hierarchy and a real-time control room UI. Agents do the work autonomously — commander creates projects, captains manage execution, talons specialize. Projects can be anything: software, research, content, business operations. The UI provides **real-time visibility** into everything happening, with the user able to **intervene at any level**.
