@@ -1,5 +1,9 @@
 # Eyrie — Project Brief
 
+Status: semi-looped reference
+Updated: 2026-08-28
+Lifecycle: Useful early project framing. Current product direction lives in `docs/plan-onboarding-flow.md` and `docs/codex-runtime-direction.md`; do not treat this as current implementation state without checking those files.
+
 ## What it is
 
 A unified management interface for the Claw family of AI agent frameworks (OpenClaw, ZeroClaw, PicoClaw, NanoClaw, IronClaw, and others as they emerge).

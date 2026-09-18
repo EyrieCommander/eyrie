@@ -1,5 +1,9 @@
 # Eyrie Autonomous ZeroClaw Workflow Spike
 
+Status: semi-looped spike
+Updated: 2026-08-28
+Lifecycle: Useful design reference for human-approved review/triage automation. Check current review-ops implementation and `docs/TODO.md` before treating proposed endpoints or data model as pending work.
+
 ## Executive recommendation
 
 Start with a **human-approved draft workflow** in Eyrie, not full autonomy:

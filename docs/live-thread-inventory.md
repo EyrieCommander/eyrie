@@ -1,6 +1,6 @@
 # Eyrie Live Thread Inventory
 
-Last updated: 2026-05-25
+Last updated: 2026-08-28
 
 Purpose: keep the current Eyrie, ZeroClaw, and agent-runtime dogfood threads visible in one place. This is not a commitment to integrate every test runtime. It is a map of what exists, what should be wired into Eyrie now, and what should remain track-only until it earns a permanent slot.
 
@@ -13,32 +13,40 @@ Eyrie currently has two different views of agent state:
 
 Fred belongs to the second category right now: an external ZeroClaw v0.8 runtime in its own project tree at `/Users/natalie/Development/finance/fred`, with live config at `/Users/natalie/Development/finance/fred/zeroclaw-config/config.toml`.
 
-The local Agent Mesh also exists outside the public Eyrie repo at `/Users/natalie/Development/EyrieOps/docs/agent-mesh`. The current Eyrie UI reports that no mesh is configured because `~/.eyrie/config.toml` does not point to that mesh directory yet.
+The previous private EyrieOps Agent Mesh reference is stale. The former live
+file-backed root at `/Users/natalie/Development/EyrieOps/docs/agent-mesh` was
+retired in EyrieOps commit `b106f5f285274961af693d634b4ece50e94179e4`. The
+surviving reports now live under
+`/Users/natalie/Development/EyrieOps/docs/reports/agent-mesh/`.
 
-Applied local config update: `~/.eyrie/config.toml` now points `[mesh].agent_mesh_dir` at the EyrieOps mesh and includes Fred's ZeroClaw config path in discovery. A timestamped backup was created before the edit.
+Do not point `[mesh].agent_mesh_dir` at `docs/reports/agent-mesh/`: that path is
+supporting evidence only and does not contain the `manifest.yaml`, inboxes,
+broadcasts, or outbox files required by Eyrie's mesh-status reader.
 
-## Integrate Now
+## Retired / Needs New Active Root
 
 ### EyrieOps Agent Mesh
 
-Status: should be wired into Eyrie now.
+Status: retired as a live local mesh; preserved as report evidence.
 
-Root:
+Former root:
 
 ```text
 /Users/natalie/Development/EyrieOps/docs/agent-mesh
 ```
 
-Reason: this is the private operating-state mesh for Magnus, Danya, Hermes, and Clio. Eyrie already supports this through `EYRIE_AGENT_MESH_DIR` or `[mesh].agent_mesh_dir`.
+Current report archive:
 
-Config target:
-
-```toml
-[mesh]
-  agent_mesh_dir = "/Users/natalie/Development/EyrieOps/docs/agent-mesh"
+```text
+/Users/natalie/Development/EyrieOps/docs/reports/agent-mesh/
 ```
 
-Expected result: the `mesh_status` page should stop showing "No local agent mesh is configured" and should render the manifest/inbox state from the private EyrieOps mesh.
+Reason: EyrieOps deliberately removed the old live mesh files while preserving
+the reports. If Eyrie needs a local mesh again, create a new approved private
+mesh root with `manifest.yaml`, inboxes, broadcasts, and outbox files, and then
+point `EYRIE_AGENT_MESH_DIR` or `[mesh].agent_mesh_dir` at that real root.
+
+## Integrate Now
 
 ### Fred Finance Runtime
 
@@ -177,7 +185,8 @@ Desired behavior: Eyrie should support explicit archive/delete for stale instanc
 
 Restart the Eyrie backend so the browser UI reloads the updated local config. After that:
 
-1. Confirm `mesh_status` reads `/Users/natalie/Development/EyrieOps/docs/agent-mesh`.
+1. Confirm `mesh_status` reports no active local mesh unless a new real mesh root is approved.
 2. Confirm Fred's config appears somewhere in the discovered agent/runtime surfaces.
 3. Implement the identity-preservation follow-up so Fred is not displayed as generic `zeroclaw`.
-4. Leave old test instances alone until we add an archive/cleanup flow.
+4. Decide whether to approve a new private EyrieOps mesh root or keep local mesh status unavailable.
+5. Leave old test instances alone until we add an archive/cleanup flow.
