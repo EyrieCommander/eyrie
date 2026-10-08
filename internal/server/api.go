@@ -78,6 +78,7 @@ func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 			status.InferBusyState()
+			redactStatusForHost(status, s.cfg.Dashboard.Host)
 			aj.Status = status
 		}
 
