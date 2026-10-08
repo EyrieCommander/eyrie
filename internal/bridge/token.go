@@ -64,15 +64,49 @@ func RotateToken(path string) (string, error) {
 	if err := toml.NewEncoder(&sb).Encode(c); err != nil {
 		return "", err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(sb.String()), 0o600); err != nil {
+	if err := writeSecretFile(path, []byte(sb.String())); err != nil {
 		return "", err
-	}
-	if err := os.Chmod(tmp, 0o600); err != nil {
-		return "", err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return "", fmt.Errorf("save %s: %w", path, err)
 	}
 	return token, nil
+}
+
+// writeSecretFile atomically replaces path with data. The temp file is
+// created with os.CreateTemp in the same directory: a random name opened
+// O_CREATE|O_EXCL with mode 0600, so it can't be a pre-existing file or a
+// symlink an attacker planted, and nothing is ever written to it while it
+// is readable by anyone else. The final rename replaces a symlink at path
+// itself rather than writing through it.
+func writeSecretFile(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	f, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmp := f.Name()
+	ok := false
+	defer func() {
+		if !ok {
+			f.Close()
+			os.Remove(tmp)
+		}
+	}()
+	// CreateTemp already uses 0600; Chmod on the open descriptor guards
+	// against a permissive umask-independent platform default.
+	if err := f.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return fmt.Errorf("save %s: %w", path, err)
+	}
+	ok = true
+	return nil
 }
