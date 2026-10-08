@@ -391,12 +391,16 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 
 	// abort ends the app server on an early error exit. Wait reaps the child
 	// and closes its pipes; Kill alone leaves a zombie per failed attempt.
+	var client *codexRPCClient
 	abort := func() {
 		_ = killCodexGroup(cmd)
+		if client != nil {
+			client.shutdown() // unblock readLoop so Wait's pipe copy can finish
+		}
 		_ = cmd.Wait()
 	}
 
-	client := newCodexRPCClient(stdin, stdout)
+	client = newCodexRPCClient(stdin, stdout)
 	go client.readLoop()
 
 	if _, err := client.request(ctx, "initialize", map[string]any{
@@ -738,16 +742,73 @@ func (e *CodexResumeError) Error() string {
 
 func (e *CodexResumeError) Unwrap() error { return e.Err }
 
-// killCodexGroup SIGKILLs the app server's whole process group (it was
-// started with Setpgid, so its pgid is its pid).
+// killCodexGroup kills the app server and everything it started. Killing
+// the process group (Setpgid at launch) isn't enough: a tool can call
+// setsid or setpgid and leave the group. So it first snapshots the
+// descendant tree by parent pid, stops each process (SIGSTOP, so nothing
+// can fork further or reparent while the tree is torn down), then SIGKILLs
+// every pid in the tree, every process group they lead, and the original
+// group.
+//
+// Limit: a process that has already double-forked and been reparented to
+// launchd before the snapshot is no longer a descendant and is not found.
+// Catching that needs a supervisor such as a launchd job or a jail, which is
+// out of scope for this adapter.
 func killCodexGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
-	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+	root := cmd.Process.Pid
+	tree := codexProcessTree(root)
+	for _, pid := range tree {
+		_ = syscall.Kill(pid, syscall.SIGSTOP)
+	}
+	// Re-scan once stopped: anything forked between the first snapshot and
+	// the stop is now visible and can't move.
+	tree = codexProcessTree(root)
+	for _, pid := range tree {
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {
+			_ = syscall.Kill(-pid, syscall.SIGKILL)
+		}
+	}
+	if err := syscall.Kill(-root, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return cmd.Process.Kill()
 	}
 	return nil
+}
+
+// codexProcessTree returns root and all its live descendants, found by
+// walking parent pids from `ps -A -o pid=,ppid=`. If ps fails it returns
+// just root, and the group kill still applies.
+func codexProcessTree(root int) []int {
+	out, err := exec.Command("/bin/ps", "-A", "-o", "pid=,ppid=").Output()
+	if err != nil {
+		return []int{root}
+	}
+	children := map[int][]int{}
+	for _, line := range strings.Split(string(out), "\n") {
+		f := strings.Fields(line)
+		if len(f) != 2 {
+			continue
+		}
+		pid, e1 := strconv.Atoi(f[0])
+		ppid, e2 := strconv.Atoi(f[1])
+		if e1 == nil && e2 == nil {
+			children[ppid] = append(children[ppid], pid)
+		}
+	}
+	seen := map[int]bool{root: true}
+	tree := []int{root}
+	for i := 0; i < len(tree); i++ {
+		for _, c := range children[tree[i]] {
+			if !seen[c] {
+				seen[c] = true
+				tree = append(tree, c)
+			}
+		}
+	}
+	return tree
 }
 
 // lockedBuffer collects the app server's stderr. os/exec copies into it from
@@ -793,6 +854,7 @@ const codexTerminalDeliveryTimeout = 30 * time.Second
 func runCodexStream(ctx context.Context, stderr *lockedBuffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent, reap, release func(), deliveryTimeout time.Duration) {
 	defer close(ch)
 	term := runCodexEventLoop(ctx, stderr, client, run, ch)
+	client.shutdown() // nobody reads the RPC channels from here on
 	reap()
 	release()
 	t := time.NewTimer(deliveryTimeout)
@@ -842,6 +904,51 @@ func runCodexEventLoop(ctx context.Context, stderr *lockedBuffer, client *codexR
 
 	var full strings.Builder
 	var inputTokens, outputTokens int
+	// handle processes one notification; it returns a terminal event and
+	// true when the turn has ended.
+	handle := func(note codexRPCMessage) (ChatEvent, bool) {
+		switch note.Method {
+		case "thread/tokenUsage/updated":
+			if input, output := codexUsageFromParams(note.Params); input > 0 || output > 0 {
+				inputTokens = input
+				outputTokens = output
+			}
+			return ChatEvent{}, false
+		case "turn/started":
+			if run != nil {
+				run.setTurnID(codexTurnIDFromResult(note.Params))
+			}
+			return ChatEvent{}, false
+		case "turn/completed":
+			if errMsg := codexTurnError(note.Params); errMsg != "" {
+				return ChatEvent{Type: "error", Error: errMsg}, true
+			}
+			return ChatEvent{Type: "done", Content: full.String(), InputTokens: inputTokens, OutputTokens: outputTokens}, true
+		}
+		event, ok := codexChatEventFromNotification(note.Method, note.Params)
+		if !ok {
+			return ChatEvent{}, false
+		}
+		if event.Type == "delta" {
+			full.WriteString(event.Content)
+		}
+		if !emit(event) {
+			return ended(), true
+		}
+		return ChatEvent{}, false
+	}
+	// drained is called once the server's output has ended. readLoop has
+	// already queued everything it read, so a turn/completed that arrived
+	// just before EOF is still in the notifications buffer; process the rest
+	// before calling it a failure.
+	drained := func() ChatEvent {
+		for note := range client.notifications {
+			if term, done := handle(note); done {
+				return term
+			}
+		}
+		return ended()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -850,7 +957,7 @@ func runCodexEventLoop(ctx context.Context, stderr *lockedBuffer, client *codexR
 			return interrupted
 		case req, ok := <-client.requests:
 			if !ok {
-				return ended()
+				return drained()
 			}
 			event, response := codexChatEventFromServerRequest(req.Method, req.Params)
 			if event.Type != "" && !emit(event) {
@@ -861,32 +968,8 @@ func runCodexEventLoop(ctx context.Context, stderr *lockedBuffer, client *codexR
 			if !ok {
 				return ended()
 			}
-			if note.Method == "thread/tokenUsage/updated" {
-				if input, output := codexUsageFromParams(note.Params); input > 0 || output > 0 {
-					inputTokens = input
-					outputTokens = output
-				}
-				continue
-			}
-			if note.Method == "turn/started" && run != nil {
-				run.setTurnID(codexTurnIDFromResult(note.Params))
-				continue
-			}
-			if note.Method == "turn/completed" {
-				if errMsg := codexTurnError(note.Params); errMsg != "" {
-					return ChatEvent{Type: "error", Error: errMsg}
-				}
-				return ChatEvent{Type: "done", Content: full.String(), InputTokens: inputTokens, OutputTokens: outputTokens}
-			}
-			event, ok := codexChatEventFromNotification(note.Method, note.Params)
-			if !ok {
-				continue
-			}
-			if event.Type == "delta" {
-				full.WriteString(event.Content)
-			}
-			if !emit(event) {
-				return ended()
+			if term, done := handle(note); done {
+				return term
 			}
 		}
 	}
@@ -1017,6 +1100,8 @@ type codexRPCClient struct {
 	pendingMu     sync.Mutex
 	pending       map[string]chan codexRPCMessage
 	closed        bool // output ended; guarded by pendingMu
+	stop          chan struct{}
+	stopOnce      sync.Once
 	notifications chan codexRPCMessage
 	requests      chan codexRPCMessage
 }
@@ -1039,6 +1124,7 @@ func newCodexRPCClient(in io.WriteCloser, out io.Reader) *codexRPCClient {
 		pending:       map[string]chan codexRPCMessage{},
 		notifications: make(chan codexRPCMessage, 128),
 		requests:      make(chan codexRPCMessage, 16),
+		stop:          make(chan struct{}),
 	}
 }
 
@@ -1071,13 +1157,36 @@ func (c *codexRPCClient) readLoop() {
 			continue
 		}
 		if len(msg.ID) > 0 && msg.Method != "" {
-			c.requests <- msg
+			if !c.deliver(c.requests, msg) {
+				return
+			}
 			continue
 		}
 		if msg.Method != "" {
-			c.notifications <- msg
+			if !c.deliver(c.notifications, msg) {
+				return
+			}
 		}
 	}
+}
+
+// deliver hands a message to the stream, unless the client is being shut
+// down. Without the stop arm, a full buffer whose reader has gone (turn
+// interrupted, startup aborted) would block readLoop forever, and its
+// deferred failPending would never release callers still waiting on a
+// response.
+func (c *codexRPCClient) deliver(ch chan codexRPCMessage, msg codexRPCMessage) bool {
+	select {
+	case ch <- msg:
+		return true
+	case <-c.stop:
+		return false
+	}
+}
+
+// shutdown tells readLoop to stop delivering. Safe to call more than once.
+func (c *codexRPCClient) shutdown() {
+	c.stopOnce.Do(func() { close(c.stop) })
 }
 
 func (c *codexRPCClient) failPending() {
@@ -1355,25 +1464,39 @@ func codexTurnIDFromResult(raw json.RawMessage) string {
 	return payload.TurnID
 }
 
+// codexTurnError returns "" only for a turn/completed that explicitly says
+// status "completed" with no error. Anything else, whether a failure
+// status, an error object, a missing, unknown or in-progress status, or an
+// unparseable payload, is an error, so a turn is never reported done by
+// default.
 func codexTurnError(params json.RawMessage) string {
 	var payload map[string]any
 	if err := json.Unmarshal(params, &payload); err != nil {
-		return ""
+		return "Codex turn/completed payload could not be parsed"
 	}
+	status, hasStatus := "", false
 	if turn, _ := payload["turn"].(map[string]any); turn != nil {
 		if errMap, _ := turn["error"].(map[string]any); errMap != nil {
 			if msg, _ := errMap["message"].(string); msg != "" {
 				return msg
 			}
+			return "Codex turn reported an error"
 		}
-		if status, _ := turn["status"].(string); codexTurnStatusIsFailure(status) {
-			return "Codex turn " + status
-		}
+		status, hasStatus = turn["status"].(string)
 	}
-	if status, _ := payload["status"].(string); codexTurnStatusIsFailure(status) {
+	if !hasStatus {
+		status, hasStatus = payload["status"].(string)
+	}
+	switch {
+	case !hasStatus || status == "":
+		return "Codex turn/completed carried no status"
+	case status == "completed":
+		return ""
+	case codexTurnStatusIsFailure(status):
 		return "Codex turn " + status
+	default:
+		return "Codex turn ended with unexpected status " + strconv.Quote(status)
 	}
-	return ""
 }
 
 func codexItem(params json.RawMessage) map[string]any {
