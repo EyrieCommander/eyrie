@@ -334,9 +334,13 @@ export default function CommanderChat({ phase }: Props) {
 
   /** Pre-fill the chat input (used by "ask commander" CTAs). */
   const prefill = useCallback((text: string) => {
+    // "Ask commander" actions target the commander: switch back to it if
+    // the Chief tab is showing, or the prefilled input would be unmounted.
+    setTarget("commander");
     setInput(text);
     if (!expanded) setExpanded(true);
-    requestAnimationFrame(() => inputRef.current?.focus());
+    // Two frames: one for the target switch to mount the commander input.
+    requestAnimationFrame(() => requestAnimationFrame(() => inputRef.current?.focus()));
   }, [expanded]);
 
   // Listen for prefill events dispatched by other components (avoids

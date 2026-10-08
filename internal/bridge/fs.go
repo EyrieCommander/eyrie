@@ -58,6 +58,7 @@ var (
 	errTooLarge    = &fsError{http.StatusRequestEntityTooLarge, "too_large"}
 	errNotDir      = &fsError{http.StatusBadRequest, "not_a_directory"}
 	errNotFile     = &fsError{http.StatusBadRequest, "not_a_file"}
+	errReadFailed  = &fsError{http.StatusInternalServerError, "read_failed"}
 )
 
 // FS is the read-only, allowlisted view of Dan's folders.
@@ -350,7 +351,17 @@ func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
 	// trailing newline) and budget the content's encoded size against the rest.
 	envelope, _ := json.Marshal(ReadResult{Path: rel, Size: fi.Size(), Offset: offset, LinesReturned: limit, Truncated: false})
 	budget := maxReadBytes - len(envelope) - 1
-	br := bufio.NewReader(io.LimitReader(fh, maxReadFileSize))
+	if err := readLines(io.LimitReader(fh, maxReadFileSize), res, offset, limit, budget); err != nil {
+		return nil, err
+	}
+	return res, nil
+}
+
+// readLines fills res with lines [offset, offset+limit) from r, within the
+// JSON-encoded budget. A read failure other than EOF is an error, never a
+// short successful read.
+func readLines(r io.Reader, res *ReadResult, offset, limit, budget int) error {
+	br := bufio.NewReader(r)
 	var sb strings.Builder
 	encoded := 0
 	line := 0
@@ -372,11 +383,16 @@ func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
 			}
 		}
 		if rerr != nil {
+			if rerr != io.EOF {
+				// A real read failure: don't present partial content as
+				// a successful read.
+				return errReadFailed
+			}
 			break
 		}
 	}
 	res.Content = sb.String()
-	return res, nil
+	return nil
 }
 
 // Hit is one search result. Line 0 means the file name matched.
@@ -387,6 +403,7 @@ type Hit struct {
 }
 
 type searchState struct {
+	alias     string
 	lq        string
 	max       int
 	deadline  time.Time
@@ -415,7 +432,7 @@ func (f *FS) Search(alias, p, q string, max int) ([]Hit, bool, error) {
 	if max <= 0 || max > maxSearchHits {
 		max = maxSearchHits
 	}
-	st := &searchState{lq: strings.ToLower(q), max: max, deadline: time.Now().Add(searchTimeBudget)}
+	st := &searchState{alias: alias, lq: strings.ToLower(q), max: max, deadline: time.Now().Add(searchTimeBudget)}
 	prefix := ""
 	if rel != "." {
 		prefix = rel + "/"
@@ -427,6 +444,10 @@ func (f *FS) Search(alias, p, q string, max int) ([]Hit, bool, error) {
 	}
 	return st.hits, st.truncated, nil
 }
+
+// searchChildHook lets tests change the tree between search opening a
+// subdirectory and checking it. Always nil in production.
+var searchChildHook func(rel string)
 
 // searchDirBatch bounds memory per directory read.
 const searchDirBatch = 256
@@ -461,12 +482,28 @@ func (f *FS) searchDir(d *os.File, prefix string, depth int, st *searchState) {
 					st.truncated = true
 					continue
 				}
+				if searchChildHook != nil {
+					searchChildHook(prefix + name)
+				}
+				// Second guard on every descendant: the directory must still
+				// be the one at this path under the root. A subtree moved out
+				// of the root mid-search is not followed.
+				if !f.sameUnderOSRoot(st.alias, prefix+name, sub) {
+					sub.Close()
+					st.truncated = true
+					continue
+				}
 				f.searchDir(sub, prefix+name+"/", depth+1, st)
 				sub.Close()
 			case t.IsRegular():
 				st.files++
 				fh, err := openChild(d, name, wantFile)
 				if err != nil {
+					st.truncated = true
+					continue
+				}
+				if !f.sameUnderOSRoot(st.alias, prefix+name, fh) {
+					fh.Close()
 					st.truncated = true
 					continue
 				}
