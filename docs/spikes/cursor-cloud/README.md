@@ -20,7 +20,9 @@ them. Re-check before H-CUR1 starts.
 ## Capabilities, as documented
 
 Mapped to the H-01 contract (`internal/harness`, branch
-h-01-execution-contract @ 72495816, not merged).
+h-01-execution-contract, not merged; read at 72495816 and re-checked at
+1b9573cd). Where H-01 cannot yet express what Cursor needs, that is listed
+under "H-01 prerequisites" below; those block H-CUR1.
 
 | H-01 field | Cursor v1 | Status |
 |---|---|---|
@@ -34,8 +36,8 @@ h-01-execution-contract @ 72495816, not merged).
 | Progress events | `GET .../runs/{runId}/stream` (SSE: status, assistant, thinking, tool_call, result, error, done; resumable with `Last-Event-ID`; may return `410 stream_expired`) | supported; Eyrie must not persist assistant/thinking text (H-01 confidentiality) |
 | Cancel | `POST .../runs/{runId}/cancel`; terminal `CANCELLED`; already-terminal is `409 run_not_cancellable` | supported; confirm by polling for `CANCELLED` (cancel response is only `{id}`) |
 | Resume | `POST /v1/agents/{id}/runs` adds a follow-up run on the same agent; only one active run (`409 agent_busy`) | supported (native session = agent id) |
-| Usage | `GET /v1/agents/{id}/usage[?runId=]`: input/output/cache tokens per run; "runs without recorded usage report zeros" | tokens supported, **no cost field**; a zero must be recorded as `unknown`, not 0 (H-01 rule) |
-| Native approvals | none documented in v1: no approval/permission events or respond endpoint | **unsupported**; the agent runs unattended in its VM |
+| Usage | `GET /v1/agents/{id}/usage[?runId=]`: input/output/cache tokens per run; "runs without recorded usage report zeros" | tokens supported, **no cost field**. Per docs/eyrie-api.md the kind is `quota` (plan usage, no per-call price, usd null), not `reported` (which means a reported cost). All-zero usage is `unknown`. Needs H-01 prerequisite P3 |
+| Native approvals | none documented in v1: no approval/permission events or respond endpoint | **unsupported**; the agent runs unattended in its VM. Needs H-01 prerequisite P1 |
 | Auth | user API key or service-account key, Basic or Bearer | key held by Dan; not used here |
 | Rate limits | Cloud Agents API: "standard rate limiting"; default is 20 requests/minute unless an endpoint says otherwise; 429 with `Retry-After` and `X-RateLimit-*` headers | poll interval must stay well under 20/min across all attempts |
 | Cost | no price per run in the API or on the pricing page; billed via the Cursor plan's usage | unknown; spend scope is Dan's |
@@ -44,9 +46,21 @@ h-01-execution-contract @ 72495816, not merged).
 ## Fixtures
 
 `fixtures/` holds one request/response per call the adapter needs, built
-from the documented examples with placeholder ids, and checked against the
-OpenAPI schemas (all 14 validate; a run with an undocumented status is
-rejected):
+from the documented examples with placeholder ids. Check them with:
+
+    python3 docs/spikes/cursor-cloud/validate_fixtures.py [spec.yaml]
+
+It fetches Cursor's OpenAPI spec (or reads a local copy), refuses to run
+unless the spec's sha256 matches the pinned snapshot above, validates each
+fixture against its component schema, and requires three negative controls
+to fail (a run with an undocumented status, a run without `agentId`, a
+create without `prompt`). It exits 0 only if all of that holds. The spec is
+Cursor's document and is not vendored; the pin makes a changed spec stop
+the check instead of silently validating against something else. Needs
+PyYAML and jsonschema. Result at the pin: 14 fixtures ok, 3 controls
+rejected. A fixture with a made-up status fails it (checked).
+
+The fixtures:
 
 - create-agent request (explicit model, `agentId`, one repo, no PR, no
   push to the starting ref) and response
@@ -60,8 +74,9 @@ give codes, not messages.
 
 ## Go/no-go for H-CUR1
 
-**Go, scoped**, for an adapter that launches one bounded attempt and polls
-it to a terminal state, with these rules:
+**Go, scoped and conditional**: the API supports a bounded launch-and-poll
+adapter, but H-CUR1 must not start until the H-01 prerequisites below land.
+The adapter rules:
 
 1. Always send `model.id`; check it against `GET /v1/models` before launch;
    refuse on `invalid_model` (no default fallback).
@@ -69,16 +84,43 @@ it to a terminal state, with these rules:
    whose response was lost is reconciled by GET, never re-POSTed blind.
 3. Send `workOnCurrentBranch:false`, `autoCreatePR:false`; record the pushed
    `git.branches[]` as the outcome, not a merge.
-4. Capabilities: Launch, Cancel, Resume, Usage (tokens, `reported`; zero
-   means unknown) true; **NativeApprovals false**. H-01's Check must then
-   refuse a Cursor request that needs interactive approvals: the approval
-   happens once, before dispatch (S2-07 / PK-I1), and Cursor runs
-   unattended.
-5. Cancel is confirmed only by a later `CANCELLED` read; a cancel call that
-   errors or times out leaves the attempt `unknown`.
+4. Capabilities: Launch, Cancel, Resume, Usage true; **NativeApprovals
+   false**. Usage is tokens with kind `quota` and cost unknown (P3).
+5. The adapter's Wait returns the terminal status it actually read
+   (`FINISHED`, `ERROR`, `CANCELLED`, `EXPIRED`), and H-01 records that
+   (P2). A cancel call that errors, or a poll that fails, leaves the
+   attempt `unknown`.
 6. Never persist `result`, assistant or thinking text in receipts.
 
-**Not decided here (needs Dan or chief):**
+## H-01 prerequisites (block H-CUR1)
+
+Checked against h-01-execution-contract @ 1b9573cd.
+
+- **P1, unattended dispatch.** `Check` never looks at
+  `Capabilities.NativeApprovals`, and `Request` has no way to say an attempt
+  requires per-action approval. Setting NativeApprovals false therefore
+  does not stop a Cursor dispatch. Needed: a Request field for the approval
+  mode (for example "requires interactive approval" versus "pre-approved
+  for unattended run", the latter only with an `ApprovalBinding`), and
+  `Check` refusing an interactive request on an adapter without native
+  approvals. Until then the Cursor adapter must refuse every request
+  itself, so H-CUR1 waits.
+- **P2, confirmed terminal state.** In the cancel path `Run` records
+  `cancelled` whenever Wait returns nil or ErrCancelled. If the run
+  finished before the cancel landed, Cursor reports `FINISHED`, and the
+  receipt would say cancelled. Needed: the adapter's Result (or a typed
+  error) carries the runtime's observed terminal state, and Run records
+  that state: `FINISHED` stays succeeded even after a cancel request, only
+  `CANCELLED` is cancelled, and a poll or cancel failure is unknown.
+- **P3, token usage without cost.** H-01 `Usage` has `CostUSD float64`, so
+  missing cost reads as $0, and its kinds follow eyrie-api.md where
+  `reported` means a reported cost. Needed: cost as a nullable field (or a
+  separate "cost unknown" flag) so tokens keep their provenance while cost
+  stays null with kind `quota`, matching docs/eyrie-api.md.
+
+These are H-01 changes, not Cursor ones; the H-01 owner decides how.
+
+## Not decided here (needs Dan or chief)
 
 - H-01 `Workspace` is an absolute local path; Cursor runs in its own VM on
   a repo URL + ref. Either H-01 gains a remote-repo workspace form, or the
