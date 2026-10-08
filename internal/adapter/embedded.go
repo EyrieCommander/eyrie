@@ -58,12 +58,12 @@ type EmbeddedAdapter struct {
 	cancelFn  context.CancelFunc // cancels cancelCtx
 
 	// Core components, initialized on Start()
-	llmProvider  embedded.LLMProvider
-	tools        *embedded.ToolRegistry
-	sessions     *embedded.SessionStore
-	logBuf       *embedded.LogBuffer
-	loop         *embedded.AgentLoop
-	vault        *config.KeyVault
+	llmProvider embedded.LLMProvider
+	tools       *embedded.ToolRegistry
+	sessions    *embedded.SessionStore
+	logBuf      *embedded.LogBuffer
+	loop        *embedded.AgentLoop
+	vault       *config.KeyVault
 
 	// Cached identity files to avoid re-reading disk on every message
 	idCache identityCache
@@ -123,8 +123,8 @@ func (a *EmbeddedAdapter) loadConfig() {
 
 func (a *EmbeddedAdapter) ID() string        { return a.id }
 func (a *EmbeddedAdapter) Name() string      { return a.name }
-func (a *EmbeddedAdapter) Framework() string  { return FrameworkEmbedded }
-func (a *EmbeddedAdapter) BaseURL() string    { return "" }
+func (a *EmbeddedAdapter) Framework() string { return FrameworkEmbedded }
+func (a *EmbeddedAdapter) BaseURL() string   { return "" }
 
 // --- Probing ---
 

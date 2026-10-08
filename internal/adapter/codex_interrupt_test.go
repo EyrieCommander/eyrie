@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -78,12 +80,9 @@ func startInterruptServer(t *testing.T, mode string) (*interruptServer, *codexRP
 func startTestRun(t *testing.T, a *CodexAdapter, key string, srv *interruptServer, c *codexRPCClient, turnID string) (<-chan ChatEvent, *int32) {
 	t.Helper()
 	var kills int32
-	run := &codexRun{
-		client:   c,
-		threadID: "thr_1",
-		kill:     func() { atomic.AddInt32(&kills, 1); srv.hangUp() },
-		done:     make(chan struct{}),
-	}
+	run := &codexRun{done: make(chan struct{})}
+	run.setThread(c, "thr_1")
+	run.setKill(func() { atomic.AddInt32(&kills, 1); srv.hangUp() })
 	run.setTurnID(turnID)
 	if err := a.registerRun(key, run); err != nil {
 		t.Fatal(err)
@@ -155,7 +154,10 @@ func TestCodexInterruptKillsWhenTurnDoesNotEnd(t *testing.T) {
 	if time.Since(start) < codexInterruptGrace {
 		t.Fatal("killed before the grace period")
 	}
-	drain(ch)
+	events := drain(ch)
+	if len(events) == 0 || events[len(events)-1].Type != "error" {
+		t.Fatalf("events after forced kill = %+v; must end in an error, not look finished", events)
+	}
 }
 
 func TestCodexInterruptRejectedKillsImmediately(t *testing.T) {
@@ -228,9 +230,11 @@ func TestCodexStopInterruptsEveryRun(t *testing.T) {
 
 func TestCodexOneTurnPerSession(t *testing.T) {
 	a := &CodexAdapter{id: "t-6"}
-	if err := a.registerRun("s", &codexRun{done: make(chan struct{})}); err != nil {
+	r := &codexRun{done: make(chan struct{})}
+	if err := a.registerRun("s", r); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { a.unregisterRun("s", r) })
 	if err := a.registerRun("s", &codexRun{done: make(chan struct{})}); err == nil {
 		t.Fatal("second concurrent turn on one session was allowed")
 	}
@@ -278,4 +282,34 @@ func TestCodexStopLeavesOtherAgentsAlone(t *testing.T) {
 	}
 	_ = other.Interrupt(context.Background(), "s")
 	drain(ch)
+}
+
+func TestCodexForcedKillWithNoOutputEndsInError(t *testing.T) {
+	shortInterruptTimers(t)
+	a := &CodexAdapter{id: "t-forced-quiet"}
+	srv, c := startInterruptServer(t, "reject")
+	ch, _ := startTestRun(t, a, "s", srv, c, "turn_1")
+	_ = a.Interrupt(context.Background(), "s")
+	resp, err := (&chanAgent{ch: ch}).collect()
+	if err == nil {
+		t.Fatalf("forced kill returned success with %q", resp)
+	}
+}
+
+// chanAgent mirrors SendMessage's reading of the event stream.
+type chanAgent struct{ ch <-chan ChatEvent }
+
+func (c *chanAgent) collect() (string, error) {
+	var b strings.Builder
+	for e := range c.ch {
+		switch e.Type {
+		case "delta":
+			b.WriteString(e.Content)
+		case "done":
+			return b.String(), nil
+		case "error":
+			return "", errors.New(e.Error)
+		}
+	}
+	return b.String(), nil
 }
