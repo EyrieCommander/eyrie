@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -160,7 +162,8 @@ func TestFrameworkVersionCacheInvalidatesOnBinaryChange(t *testing.T) {
 // instead of waiting for the child. The fake signals (via a ready file) that
 // the child is running before it blocks, and the probe timeout is long
 // enough that this happens before the kill, so the held-pipe case is
-// actually exercised. The failure is cached: a second call runs no probe.
+// actually exercised. The child is stopped by the timeout itself (cleanup
+// is only a safety net). The failure is cached: a second call runs no probe.
 func TestFrameworkVersionProbeIsBounded(t *testing.T) {
 	resetFrameworkVersionCacheForTest()
 	t.Cleanup(resetFrameworkVersionCacheForTest)
@@ -197,11 +200,70 @@ func TestFrameworkVersionProbeIsBounded(t *testing.T) {
 	if limit := bound + frameworkVersionWaitDelay + 5*time.Second; elapsed > limit {
 		t.Fatalf("probe took %v; bound is %v + %v WaitDelay (child kept stdout open)", elapsed, bound, frameworkVersionWaitDelay)
 	}
+	// The probe's child is stopped on timeout, not left for t.Cleanup.
+	{
+		b, err := os.ReadFile(pidFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(2 * time.Second)
+		for syscall.Kill(pid, 0) == nil {
+			if time.Now().After(deadline) {
+				t.Fatalf("probe child %d still running after the probe timed out", pid)
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	}
 	if got := frameworkVersion(fw); got != "" {
 		t.Fatalf("second = %q", got)
 	}
 	if n := probes.Load(); n != 1 {
 		t.Fatalf("probes run = %d, want 1 (failure should be cached)", n)
+	}
+}
+
+// A child that leaves the probe's process group (setsid, as daemons do)
+// survives the group kill and still holds stdout. WaitDelay is what keeps
+// the call bounded then. The escaped child is killed in cleanup.
+func TestFrameworkVersionProbeBoundedWhenChildEscapesGroup(t *testing.T) {
+	perl, err := exec.LookPath("perl")
+	if err != nil {
+		t.Skip("perl not available to setsid a child")
+	}
+	resetFrameworkVersionCacheForTest()
+	t.Cleanup(resetFrameworkVersionCacheForTest)
+	const bound = 2 * time.Second
+	withProbeTimeout(t, bound)
+
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "child.pid")
+	t.Cleanup(func() {
+		if b, err := os.ReadFile(pidFile); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(b))); err == nil {
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+	})
+	escape := fmt.Sprintf(`%[1]q -MPOSIX -e 'POSIX::setsid(); exec "sleep", "60"' &
+echo $! > %[2]q.tmp && mv %[2]q.tmp %[2]q
+exec sleep 60`, perl, pidFile)
+	binaryPath, _ := fakeVersionBinary(t, dir, "never", escape)
+	fw := registry.Framework{ID: "fake-framework", BinaryPath: binaryPath}
+
+	start := time.Now()
+	if got := frameworkVersion(fw); got != "" {
+		t.Fatalf("version = %q, want empty", got)
+	}
+	elapsed := time.Since(start)
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Skip("fake binary was killed before its child started (machine too loaded)")
+	}
+	if limit := bound + frameworkVersionWaitDelay + 5*time.Second; elapsed > limit {
+		t.Fatalf("probe took %v; an escaped child holding stdout must not extend it past %v + WaitDelay", elapsed, bound)
 	}
 }
 

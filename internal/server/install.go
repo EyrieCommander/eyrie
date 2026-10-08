@@ -198,6 +198,11 @@ const frameworkVersionWaitDelay = 500 * time.Millisecond
 // probes deterministically; production never replaces it.
 var runVersionProbe = func(ctx context.Context, binaryPath string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, binaryPath, "--version")
+	// Own process group, and kill the whole group on timeout: CommandContext
+	// alone kills only the direct process, so a child the binary started
+	// would outlive the timeout. (Unix-only, like manager.go's Setpgid.)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = frameworkVersionWaitDelay
 	return cmd.CombinedOutput()
 }
