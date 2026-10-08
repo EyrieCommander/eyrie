@@ -308,17 +308,22 @@ func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
 	res := &ReadResult{Path: rel, Size: fi.Size(), Offset: offset}
 	br := bufio.NewReader(io.LimitReader(fh, maxReadFileSize))
 	var sb strings.Builder
+	encoded := 0
 	line := 0
 	for {
 		s, rerr := br.ReadString('\n')
 		if s != "" {
 			line++
 			if line >= offset {
-				if res.LinesReturned == limit || sb.Len()+len(s) > maxReadBytes {
+				// Budget the JSON-encoded size, not raw bytes: escaping
+				// (<, >, &, quotes, control chars) can grow content ~6x.
+				enc := jsonStringLen(s)
+				if res.LinesReturned == limit || encoded+enc > maxReadBytes {
 					res.Truncated = true
 					break
 				}
 				sb.WriteString(s)
+				encoded += enc
 				res.LinesReturned++
 			}
 		}
@@ -379,71 +384,93 @@ func (f *FS) Search(alias, p, q string, max int) ([]Hit, bool, error) {
 	return st.hits, st.truncated, nil
 }
 
+// searchDirBatch bounds memory per directory read.
+const searchDirBatch = 256
+
+// searchDir walks d in bounded batches, checking the budget per entry. Any
+// entry it could not inspect (read, open or stat error) marks the result
+// truncated, so a partial answer is never reported as complete. Entries
+// are visited in directory order (sorting would need the whole listing).
 func (f *FS) searchDir(d *os.File, prefix string, depth int, st *searchState) {
 	if depth > maxSearchDepth {
 		st.truncated = true
 		return
 	}
-	des, err := d.ReadDir(-1)
-	if err != nil {
-		return
-	}
-	sort.Slice(des, func(i, j int) bool { return des[i].Name() < des[j].Name() })
-	for _, de := range des {
+	for {
 		if st.over() {
 			return
 		}
-		name := de.Name()
-		if f.denied(name) {
-			continue
+		des, err := d.ReadDir(searchDirBatch)
+		for _, de := range des {
+			if st.over() {
+				return
+			}
+			name := de.Name()
+			if f.denied(name) {
+				continue
+			}
+			t := de.Type()
+			switch {
+			case t.IsDir():
+				sub, err := openChild(d, name, wantDir)
+				if err != nil {
+					st.truncated = true
+					continue
+				}
+				f.searchDir(sub, prefix+name+"/", depth+1, st)
+				sub.Close()
+			case t.IsRegular():
+				st.files++
+				fh, err := openChild(d, name, wantFile)
+				if err != nil {
+					st.truncated = true
+					continue
+				}
+				f.searchFile(fh, name, prefix+name, st)
+				fh.Close()
+			}
 		}
-		t := de.Type()
-		switch {
-		case t.IsDir():
-			sub, err := openChild(d, name, wantDir)
-			if err != nil {
-				continue
+		if err != nil {
+			if err != io.EOF {
+				st.truncated = true
 			}
-			f.searchDir(sub, prefix+name+"/", depth+1, st)
-			sub.Close()
-		case t.IsRegular():
-			st.files++
-			fh, err := openChild(d, name, wantFile)
-			if err != nil {
-				continue
-			}
-			f.searchFile(fh, name, prefix+name, st)
-			fh.Close()
+			return
 		}
 	}
 }
 
-// searchFile skips binary and oversized files entirely (name included),
-// then matches the name and every line. Lines are read whole (the file is
-// already capped at maxReadFileSize), so a long line can't end the scan
-// early; a read error marks the result truncated.
+// searchFile skips binary files entirely (name included), then matches the
+// name and every line. There is no size cap here (that limit is for /read);
+// the time and hit budgets bound the work. Lines are read whole with a
+// per-line cap; a longer line is matched on its first maxSearchLine bytes
+// and the result is marked truncated. Stat, sniff and read errors also mark
+// the result truncated.
 func (f *FS) searchFile(fh *os.File, name, rel string, st *searchState) {
-	fi, err := fh.Stat()
-	if err != nil || fi.Size() > maxReadFileSize {
+	bin, err := sniff(fh)
+	if err != nil {
+		st.truncated = true
 		return
 	}
-	if bin, err := sniff(fh); err != nil || bin {
+	if bin {
 		return
 	}
 	if strings.Contains(strings.ToLower(name), st.lq) {
 		st.hits = append(st.hits, Hit{Path: rel, Line: 0, Snippet: snippet(name, st.lq)})
 	}
-	br := bufio.NewReader(io.LimitReader(fh, maxReadFileSize))
+	br := bufio.NewReaderSize(fh, 64<<10)
 	n := 0
 	for {
-		line, rerr := br.ReadString('\n')
-		if line != "" {
+		line, long, rerr := readLineCapped(br, maxSearchLine)
+		if line != "" || long {
 			n++
+			if long {
+				st.truncated = true
+			}
 			if len(st.hits) >= st.max {
 				st.truncated = true
 				return
 			}
-			if n%1024 == 0 && time.Now().After(st.deadline) {
+			if n%256 == 0 && time.Now().After(st.deadline) {
 				st.truncated = true
 				return
 			}
@@ -458,6 +485,66 @@ func (f *FS) searchFile(fh *os.File, name, rel string, st *searchState) {
 			return
 		}
 	}
+}
+
+// maxSearchLine caps how much of one line search keeps in memory.
+const maxSearchLine = 4 << 20
+
+// readLineCapped returns the next line (with its newline), keeping at most
+// max bytes; long reports that the rest of the line was discarded.
+func readLineCapped(br *bufio.Reader, max int) (line string, long bool, err error) {
+	var sb strings.Builder
+	for {
+		frag, isPrefix, rerr := br.ReadLine()
+		if sb.Len() < max {
+			room := max - sb.Len()
+			if len(frag) > room {
+				frag = frag[:room]
+				long = true
+			}
+			sb.Write(frag)
+		} else if len(frag) > 0 {
+			long = true
+		}
+		if rerr != nil {
+			return sb.String(), long, rerr
+		}
+		if !isPrefix {
+			sb.WriteByte('\n')
+			return sb.String(), long, nil
+		}
+	}
+}
+
+// jsonStringLen is the number of bytes encoding/json writes for s's
+// contents (without quotes), with its default HTML escaping.
+func jsonStringLen(s string) int {
+	n := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c < utf8.RuneSelf {
+			switch {
+			case c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t' || c == '\b' || c == '\f':
+				n += 2
+			case c < 0x20 || c == '<' || c == '>' || c == '&':
+				n += 6 // \u00XX
+			default:
+				n++
+			}
+			i++
+			continue
+		}
+		r, size := utf8.DecodeRuneInString(s[i:])
+		if r == utf8.RuneError && size == 1 {
+			n += 6 // \ufffd
+		} else if r == '\u2028' || r == '\u2029' {
+			n += 6
+		} else {
+			n += size
+		}
+		i += size
+	}
+	return n
 }
 
 // snippet returns up to maxSnippetRunes runes of s around the first match.

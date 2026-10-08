@@ -53,8 +53,8 @@ The dashboard port (7200) must not answer on the tailnet or tunnel address at al
 | `GET /bridge/v1/prompts/{message_id}` | `{conversation_id, message_id, text, ts, state}`; full prompt when the wake was truncated. |
 | `GET /bridge/v1/fs/roots` | Root aliases only. |
 | `GET /bridge/v1/fs/list?root=&path=` | `{entries:[{name,type,size,mtime}], truncated}`, sorted, ≤ 1,000. |
-| `GET /bridge/v1/fs/read?root=&path=&offset=&limit=` | Lines from `offset` (1-based, default 1), `limit` default 400, max 2,000; ≤ 256 KB. Files > 10 MB: 413. Binary: 415. |
-| `GET /bridge/v1/fs/search?root=&q=&path=&max=` | Case-insensitive literal match on names and contents; ≤ 200 hits; 5 s / 20,000-file budget with `truncated`. |
+| `GET /bridge/v1/fs/read?root=&path=&offset=&limit=` | Lines from `offset` (1-based, default 1), `limit` default 400, max 2,000; content ≤ 256 KB *as JSON-encoded* (escaping counted). Files > 10 MB: 413. Binary: 415. |
+| `GET /bridge/v1/fs/search?root=&q=&path=&max=` | Case-insensitive literal match on names and contents of text files of any size; ≤ 200 hits; 5 s / 20,000-file budget. `truncated:true` whenever the answer may be incomplete: a budget or hit cap was reached, a line over 4 MB was cut, or an entry could not be read. Directories are read in batches of 256 in directory order. |
 
 Any other path is 404; a wrong method on a bridge route is 405.
 
