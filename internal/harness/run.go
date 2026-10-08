@@ -131,8 +131,13 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	// cancellation begins, no approver decision can reach the runtime.
 	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
+	// approvalsCtx ends on timeout, on caller cancellation (at any point,
+	// including during the receipt writes below), or when Run stops
+	// approvals explicitly.
 	approvalsCtx, stopApprovals := context.WithCancel(runCtx)
 	defer stopApprovals()
+	stopOnCaller := context.AfterFunc(ctx, stopApprovals)
+	defer stopOnCaller()
 	if startWhy != "" {
 		// Cancellation arrived while Start was returning: no prompt for
 		// this attempt may be answered, not even one already buffered.
@@ -181,8 +186,15 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 			}
 		}
 	}
+	// Cancellation may also have arrived during the started write.
+	if startWhy == "" {
+		startWhy = cancelReason(ctx, runCtx, req)
+	}
 	if startWhy == "" {
 		go pump()
+		afterPumpStart()
+	} else {
+		stopApprovals()
 	}
 
 	type waited struct {
@@ -208,6 +220,7 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 			why = "approval: " + approvalClass(err)
 		}
 	}
+	beforeStopApprovals()
 	stopApprovals()
 
 	// Cancel first, then record: a stalled receipt write must not delay
@@ -222,6 +235,13 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	go func() { cancelErr <- h.Cancel(cancelCtx) }()
 
 	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
+		// Keep the cancel alive for its full grace period: returning would
+		// run the deferred cancelCancel and could abort the RPC mid-flight.
+		select {
+		case <-cancelErr:
+		case <-done:
+		case <-deadline.C:
+		}
 		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
 	}
 
@@ -327,6 +347,18 @@ func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativeP
 	}
 	return nil
 }
+
+// beforeStopApprovals is a test hook: tests use it to let another pending
+// decision start before cancellation stops approvals. No-op in production.
+var beforeStopApprovals = func() {}
+
+// afterPumpStart is a test hook: tests use it to let the event pump run
+// before Run looks at cancellation. No-op in production.
+var afterPumpStart = func() {}
+
+// beforeWriteSelect is a test hook like beforeStartSelect, for receipt
+// writes. No-op in production.
+var beforeWriteSelect = func() {}
 
 // beforeStartSelect is a test hook: tests use it to make Start's result
 // and a cancellation ready at the same time. No-op in production.
@@ -444,8 +476,13 @@ func write(ctx context.Context, rec Recorder, r Receipt) error {
 	defer cancel()
 	res := make(chan error, 1)
 	go func() { res <- rec.Record(wctx, r) }()
+	beforeWriteSelect()
 	select {
 	case err := <-res:
+		// A result that arrived together with the deadline is late.
+		if wctx.Err() != nil {
+			return errReceiptStalled
+		}
 		return err
 	case <-wctx.Done():
 		return errReceiptStalled

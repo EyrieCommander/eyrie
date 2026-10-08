@@ -41,7 +41,13 @@ type FakeScript struct {
 	StartIgnoresCtx bool
 	// StartChecksCtx makes Start return ctx.Err() at once if ctx is done.
 	StartChecksCtx bool
-	RespondErr     error
+	// ConcurrentPrompts emits every prompt at once instead of waiting for
+	// each answer, as runtimes that run tools in parallel do.
+	ConcurrentPrompts bool
+	// CancelDelay makes Cancel take this long to deliver, honouring ctx:
+	// if ctx ends first, the cancel is not delivered.
+	CancelDelay time.Duration
+	RespondErr  error
 }
 
 func (f *Fake) Name() string { return f.NameValue }
@@ -119,6 +125,14 @@ type fakeHandle struct {
 
 func (h *fakeHandle) run() {
 	defer close(h.events)
+	if h.script.ConcurrentPrompts {
+		for i := range h.script.Prompts {
+			p := h.script.Prompts[i]
+			h.events <- Event{Kind: EventApproval, Approval: &p}
+		}
+		<-h.ended
+		return
+	}
 	for i := range h.script.Prompts {
 		p := h.script.Prompts[i]
 		h.events <- Event{Kind: EventApproval, Approval: &p}
@@ -162,6 +176,13 @@ func (h *fakeHandle) Respond(_ context.Context, promptID, optionID string) error
 }
 
 func (h *fakeHandle) Cancel(ctx context.Context) error {
+	if d := h.script.CancelDelay; d > 0 {
+		select {
+		case <-time.After(d):
+		case <-ctx.Done():
+			return ctx.Err() // aborted before delivery
+		}
+	}
 	h.cancelled.Store(true)
 	if h.script.CancelBlocks {
 		<-ctx.Done()

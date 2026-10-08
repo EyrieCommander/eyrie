@@ -67,10 +67,10 @@ mut run.go "late approver decision sent after cancel" \
 		return errLateDecision
 	}' ''
 mut run.go "approvals not stopped when cancel begins" \
-  '	}
+  '	beforeStopApprovals()
 	stopApprovals()
 
-	// Cancel first' '	}
+	// Cancel first' '	beforeStopApprovals()
 
 	// Cancel first'
 mut run.go "runtime error text stored in receipts" \
@@ -149,28 +149,47 @@ mut run.go "pump blocks on a stuck approver" \
 mut run.go "pump runs after a cancelled start" \
   '	if startWhy == "" {
 		go pump()
-	}' '	go pump()' \
+		afterPumpStart()
+	} else {
+		stopApprovals()
+	}' '	go pump()
+	afterPumpStart()' \
   '	if ctx.Err() != nil {
 		return errLateDecision // cancellation began; don'"'"'t even ask
 	}' ''
-# Not a mutant: the early stopApprovals() after a cancelled start and the
-# pump gate are redundant (either alone blocks an answer). Removing both
-# leaves only a sub-microsecond race against the later stopApprovals(),
-# which no test hits reliably, so it is not counted either way.
 mut run.go "cancel_requested recorded before Cancel is sent" \
   '	go func() { cancelErr <- h.Cancel(cancelCtx) }()
 
-	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
-		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
-	}' '	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
-		boundedCancel(ctx, h, grace)
-		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {' '	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
+		go func() { cancelErr <- h.Cancel(cancelCtx) }()' \
+  '		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
 	}
-	go func() { cancelErr <- h.Cancel(cancelCtx) }()'
+' '		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+	}
+	go func() { cancelErr <- h.Cancel(cancelCtx) }()
+'
 mut run.go "receipt writes unbounded" \
   '	case <-wctx.Done():
 		return errReceiptStalled' '	case <-make(chan struct{}):
 		return errReceiptStalled'
 mut run.go "start result trusted when cancellation also ready" \
   '		return s.h, cancelReason(ctx, runCtx, req), s.err' '		return s.h, "", s.err'
+mut run.go "caller cancel during the started write: pump starts anyway" \
+  '	stopOnCaller := context.AfterFunc(ctx, stopApprovals)
+	defer stopOnCaller()' '' \
+  '	if startWhy == "" {
+		startWhy = cancelReason(ctx, runCtx, req)
+	}' ''
+mut run.go "failed cancel_requested write aborts the cancel" \
+  '		select {
+		case <-cancelErr:
+		case <-done:
+		case <-deadline.C:
+		}
+		return unknown(base, fmt.Errorf("record cancel_requested' '		return unknown(base, fmt.Errorf("record cancel_requested'
+mut run.go "late receipt write accepted" \
+  '		if wctx.Err() != nil {
+			return errReceiptStalled
+		}
+		return err' '		return err'
 exit $bad

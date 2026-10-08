@@ -817,7 +817,7 @@ func TestStuckApproverDoesNotHoldRun(t *testing.T) {
 }
 
 // runCtxWithin is runWithin with a caller context and approver.
-func runCtxWithin(t *testing.T, d time.Duration, ctx context.Context, f *Fake, rec *MemoryRecorder, appr Approver, req Request) (Receipt, error) {
+func runCtxWithin(t *testing.T, d time.Duration, ctx context.Context, f *Fake, rec Recorder, appr Approver, req Request) (Receipt, error) {
 	t.Helper()
 	type out struct {
 		r   Receipt
@@ -998,5 +998,149 @@ func TestStartResultAndTimeoutTogether(t *testing.T) {
 		if r.State != StateCancelled || !strings.Contains(r.Reason, "timeout") {
 			t.Fatalf("run %d: state = %v reason = %q, want cancelled by timeout", i, r.State, r.Reason)
 		}
+	}
+}
+
+// Review a6603078 #1: caller cancellation during the started write (after
+// Start returned cleanly) still keeps a buffered prompt from the approver.
+func TestCancelDuringStartedWriteBlocksApprovals(t *testing.T) {
+	for i := 0; i < 20; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		rec := &stallRecorder{state: StateStarted, release: make(chan struct{})}
+		rec.onStall = func() { cancel(); time.AfterFunc(20*time.Millisecond, func() { close(rec.release) }) }
+		// If the pump starts (it must not), give it time to reach the
+		// approver before Run handles the cancel.
+		orig := afterPumpStart
+		afterPumpStart = func() { time.Sleep(30 * time.Millisecond) }
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, KeepEventsOpen: true}}
+		appr := &countingApprover{}
+		r, err := runCtxWithin(t, 5*time.Second, ctx, f, rec, appr, goodRequest("a1"))
+		afterPumpStart = orig
+		f.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.State != StateCancelled || !strings.Contains(r.Reason, "cancelled by caller") {
+			t.Fatalf("run %d: state = %v reason = %q", i, r.State, r.Reason)
+		}
+		time.Sleep(10 * time.Millisecond)
+		if n := appr.calls.Load(); n != 0 {
+			t.Fatalf("run %d: approver asked %d times after caller cancel", i, n)
+		}
+	}
+}
+
+// Review #2: a failed cancel_requested write doesn't cut the cancel RPC
+// short; a ctx-honouring adapter still gets its grace period to deliver.
+func TestCancelSurvivesFailedCancelRequestedWrite(t *testing.T) {
+	rec := &MemoryRecorder{Fail: func(r Receipt) error {
+		if r.State == StateCancelRequested {
+			return errors.New("disk full")
+		}
+		return nil
+	}}
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true, CancelDelay: 150 * time.Millisecond}}
+	t.Cleanup(f.Finish)
+	req := goodRequest("a1")
+	req.Limits.Timeout = 20 * time.Millisecond
+	req.Limits.CancelGrace = time.Second
+	r, err := runCtxWithin(t, 5*time.Second, context.Background(), f, rec, nil, req)
+	if err == nil || r.State != StateUnknown {
+		t.Fatalf("state = %v err = %v", r.State, err)
+	}
+	if !f.Cancelled() {
+		t.Fatal("cancel RPC was aborted before delivery when the cancel_requested write failed")
+	}
+}
+
+// lateRecorder succeeds, but only once its write deadline has passed.
+type lateRecorder struct{ MemoryRecorder }
+
+func (l *lateRecorder) Record(ctx context.Context, r Receipt) error {
+	<-ctx.Done()
+	return l.MemoryRecorder.Record(context.Background(), r)
+}
+
+// Review #3: a write that succeeds after its deadline counts as failed even
+// when the result and the deadline are ready together (hook holds the
+// select so both are). The pre-launch write being late means no launch.
+func TestLateReceiptWriteCountsAsFailed(t *testing.T) {
+	orig := beforeWriteSelect
+	beforeWriteSelect = func() { time.Sleep(30 * time.Millisecond) }
+	t.Cleanup(func() { beforeWriteSelect = orig })
+	for i := 0; i < 40; i++ {
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Result: Result{Success: true}}}
+		req := goodRequest("a1")
+		req.Limits.ReceiptTimeout = 5 * time.Millisecond
+		_, err := Run(context.Background(), f, &lateRecorder{}, nil, req)
+		if err == nil || f.Starts() != 0 {
+			t.Fatalf("run %d: late pre-launch write accepted: err = %v starts = %d", i, err, f.Starts())
+		}
+	}
+}
+
+// perPromptApprover: p1 gets an option the runtime didn't offer (which
+// starts cancellation); p2 blocks, ignoring ctx, until release, then
+// approves.
+type perPromptApprover struct {
+	entered chan struct{}
+	release chan struct{}
+	done    chan struct{}
+}
+
+func (a *perPromptApprover) Decide(_ context.Context, _ Request, p NativePrompt) (string, error) {
+	if p.ID == "p1" {
+		return "not-an-option", nil
+	}
+	defer close(a.done)
+	close(a.entered)
+	<-a.release
+	return "accept", nil
+}
+
+// When an approval failure starts cancellation (no caller cancel, no
+// timeout), approvals still stop: a decision already in progress for the
+// next prompt, returned after cancellation began, is not sent. The hook
+// holds Run until that decision is in progress, so the case is exercised.
+func TestApprovalFailureStopsOtherPendingDecisions(t *testing.T) {
+	p2 := cmdPrompt
+	p2.ID = "p2"
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{
+		Prompts: []NativePrompt{cmdPrompt, p2}, ConcurrentPrompts: true, IgnoreCancel: true,
+	}}
+	t.Cleanup(f.Finish)
+	appr := &perPromptApprover{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
+	orig := beforeStopApprovals
+	beforeStopApprovals = func() {
+		select {
+		case <-appr.entered:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	t.Cleanup(func() { beforeStopApprovals = orig })
+	go func() { // release p2 once cancellation has begun
+		deadline := time.Now().Add(4 * time.Second)
+		for !f.Cancelled() && time.Now().Before(deadline) {
+			time.Sleep(5 * time.Millisecond)
+		}
+		close(appr.release)
+	}()
+	req := goodRequest("a1")
+	req.Limits.CancelGrace = 500 * time.Millisecond // still cancelling when p2 returns
+	r, err := runCtxWithin(t, 5*time.Second, context.Background(), f, &MemoryRecorder{}, appr, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.Reason, "not offered") {
+		t.Fatalf("reason = %q", r.Reason)
+	}
+	select {
+	case <-appr.done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("p2 decision never ran; case not exercised")
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := f.Responses(); len(got) != 0 {
+		t.Fatalf("decision sent after cancellation began: %v", got)
 	}
 }
