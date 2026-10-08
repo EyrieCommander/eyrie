@@ -84,9 +84,35 @@ func ReadConfig(path string) (Config, error) {
 		return c, err
 	}
 	if _, err := toml.DecodeFile(path, &c); err != nil {
-		return c, fmt.Errorf("parse %s: %w", path, err)
+		return c, redactParseError(path, err)
 	}
 	return c, nil
+}
+
+// knownKeys are the config keys whose names are safe to show in an error.
+var knownKeys = map[string]bool{
+	"port": true, "chief_wake_url": true, "chief_wake_key": true, "bridge_token_sha256": true,
+	"roots": true, "extra_deny": true, "client_ip_header": true, "access_log": true,
+}
+
+// redactParseError turns a TOML decode error into a diagnostic that never
+// contains file content. The TOML library's messages quote the offending
+// value (an unquoted wake key would land in the log), so only the line and
+// column, and the key name when it is one of ours, are kept.
+func redactParseError(path string, err error) error {
+	var pe toml.ParseError
+	if errors.As(err, &pe) {
+		where := fmt.Sprintf("line %d", pe.Position.Line)
+		if pe.Position.Col > 0 {
+			where += fmt.Sprintf(", column %d", pe.Position.Col)
+		}
+		if knownKeys[pe.LastKey] {
+			where += fmt.Sprintf(" (key %s)", pe.LastKey)
+		}
+		return fmt.Errorf("parse %s: invalid TOML at %s (details withheld because they can contain secret values)", path, where)
+	}
+	// Type errors (e.g. a string where a number belongs) also quote values.
+	return fmt.Errorf("parse %s: invalid bridge config (details withheld because they can contain secret values)", path)
 }
 
 // LoadConfig reads and validates the bridge config. ErrNotConfigured when

@@ -75,16 +75,20 @@ var (
 // for O_NOFOLLOW and so can be raced onto a denied file.
 type FS struct {
 	roots map[string]*rootHandle
-	deny  []string
+	// osRoots is the spec's os.OpenRoot second guard, opened once at
+	// startup alongside each root descriptor. Every successful open is
+	// cross-checked against it (see open).
+	osRoots map[string]*os.Root
+	deny    []string
 }
 
 // NewFS opens each root once. A root that does not exist, is not a
 // directory, or is itself a symlink is skipped (so it 404s) and reported.
 func NewFS(roots map[string]string, extraDeny []string) (*FS, []error) {
-	f := &FS{roots: map[string]*rootHandle{}}
+	f := &FS{roots: map[string]*rootHandle{}, osRoots: map[string]*os.Root{}}
 	f.deny = append(f.deny, baseDeny...)
 	for _, g := range extraDeny {
-		f.deny = append(f.deny, strings.ToLower(g))
+		f.deny = append(f.deny, foldName(g))
 	}
 	var errs []error
 	for alias, p := range roots {
@@ -93,7 +97,14 @@ func NewFS(roots map[string]string, extraDeny []string) (*FS, []error) {
 			errs = append(errs, &rootError{alias, err})
 			continue
 		}
+		r, err := os.OpenRoot(filepath.Clean(p))
+		if err != nil {
+			h.close()
+			errs = append(errs, &rootError{alias, err})
+			continue
+		}
 		f.roots[alias] = h
+		f.osRoots[alias] = r
 	}
 	return f, errs
 }
@@ -102,6 +113,9 @@ func NewFS(roots map[string]string, extraDeny []string) (*FS, []error) {
 func (f *FS) Close() {
 	for _, h := range f.roots {
 		h.close()
+	}
+	for _, r := range f.osRoots {
+		r.Close()
 	}
 }
 
@@ -123,7 +137,7 @@ func (f *FS) Aliases() []string {
 }
 
 func (f *FS) denied(name string) bool {
-	n := strings.ToLower(name)
+	n := foldName(name)
 	for _, pat := range f.deny {
 		if ok, _ := filepath.Match(pat, n); ok {
 			return true
@@ -180,7 +194,31 @@ func (f *FS) open(alias, p string, kind openKind) (*os.File, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
+	// Second guard (spec): os.Root must resolve rel inside the root to the
+	// very file we opened. A mismatch (the path changed under us, or any
+	// escape) fails closed. The primary walk already refused symlinks, so
+	// os.Root's own symlink following can't widen what we serve.
+	if !f.sameUnderOSRoot(alias, rel, fh) {
+		fh.Close()
+		return nil, "", errDenied
+	}
 	return fh, rel, nil
+}
+
+func (f *FS) sameUnderOSRoot(alias, rel string, fh *os.File) bool {
+	r, ok := f.osRoots[alias]
+	if !ok {
+		return false
+	}
+	viaRoot, err := r.Lstat(rel)
+	if err != nil {
+		return false
+	}
+	opened, err := fh.Stat()
+	if err != nil {
+		return false
+	}
+	return os.SameFile(viaRoot, opened)
 }
 
 // Entry is one list result.

@@ -9,7 +9,7 @@ It is a separate `http.Server` (`internal/bridge`) on `127.0.0.1:<port>` with it
 
 ## Off by default
 
-The bridge starts with `eyrie dashboard` only when `~/.eyrie/bridge.toml` exists (override the path with `EYRIE_BRIDGE_CONFIG`), contains a valid `bridge_token_sha256`, and is mode `0600`. If the file is group or world readable, or invalid, the bridge stays off and the dashboard logs why. The dashboard itself still runs.
+The bridge starts with `eyrie dashboard` only when `~/.eyrie/bridge.toml` exists (override the path with `EYRIE_BRIDGE_CONFIG`), contains a valid `bridge_token_sha256`, and is mode `0600`. If the file is group or world readable, or invalid, the bridge stays off and the dashboard logs why. Parse errors report only the line, column and key name, never the offending value, because it may be a secret. The dashboard itself still runs.
 
 **To turn it off:** stop Funnel / the tunnel, then delete or move `~/.eyrie/bridge.toml` and restart `eyrie dashboard`.
 
@@ -64,8 +64,8 @@ Any other path is 404; a wrong method on a bridge route is 405.
 ## Safety rules
 
 - **Paths:** relative only. Absolute paths, NUL bytes, backslashes, and any `..` component are refused (400).
-- **Opening:** each root is opened once at startup as a directory descriptor (a root that is itself a symlink is refused). Every request walks from that descriptor with `openat(O_NOFOLLOW)` one component at a time, so a symlink anywhere in the path is refused (403) at open time, and swapping a file or the root's pathname after startup cannot redirect a read. The final open is non-blocking and the file type is checked with `fstat` on the opened descriptor: FIFOs, devices and sockets are refused (400) without blocking, and hidden from list and search. Unix only; elsewhere every fs call 404s.
-- **Deny list** (built in; `extra_deny` can only add), case-insensitive on every path component: names starting with `.`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.kdbx`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `*.env`, `*secret*`, `*credential*`. Denied paths: 403 on read, hidden from list and search.
+- **Opening:** each root is opened once at startup as a directory descriptor (a root that is itself a symlink is refused). Every request walks from that descriptor with `openat(O_NOFOLLOW)` one component at a time, so a symlink anywhere in the path is refused (403) at open time, and swapping a file or the root's pathname after startup cannot redirect a read. The final open is non-blocking and the file type is checked with `fstat` on the opened descriptor: FIFOs, devices and sockets are refused (400) without blocking, and hidden from list and search. As the spec's second guard, every successful open is cross-checked against an `os.OpenRoot` handle opened at startup: the file `os.Root` resolves at that path must be the same file (`os.SameFile`), otherwise 403. Unix only; elsewhere every fs call 404s.
+- **Deny list** (built in; `extra_deny` can only add), matched on every path component after folding the name the way APFS does (combining marks dropped, full case folding, so `ſecret`, `id_rſa`, `Key` and decomposed accents can't slip past): names starting with `.`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.kdbx`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `*.env`, `*secret*`, `*credential*`. Denied paths: 403 on read, hidden from list and search.
 - **Auth:** constant-time compare of SHA-256(token). Missing/wrong: 401, no body.
 - **Limits:** 60 req/min per token, burst 20; at most 4 concurrent; > 10 failed auths/min from one address → 429. All 429s carry `Retry-After`.
 - **HTTP:** bodies ≤ 64 KB, no CORS headers, `Cache-Control: no-store`.
