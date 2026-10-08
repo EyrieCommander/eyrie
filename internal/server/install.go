@@ -183,6 +183,11 @@ var (
 
 const frameworkVersionCacheTTL = 5 * time.Minute
 
+// frameworkVersionProbeTimeout bounds each `<binary> --version` probe. A var
+// only so tests can separate cache behaviour from subprocess scheduling;
+// production never changes it.
+var frameworkVersionProbeTimeout = 3 * time.Second
+
 // handleListFrameworks returns all frameworks from the registry with installation status
 func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -262,7 +267,8 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 
 // frameworkVersion runs `<binary> --version` and returns the first line of
 // output, trimmed. Returns "" if the binary doesn't exist, isn't executable,
-// or the command fails. Bounded to 3s to avoid hanging on unresponsive binaries.
+// or the command fails. Bounded by frameworkVersionProbeTimeout (3s) to avoid
+// hanging on unresponsive binaries.
 func frameworkVersion(fw registry.Framework) string {
 	binaryPath := resolveFrameworkBinaryPath(fw)
 	now := time.Now()
@@ -278,7 +284,7 @@ func frameworkVersion(fw registry.Framework) string {
 		frameworkVersionCacheMu.Unlock()
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), frameworkVersionProbeTimeout)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
 	version := ""
