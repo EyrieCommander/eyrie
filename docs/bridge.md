@@ -20,7 +20,7 @@ The bridge starts with `eyrie dashboard` only when `~/.eyrie/bridge.toml` exists
 3. Pick roots: `[roots]` maps an alias to an absolute folder, e.g. `picker-docs = "/abs/path"`. The chief only ever sees aliases, never paths.
 4. Generate the token: `eyrie bridge token rotate`. It prints the token **once** and saves only its SHA-256. Give the token and the public bridge URL to the chief through a private secret request.
 5. `eyrie bridge check` validates the file without starting anything.
-6. Restart `eyrie dashboard`. The log line `bridge listening addr=127.0.0.1:7201` confirms it. If the port is taken, the bridge logs `bridge refused to start` and the Chief tab stays off (no prompts are sent with nowhere for replies to land).
+6. Restart `eyrie dashboard`. The log line `bridge listening addr=127.0.0.1:7201` confirms it. If the port is taken, the bridge logs `bridge refused to start` and the Chief tab stays off (no prompts are sent with nowhere for replies to land). A bridge `port` equal to the dashboard port is refused before anything binds, so the dashboard always keeps its own port; `eyrie bridge check` reports the same conflict.
 
 ## Exposing it: Funnel or a tunnel (bridge port only)
 
@@ -53,7 +53,7 @@ The dashboard port (7200) must not answer on the tailnet or tunnel address at al
 | `POST /bridge/v1/reply` | `{conversation_id, in_reply_to, reply_id, text, final}`. `in_reply_to` must be a known message in that conversation (else 404). Idempotent on `reply_id` (`{"ok":true,"duplicate":true}`). `final:false` is an interim line. Text ≤ 32 KB. |
 | `GET /bridge/v1/prompts/{message_id}` | `{conversation_id, message_id, text, ts, state}`; full prompt when the wake was truncated. |
 | `GET /bridge/v1/fs/roots` | Root aliases only. |
-| `GET /bridge/v1/fs/list?root=&path=` | `{entries:[{name,type,size,mtime}], truncated}`, sorted, ≤ 1,000. |
+| `GET /bridge/v1/fs/list?root=&path=` | `{entries:[{name,type,size,mtime}], truncated}`: the first 1,000 visible names in sorted order. The directory is streamed in batches with a bounded result set, so memory doesn't grow with directory size. |
 | `GET /bridge/v1/fs/read?root=&path=&offset=&limit=` | Lines from `offset` (1-based, default 1), `limit` default 400, max 2,000; content ≤ 256 KB *as JSON-encoded* (escaping counted). Files > 10 MB: 413. Binary: 415. |
 | `GET /bridge/v1/fs/search?root=&q=&path=&max=` | Case-insensitive literal match on names and contents of text files of any size; ≤ 200 hits; 5 s / 20,000-file budget. `truncated:true` whenever the answer may be incomplete: a budget or hit cap was reached, a line over 4 MB was cut, or an entry could not be read. Directories are read in batches of 256 in directory order. |
 

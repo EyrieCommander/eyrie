@@ -41,7 +41,15 @@ export default function ChiefChat() {
   const { ref: scrollRef } = useAutoScroll([messages]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
+  // Status and messages are re-read together on every refresh (mount, SSE
+  // connect/reconnect and updates, the 15 s poll), so a status request that
+  // failed during a backend restart doesn't leave the tab "off" for good.
+  // A failed status read keeps the last known status rather than flipping
+  // to "off"; only an explicit answer from the server changes it.
   const reload = useCallback(async () => {
+    fetchChiefStatus()
+      .then(setStatus)
+      .catch(() => setStatus((prev) => prev ?? { enabled: false, wake_configured: false }));
     try {
       setMessages(await fetchChiefMessages());
     } catch {
@@ -50,7 +58,6 @@ export default function ChiefChat() {
   }, []);
 
   useEffect(() => {
-    fetchChiefStatus().then(setStatus).catch(() => setStatus({ enabled: false, wake_configured: false }));
     reload();
     const unsub = subscribeChiefEvents(() => reload());
     const tick = setInterval(() => setNow(Date.now()), 1000);

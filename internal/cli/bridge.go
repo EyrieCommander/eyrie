@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/bridge"
+	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/server"
 	"github.com/spf13/cobra"
 )
@@ -56,6 +57,11 @@ var bridgeCheckCmd = &cobra.Command{
 		if err != nil {
 			return err
 		}
+		if dash, derr := config.Load(); derr == nil {
+			if why := bridgeConflict(cfg, dash); why != "" {
+				return errors.New(why)
+			}
+		}
 		fsys, rerrs := bridge.NewFS(cfg.Roots, cfg.ExtraDeny)
 		defer fsys.Close()
 		for _, e := range rerrs {
@@ -75,7 +81,18 @@ func init() {
 // startBridge starts the bridge listener when configured. It returns a stop
 // func (always non-nil). Any config problem leaves the bridge off and is
 // logged; the dashboard itself still runs.
-func startBridge(srv *server.Server) func() {
+// bridgeConflict reports why a bridge config can't run next to this
+// dashboard, or "" if it can. The bridge binds first, so a bridge port equal
+// to the dashboard port would take the dashboard's port and leave
+// management unable to start.
+func bridgeConflict(cfg bridge.Config, dash config.Config) string {
+	if cfg.Port == dash.Dashboard.Port {
+		return fmt.Sprintf("bridge port %d is the dashboard port; pick another (default %d)", cfg.Port, bridge.DefaultPort)
+	}
+	return ""
+}
+
+func startBridge(srv *server.Server, dash config.Config) func() {
 	noop := func() {}
 	path, err := bridge.DefaultConfigPath()
 	if err != nil {
@@ -88,6 +105,10 @@ func startBridge(srv *server.Server) func() {
 	}
 	if err != nil {
 		slog.Error("bridge refused to start", "error", err)
+		return noop
+	}
+	if why := bridgeConflict(cfg, dash); why != "" {
+		slog.Error("bridge refused to start", "error", why)
 		return noop
 	}
 	fsys, rerrs := bridge.NewFS(cfg.Roots, cfg.ExtraDeny)

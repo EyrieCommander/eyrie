@@ -62,7 +62,7 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 
 	// The bridge is a separate loopback listener with its own mux; it is
 	// off unless ~/.eyrie/bridge.toml exists (see docs/bridge.md).
-	stopBridge := startBridge(srv)
+	stopBridge := startBridge(srv, cfg)
 	defer stopBridge()
 
 	if cfg.Dashboard.OpenBrowser && !dashboardNoOpen {

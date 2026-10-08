@@ -3,6 +3,7 @@ package bridge
 import (
 	"bufio"
 	"bytes"
+	"container/heap"
 	"encoding/json"
 	"errors"
 	"io"
@@ -238,40 +239,84 @@ func (f *FS) List(alias, p string) ([]Entry, bool, error) {
 		return nil, false, err
 	}
 	defer d.Close()
-	des, err := d.ReadDir(-1)
-	if err != nil {
-		return nil, false, errNotFound
-	}
-	sort.Slice(des, func(i, j int) bool { return des[i].Name() < des[j].Name() })
-	out := []Entry{}
+	// Stream the directory in batches and keep only the maxListEntries
+	// smallest visible names (a bounded max-heap), so memory stays bounded
+	// however large the directory is, and the answer is still "the first
+	// 1,000 entries in sorted order".
+	keep := &nameHeap{}
 	truncated := false
-	for _, de := range des {
-		if f.denied(de.Name()) {
-			continue
+	for {
+		if listReadDirHook != nil {
+			listReadDirHook(searchDirBatch)
 		}
-		t := de.Type()
-		var typ string
-		switch {
-		case t.IsDir():
-			typ = "dir"
-		case t.IsRegular():
-			typ = "file"
-		default:
-			continue
+		des, rerr := d.ReadDir(searchDirBatch)
+		for _, de := range des {
+			name := de.Name()
+			if f.denied(name) {
+				continue
+			}
+			t := de.Type()
+			if !t.IsDir() && !t.IsRegular() {
+				continue // symlinks, devices, sockets: hidden
+			}
+			if keep.Len() == maxListEntries {
+				truncated = true
+				if name >= keep.max() {
+					continue
+				}
+				heap.Pop(keep)
+			}
+			heap.Push(keep, listItem{name: name, dir: t.IsDir()})
 		}
-		// Stat relative to the open directory descriptor, never by pathname
-		// (DirEntry.Info would re-resolve the name from the process cwd).
-		size, mtime, ok := statAt(d, de.Name())
-		if !ok {
-			continue
-		}
-		if len(out) == maxListEntries {
-			truncated = true
+		if rerr != nil {
+			if rerr != io.EOF {
+				truncated = true // partial listing: say so
+			}
 			break
 		}
-		out = append(out, Entry{Name: de.Name(), Type: typ, Size: size, Mtime: mtime.UTC().Format(time.RFC3339)})
+	}
+	items := keep.items
+	sort.Slice(items, func(i, j int) bool { return items[i].name < items[j].name })
+	out := make([]Entry, 0, len(items))
+	for _, it := range items {
+		// Stat relative to the open directory descriptor, never by pathname
+		// (DirEntry.Info would re-resolve the name from the process cwd).
+		size, mtime, ok := statAt(d, it.name)
+		if !ok {
+			truncated = true
+			continue
+		}
+		typ := "file"
+		if it.dir {
+			typ = "dir"
+		}
+		out = append(out, Entry{Name: it.name, Type: typ, Size: size, Mtime: mtime.UTC().Format(time.RFC3339)})
 	}
 	return out, truncated, nil
+}
+
+// listReadDirHook observes List's ReadDir batch sizes in tests. Nil in
+// production.
+var listReadDirHook func(n int)
+
+type listItem struct {
+	name string
+	dir  bool
+}
+
+// nameHeap is a max-heap on name, used to keep the N smallest names.
+type nameHeap struct{ items []listItem }
+
+func (h nameHeap) Len() int           { return len(h.items) }
+func (h nameHeap) Less(i, j int) bool { return h.items[i].name > h.items[j].name }
+func (h nameHeap) Swap(i, j int)      { h.items[i], h.items[j] = h.items[j], h.items[i] }
+func (h *nameHeap) Push(x any)        { h.items = append(h.items, x.(listItem)) }
+func (h nameHeap) max() string        { return h.items[0].name }
+func (h *nameHeap) Pop() any {
+	old := h.items
+	it := old[len(old)-1]
+	h.items = old[:len(old)-1]
+	return it
 }
 
 // looksBinary: a NUL byte or invalid UTF-8 in the sniffed prefix. When the
