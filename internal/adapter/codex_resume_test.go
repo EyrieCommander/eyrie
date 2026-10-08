@@ -162,6 +162,32 @@ func TestCodexThreadAfterResetStartsAndSavesNewThread(t *testing.T) {
 // EYRIE_FAKE_CODEX_RESUME_FAIL is set it serves a minimal app server whose
 // thread/resume always fails, after writing its pid to that path.
 func TestMain(m *testing.M) {
+	if os.Getenv("EYRIE_FAKE_CODEX_EOF_MIDTURN") != "" {
+		// Answers setup, starts the turn, sends one delta, then exits with
+		// no turn/completed and nothing on stderr.
+		sc := bufio.NewScanner(os.Stdin)
+		enc := json.NewEncoder(os.Stdout)
+		for sc.Scan() {
+			var req struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(sc.Bytes(), &req) != nil || len(req.ID) == 0 {
+				continue
+			}
+			switch req.Method {
+			case "thread/start":
+				_ = enc.Encode(map[string]any{"id": req.ID, "result": map[string]any{"thread": map[string]any{"id": "thr_eof"}}})
+			case "turn/start":
+				_ = enc.Encode(map[string]any{"id": req.ID, "result": map[string]any{"turn": map[string]any{"id": "turn_eof"}}})
+				_ = enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "half an answ"}})
+				os.Exit(0)
+			default:
+				_ = enc.Encode(map[string]any{"id": req.ID, "result": map[string]any{}})
+			}
+		}
+		os.Exit(0)
+	}
 	if pidFile := os.Getenv("EYRIE_FAKE_CODEX_CHILD"); pidFile != "" {
 		// Spawns a long-lived grandchild (as a Codex tool call would), writes
 		// its pid, then hangs on turn/start like the HANG_TURN server.
@@ -373,5 +399,19 @@ func TestCodexKillReachesSpawnedToolProcesses(t *testing.T) {
 	}
 	if !gone {
 		t.Fatalf("tool process %d survived Stop", pid)
+	}
+}
+
+func TestCodexSendMessageFailsWhenServerExitsMidTurn(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("EYRIE_FAKE_CODEX_EOF_MIDTURN", "1")
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "src"))
+	self, _ := os.Executable()
+	a := newTestCodexAdapter(t, codexConfig{BinaryPath: self, CWD: dir})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	msg, err := a.SendMessage(ctx, "hi", "s")
+	if err == nil {
+		t.Fatalf("SendMessage returned a partial reply as success: %q", msg.Content)
 	}
 }

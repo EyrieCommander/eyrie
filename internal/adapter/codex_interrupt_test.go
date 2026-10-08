@@ -2,7 +2,6 @@ package adapter
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -88,12 +87,8 @@ func startTestRun(t *testing.T, a *CodexAdapter, key string, srv *interruptServe
 		t.Fatal(err)
 	}
 	ch := make(chan ChatEvent, 16)
-	go func() {
-		defer close(run.done)
-		defer a.unregisterRun(key, run)
-		defer close(ch)
-		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch, nil)
-	}()
+	go runCodexStream(context.Background(), &lockedBuffer{}, c, run, ch,
+		func() {}, func() { a.unregisterRun(key, run); close(run.done) }, codexTerminalDeliveryTimeout)
 	return ch, &kills
 }
 
@@ -311,7 +306,7 @@ func (c *chanAgent) collect() (string, error) {
 			return "", errors.New(e.Error)
 		}
 	}
-	return b.String(), nil
+	return "", errors.New("closed without a terminal event")
 }
 
 func TestCodexStalledConsumerDoesNotPinTheSession(t *testing.T) {
@@ -324,12 +319,8 @@ func TestCodexStalledConsumerDoesNotPinTheSession(t *testing.T) {
 	run.setTurnID("turn_1")
 	_ = a.registerRun("s", run)
 	ch := make(chan ChatEvent) // unbuffered and never read
-	go func() {
-		defer close(run.done)
-		defer a.unregisterRun("s", run)
-		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch, nil)
-	}()
-	// Fill the stream: the loop blocks on its first send.
+	go runCodexStream(context.Background(), &lockedBuffer{}, c, run, ch,
+		func() {}, func() { a.unregisterRun("s", run); close(run.done) }, codexTerminalDeliveryTimeout)
 	srv.mu.Lock()
 	for i := 0; i < 5; i++ {
 		_ = srv.enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "x"}})
@@ -345,6 +336,48 @@ func TestCodexStalledConsumerDoesNotPinTheSession(t *testing.T) {
 	}
 }
 
+// Review finding 1: an undeliverable terminal event (stalled consumer) must
+// not let the session look free while the process it owns is still alive,
+// and must not keep it busy forever after the process is gone.
+func TestCodexSessionHeldUntilReapedEvenIfTerminalUndeliverable(t *testing.T) {
+	a := &CodexAdapter{id: "t-full-buffer"}
+	srv, c := startInterruptServer(t, "honour")
+	run := &codexRun{done: make(chan struct{})}
+	run.setThread(c, "thr_1")
+	_ = a.registerRun("s", run)
+	ch := make(chan ChatEvent) // nobody reads
+	reapGate := make(chan struct{})
+	var reaped atomic.Bool
+	ctx, cancel := context.WithCancel(context.Background())
+	streamDone := make(chan struct{})
+	// Registered after the timeout's Cleanup, so it runs first: stop the
+	// stream and wait for it before the timeout variable is restored.
+	t.Cleanup(func() { cancel(); <-streamDone })
+	go func() {
+		defer close(streamDone)
+		runCodexStream(ctx, &lockedBuffer{}, c, run, ch,
+			func() { <-reapGate; reaped.Store(true) }, // slow process exit
+			func() { a.unregisterRun("s", run); close(run.done) }, 5*time.Second)
+	}()
+	srv.mu.Lock()
+	_ = srv.enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]any{"id": "t", "status": "completed"}}})
+	srv.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	releasedEarly := a.activeRun("s") == nil
+	close(reapGate) // let the stream finish either way, so cleanup can't hang
+	if releasedEarly {
+		t.Fatal("session released before its process was reaped")
+	}
+	select {
+	case <-run.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("session not released after reap, though nobody reads the terminal event")
+	}
+	if !reaped.Load() {
+		t.Fatal("released without reaping")
+	}
+}
+
 func TestCodexSessionFreeWhenDoneIsDelivered(t *testing.T) {
 	a := &CodexAdapter{id: "t-done-free"}
 	srv, c := startInterruptServer(t, "honour")
@@ -352,13 +385,8 @@ func TestCodexSessionFreeWhenDoneIsDelivered(t *testing.T) {
 	run.setThread(c, "thr_1")
 	_ = a.registerRun("s", run)
 	ch := make(chan ChatEvent, 4)
-	release := make(chan struct{})
-	go func() {
-		defer close(run.done)
-		defer close(ch)
-		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch, func() { a.unregisterRun("s", run) })
-		<-release // simulate slow process cleanup after the terminal event
-	}()
+	go runCodexStream(context.Background(), &lockedBuffer{}, c, run, ch,
+		func() {}, func() { a.unregisterRun("s", run); close(run.done) }, codexTerminalDeliveryTimeout)
 	srv.mu.Lock()
 	_ = srv.enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]any{"id": "t", "status": "completed"}}})
 	srv.mu.Unlock()
@@ -367,8 +395,73 @@ func TestCodexSessionFreeWhenDoneIsDelivered(t *testing.T) {
 		t.Fatalf("event = %+v", e)
 	}
 	if a.activeRun("s") != nil {
-		close(release)
 		t.Fatal("session still busy when done was delivered; an immediate next turn would be refused")
 	}
-	close(release)
+}
+
+// Review finding 2: the stream ending without turn/completed (no kill mark,
+// empty stderr) must be an error, not a partial success.
+func TestCodexEOFWithoutCompletionIsAnError(t *testing.T) {
+	srv, c := startInterruptServer(t, "honour")
+	ch := make(chan ChatEvent, 16)
+	go runCodexStream(context.Background(), &lockedBuffer{}, c, nil, ch, func() {}, func() {}, codexTerminalDeliveryTimeout)
+	srv.mu.Lock()
+	_ = srv.enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "partial"}})
+	srv.mu.Unlock()
+	time.Sleep(20 * time.Millisecond)
+	srv.hangUp()
+	if resp, err := (&chanAgent{ch: ch}).collect(); err == nil {
+		t.Fatalf("EOF without turn/completed returned success %q", resp)
+	}
+}
+
+func TestCodexCancelRacingEOFIsAnError(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		srv, c := startInterruptServer(t, "honour")
+		ctx, cancel := context.WithCancel(context.Background())
+		ch := make(chan ChatEvent, 16)
+		go runCodexStream(ctx, &lockedBuffer{}, c, nil, ch, func() {}, func() {}, codexTerminalDeliveryTimeout)
+		cancel()
+		srv.hangUp()
+		if resp, err := (&chanAgent{ch: ch}).collect(); err == nil {
+			t.Fatalf("iteration %d: cancel racing EOF returned success %q", i, resp)
+		}
+	}
+}
+
+func TestCodexInterruptedTerminalSurvivesFullBuffer(t *testing.T) {
+	// The buffer is full of deltas when Interrupt kills the server; the
+	// interrupted error must still arrive once the consumer reads again.
+	shortInterruptTimers(t)
+	a := &CodexAdapter{id: "t-full-then-read"}
+	srv, c := startInterruptServer(t, "ignore")
+	run := &codexRun{done: make(chan struct{})}
+	run.setThread(c, "thr_1")
+	run.setKill(func() { srv.hangUp() })
+	run.setTurnID("turn_1")
+	_ = a.registerRun("s", run)
+	ch := make(chan ChatEvent, 2)
+	go runCodexStream(context.Background(), &lockedBuffer{}, c, run, ch,
+		func() {}, func() { a.unregisterRun("s", run); close(run.done) }, codexTerminalDeliveryTimeout)
+	srv.mu.Lock()
+	for i := 0; i < 6; i++ {
+		_ = srv.enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "x"}})
+	}
+	srv.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	if err := a.Interrupt(context.Background(), "s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (&chanAgent{ch: ch}).collect(); err == nil {
+		t.Fatal("interrupted turn with a full buffer read as success")
+	}
+}
+
+func TestSendMessageRuleClosedStreamWithoutTerminalFails(t *testing.T) {
+	ch := make(chan ChatEvent, 1)
+	ch <- ChatEvent{Type: "delta", Content: "half"}
+	close(ch)
+	if _, err := (&chanAgent{ch: ch}).collect(); err == nil {
+		t.Fatal("closed stream without a terminal event treated as success")
+	}
 }
