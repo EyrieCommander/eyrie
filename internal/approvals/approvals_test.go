@@ -421,3 +421,53 @@ func TestDotDotThroughSymlinkUsesOneResolvedPath(t *testing.T) {
 		t.Fatalf("resolved db mode = %v", fi.Mode().Perm())
 	}
 }
+
+func TestOpenRefusesGroupWritableAncestor(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "shared")
+	if err := os.MkdirAll(filepath.Join(parent, "mine"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o770); err != nil { // group-writable, not sticky
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	_, err := Open(filepath.Join(parent, "mine", "x.db"), Options{})
+	if !errors.Is(err, ErrInsecurePath) {
+		t.Fatalf("open under a group-writable ancestor: %v, want ErrInsecurePath", err)
+	}
+	if _, serr := os.Stat(filepath.Join(parent, "mine", "x.db")); serr == nil {
+		t.Fatal("database file created before the ancestry check refused")
+	}
+}
+
+func TestOpenAllowsStickyWritableAncestor(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "tmpish")
+	if err := os.MkdirAll(filepath.Join(parent, "mine"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	s, err := Open(filepath.Join(parent, "mine", "x.db"), Options{})
+	if err != nil {
+		t.Fatalf("sticky world-writable ancestor (like /tmp) refused: %v", err)
+	}
+	_ = s.Close()
+}
+
+func TestOpenDanglingSymlinkCreatesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mb")
+	_ = os.MkdirAll(dir, 0o700)
+	target := filepath.Join(t.TempDir(), "outside", "planted.db")
+	_ = os.MkdirAll(filepath.Dir(target), 0o700)
+	if err := os.Symlink(target, filepath.Join(dir, "x.db")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(filepath.Join(dir, "x.db"), Options{}); err == nil {
+		t.Fatal("opened through a dangling symlink")
+	}
+	if _, err := os.Lstat(target); err == nil {
+		t.Fatal("Open created the symlink's target outside the approvals directory")
+	}
+}
