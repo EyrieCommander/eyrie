@@ -46,8 +46,8 @@ func TestReadResponseSizeAfterEscaping(t *testing.T) {
 	if !r.Truncated || r.LinesReturned == 0 {
 		t.Fatalf("expected a truncated partial read, got %d lines truncated=%v", r.LinesReturned, r.Truncated)
 	}
-	if rec.Body.Len() > maxReadBytes+4096 {
-		t.Fatalf("response body %d bytes", rec.Body.Len())
+	if rec.Body.Len() > maxReadBytes {
+		t.Fatalf("response body %d bytes, limit %d", rec.Body.Len(), maxReadBytes)
 	}
 }
 

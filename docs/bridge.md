@@ -29,13 +29,14 @@ TLS ends at Funnel or the tunnel. Expose **only** the bridge port. Never the das
 - **Tailscale Funnel (recommended):** `tailscale funnel --bg 7201`. Then set `client_ip_header = "X-Forwarded-For"` so rate limits and the access log see the real client.
 - **cloudflared:** a tunnel whose ingress targets `http://127.0.0.1:7201` only. Set `client_ip_header = "Cf-Connecting-Ip"`.
 
-Check after setup (the bridge answers 401 before routing, so the isolation check must carry the token; put it in an env var rather than on the command line):
+Check after setup. The bridge answers 401 before routing, so the isolation check must carry the token. Keep the token out of process arguments: curl reads the header from stdin with `-H @-`.
 
 ```sh
-read -rs BRIDGE_TOKEN; export BRIDGE_TOKEN
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $BRIDGE_TOKEN" https://<public-url>/api/agents          # must print 404
-curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $BRIDGE_TOKEN" https://<public-url>/bridge/v1/fs/roots   # 200 (or 404 if no roots)
-curl -s -o /dev/null -w '%{http_code}\n' https://<public-url>/bridge/v1/fs/roots                                           # 401 without the token
+read -rs BRIDGE_TOKEN   # paste the token; nothing is echoed
+hdr() { printf 'Authorization: Bearer %s\n' "$BRIDGE_TOKEN"; }   # printf is a shell builtin: no new process
+hdr | curl -s -o /dev/null -w '%{http_code}\n' -H @- https://<public-url>/api/agents          # must print 404
+hdr | curl -s -o /dev/null -w '%{http_code}\n' -H @- https://<public-url>/bridge/v1/fs/roots   # 200 (or 404 if no roots)
+curl -s -o /dev/null -w '%{http_code}\n' https://<public-url>/bridge/v1/fs/roots              # 401 without the token
 unset BRIDGE_TOKEN
 ```
 

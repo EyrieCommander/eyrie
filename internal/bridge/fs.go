@@ -3,6 +3,7 @@ package bridge
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -306,6 +307,11 @@ func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
 		return nil, errBinary
 	}
 	res := &ReadResult{Path: rel, Size: fi.Size(), Offset: offset}
+	// maxReadBytes caps the whole JSON response: reserve the envelope (the
+	// widest it can be: limit-digit line count, "false", and the encoder's
+	// trailing newline) and budget the content's encoded size against the rest.
+	envelope, _ := json.Marshal(ReadResult{Path: rel, Size: fi.Size(), Offset: offset, LinesReturned: limit, Truncated: false})
+	budget := maxReadBytes - len(envelope) - 1
 	br := bufio.NewReader(io.LimitReader(fh, maxReadFileSize))
 	var sb strings.Builder
 	encoded := 0
@@ -318,7 +324,7 @@ func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
 				// Budget the JSON-encoded size, not raw bytes: escaping
 				// (<, >, &, quotes, control chars) can grow content ~6x.
 				enc := jsonStringLen(s)
-				if res.LinesReturned == limit || encoded+enc > maxReadBytes {
+				if res.LinesReturned == limit || encoded+enc > budget {
 					res.Truncated = true
 					break
 				}
@@ -460,7 +466,11 @@ func (f *FS) searchFile(fh *os.File, name, rel string, st *searchState) {
 	br := bufio.NewReaderSize(fh, 64<<10)
 	n := 0
 	for {
-		line, long, rerr := readLineCapped(br, maxSearchLine)
+		line, long, timedOut, rerr := readLineCapped(br, maxSearchLine, st.deadline)
+		if timedOut {
+			st.truncated = true
+			return
+		}
 		if line != "" || long {
 			n++
 			if long {
@@ -491,10 +501,15 @@ func (f *FS) searchFile(fh *os.File, name, rel string, st *searchState) {
 const maxSearchLine = 4 << 20
 
 // readLineCapped returns the next line (with its newline), keeping at most
-// max bytes; long reports that the rest of the line was discarded.
-func readLineCapped(br *bufio.Reader, max int) (line string, long bool, err error) {
+// max bytes; long reports that the rest of the line was discarded. The
+// deadline is checked on every chunk (bufio hands back at most its buffer
+// size per call), so one enormous line can't run past the search budget.
+func readLineCapped(br *bufio.Reader, max int, deadline time.Time) (line string, long, timedOut bool, err error) {
 	var sb strings.Builder
-	for {
+	for chunk := 0; ; chunk++ {
+		if chunk > 0 && time.Now().After(deadline) {
+			return sb.String(), long, true, nil
+		}
 		frag, isPrefix, rerr := br.ReadLine()
 		if sb.Len() < max {
 			room := max - sb.Len()
@@ -507,11 +522,11 @@ func readLineCapped(br *bufio.Reader, max int) (line string, long bool, err erro
 			long = true
 		}
 		if rerr != nil {
-			return sb.String(), long, rerr
+			return sb.String(), long, false, rerr
 		}
 		if !isPrefix {
 			sb.WriteByte('\n')
-			return sb.String(), long, nil
+			return sb.String(), long, false, nil
 		}
 	}
 }

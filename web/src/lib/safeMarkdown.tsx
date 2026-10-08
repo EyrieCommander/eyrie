@@ -9,6 +9,7 @@
 // > quotes, **bold**, *italic* / _italic_, `code`, [text](https://...).
 
 import type React from "react";
+import { memo } from "react";
 
 function safeHref(href: string): string | null {
   try {
@@ -19,43 +20,90 @@ function safeHref(href: string): string | null {
   }
 }
 
-const INLINE = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*\s][^*]*\*)|(_[^_\s][^_]*_)|(\[[^\]]+\]\([^)\s]+\))/;
+// Inline parsing is a single left-to-right scan, not a regex: chief replies
+// are untrusted, and backtracking regexes over unmatched brackets are
+// quadratic. Each opener looks for its closer within MAX_SPAN characters
+// (an unclosed opener costs at most MAX_SPAN), and nested emphasis is
+// parsed at most MAX_DEPTH deep, so the total work is O(n * MAX_SPAN).
+const MAX_SPAN = 512;
+const MAX_DEPTH = 4;
 
-export function renderInline(text: string, keyBase = "i"): React.ReactNode[] {
+/** Index of `closer` in text[from, from+MAX_SPAN), or -1. Searches only
+ *  that window (never the rest of the text), so an unclosed opener costs
+ *  O(MAX_SPAN), not O(n). */
+function findClose(text: string, from: number, closer: string): number {
+  const window = text.slice(from, from + MAX_SPAN);
+  const at = window.indexOf(closer);
+  return at < 0 ? -1 : from + at;
+}
+
+export function renderInline(text: string, keyBase = "i", depth = 0): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  let rest = text;
+  let plain = "";
   let k = 0;
-  while (rest.length > 0) {
-    const m = INLINE.exec(rest);
-    if (!m) {
-      out.push(rest);
-      break;
+  const flush = () => {
+    if (plain) out.push(plain);
+    plain = "";
+  };
+  let i = 0;
+  while (i < text.length) {
+    const c = text[i];
+    const key = `${keyBase}-${k}`;
+    if (c === "`") {
+      const end = findClose(text, i + 1, "`");
+      if (end > i + 1) {
+        flush();
+        out.push(<code key={key} className="rounded bg-bg px-1 font-mono text-[11px]">{text.slice(i + 1, end)}</code>);
+        k++;
+        i = end + 1;
+        continue;
+      }
+    } else if (c === "*" && text[i + 1] === "*" && depth < MAX_DEPTH) {
+      const end = findClose(text, i + 2, "**");
+      if (end > i + 2) {
+        flush();
+        out.push(<strong key={key}>{renderInline(text.slice(i + 2, end), key, depth + 1)}</strong>);
+        k++;
+        i = end + 2;
+        continue;
+      }
+    } else if ((c === "*" || c === "_") && depth < MAX_DEPTH && text[i + 1] && !/\s/.test(text[i + 1]) && text[i + 1] !== c) {
+      const end = findClose(text, i + 1, c);
+      if (end > i + 1) {
+        flush();
+        out.push(<em key={key}>{renderInline(text.slice(i + 1, end), key, depth + 1)}</em>);
+        k++;
+        i = end + 1;
+        continue;
+      }
+    } else if (c === "[") {
+      const mid = findClose(text, i + 1, "](");
+      if (mid > i + 1 && !text.slice(i + 1, mid).includes("[")) {
+        const end = findClose(text, mid + 2, ")");
+        const href = end > mid + 2 ? text.slice(mid + 2, end) : "";
+        if (href && !/\s/.test(href)) {
+          flush();
+          const label = text.slice(i + 1, mid);
+          const safe = safeHref(href);
+          out.push(
+            safe ? (
+              <a key={key} href={safe} target="_blank" rel="noopener noreferrer" className="text-accent underline">
+                {label}
+              </a>
+            ) : (
+              <span key={key}>{label}</span>
+            ),
+          );
+          k++;
+          i = end + 1;
+          continue;
+        }
+      }
     }
-    if (m.index > 0) out.push(rest.slice(0, m.index));
-    const tok = m[0];
-    const key = `${keyBase}-${k++}`;
-    if (tok.startsWith("`")) {
-      out.push(<code key={key} className="rounded bg-bg px-1 font-mono text-[11px]">{tok.slice(1, -1)}</code>);
-    } else if (tok.startsWith("**")) {
-      out.push(<strong key={key}>{renderInline(tok.slice(2, -2), key)}</strong>);
-    } else if (tok.startsWith("[")) {
-      const close = tok.indexOf("](");
-      const label = tok.slice(1, close);
-      const href = safeHref(tok.slice(close + 2, -1));
-      out.push(
-        href ? (
-          <a key={key} href={href} target="_blank" rel="noopener noreferrer" className="text-accent underline">
-            {label}
-          </a>
-        ) : (
-          <span key={key}>{label}</span>
-        ),
-      );
-    } else {
-      out.push(<em key={key}>{renderInline(tok.slice(1, -1), key)}</em>);
-    }
-    rest = rest.slice(m.index + tok.length);
+    plain += c;
+    i++;
   }
+  flush();
   return out;
 }
 
@@ -72,7 +120,9 @@ function startsBlock(line: string): boolean {
   );
 }
 
-export function SafeMarkdown({ text }: { text: string }) {
+/** Memoised: ChiefChat re-renders every second for its elapsed timers, and
+ *  stored replies never change, so each reply is parsed once. */
+export const SafeMarkdown = memo(function SafeMarkdown({ text }: { text: string }) {
   // Normalise every line terminator, including U+2028/U+2029 and other
   // vertical whitespace that JS regexes treat as line breaks.
   const lines = text.replace(/\r\n?|[\u2028\u2029\u0085\v\f]/g, "\n").split("\n");
@@ -130,4 +180,4 @@ export function SafeMarkdown({ text }: { text: string }) {
     blocks.push(<p key={key}>{renderInline(para.join(" "), key)}</p>);
   }
   return <div className="space-y-1.5 text-xs text-text break-words">{blocks}</div>;
-}
+});
