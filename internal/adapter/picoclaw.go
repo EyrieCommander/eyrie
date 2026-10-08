@@ -51,8 +51,8 @@ func NewPicoClawAdapter(id, name, host string, gatewayPort int, token, configPat
 	}
 }
 
-func (p *PicoClawAdapter) ID() string        { return p.id }
-func (p *PicoClawAdapter) Name() string      { return p.name }
+func (p *PicoClawAdapter) ID() string       { return p.id }
+func (p *PicoClawAdapter) Name() string     { return p.name }
 func (p *PicoClawAdapter) Framework() string { return "picoclaw" }
 func (p *PicoClawAdapter) BaseURL() string {
 	return fmt.Sprintf("http://%s:%d", p.host, p.webPort)
@@ -679,11 +679,11 @@ func (p *PicoClawAdapter) SendMessage(ctx context.Context, message, sessionKey s
 // StreamMessage connects to the Pico Protocol WebSocket and streams the response.
 //
 // Protocol:
-//   - Send:    {type: "message.send", session_id, timestamp, payload: {content}}
-//   - Receive: message.update (streaming delta via full-content diffing)
-//     message.create (final complete response)
-//     error (error event)
-//   - Ignored: typing.start, typing.stop, pong
+// - Send:    {type: "message.send", session_id, timestamp, payload: {content}}
+// - Receive: message.update (streaming delta via full-content diffing)
+//            message.create (final complete response)
+//            error (error event)
+// - Ignored: typing.start, typing.stop, pong
 //
 // message.update delivers full-content replacements. The adapter diffs successive
 // updates to emit append-only deltas for Eyrie's ChatEvent model.
