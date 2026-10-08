@@ -47,7 +47,46 @@ type CodexAdapter struct {
 
 	mu  sync.Mutex
 	cfg codexConfig
+
+	runsMu sync.Mutex
+	runs   map[string]*codexRun
 }
+
+// codexRun is one in-flight turn: the app-server process serving it and the
+// ids turn/interrupt needs. done closes when the stream goroutine exits.
+type codexRun struct {
+	client   *codexRPCClient
+	threadID string
+	kill     func()
+	done     chan struct{}
+
+	mu     sync.Mutex
+	turnID string
+}
+
+func (r *codexRun) setTurnID(id string) {
+	if id == "" {
+		return
+	}
+	r.mu.Lock()
+	if r.turnID == "" {
+		r.turnID = id
+	}
+	r.mu.Unlock()
+}
+
+func (r *codexRun) currentTurnID() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.turnID
+}
+
+// How long Interrupt waits for the turn to end after turn/interrupt before it
+// kills the app-server process. Variables so tests can shorten them.
+var (
+	codexInterruptRequestTimeout = 5 * time.Second
+	codexInterruptGrace          = 10 * time.Second
+)
 
 func NewCodexAdapter(id, name, configPath, workspacePath string) *CodexAdapter {
 	a := &CodexAdapter{
@@ -108,8 +147,26 @@ func (a *CodexAdapter) Config(_ context.Context) (*AgentConfig, error) {
 	return &AgentConfig{Raw: string(data), Format: "json"}, nil
 }
 
-func (a *CodexAdapter) Start(context.Context) error   { return a.ensureBinary() }
-func (a *CodexAdapter) Stop(context.Context) error    { return nil }
+func (a *CodexAdapter) Start(context.Context) error { return a.ensureBinary() }
+
+// Stop interrupts every in-flight turn this adapter started, killing any
+// app-server process that doesn't end within the grace period. Codex has no
+// long-lived process of its own between turns, so there is nothing else to stop.
+func (a *CodexAdapter) Stop(ctx context.Context) error {
+	a.runsMu.Lock()
+	keys := make([]string, 0, len(a.runs))
+	for k := range a.runs {
+		keys = append(keys, k)
+	}
+	a.runsMu.Unlock()
+	var errs []error
+	for _, k := range keys {
+		if err := a.Interrupt(ctx, k); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
 func (a *CodexAdapter) Restart(context.Context) error { return a.ensureBinary() }
 
 func (a *CodexAdapter) TailLogs(ctx context.Context) (<-chan LogEntry, error) {
@@ -230,17 +287,108 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 		_ = cmd.Process.Kill()
 		return nil, err
 	}
-	if _, err := client.request(ctx, "turn/start", codexTurnStartParams(threadID, message, cfg)); err != nil {
+	run := &codexRun{
+		client:   client,
+		threadID: threadID,
+		kill:     func() { _ = cmd.Process.Kill() },
+		done:     make(chan struct{}),
+	}
+	if err := a.registerRun(sessionKey, run); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, err
+	}
+	result, err := client.request(ctx, "turn/start", codexTurnStartParams(threadID, message, cfg))
+	if err != nil {
+		a.unregisterRun(sessionKey, run)
+		close(run.done)
 		_ = cmd.Process.Kill()
 		return nil, fmt.Errorf("codex turn/start: %w", err)
 	}
+	run.setTurnID(codexTurnIDFromResult(result))
 
 	ch := make(chan ChatEvent, 64)
-	go a.streamCodexEvents(ctx, cmd, &stderr, client, ch)
+	go func() {
+		defer close(run.done)
+		defer a.unregisterRun(sessionKey, run)
+		a.streamCodexEvents(ctx, cmd, &stderr, client, run, ch)
+	}()
 	return ch, nil
 }
 
-func (a *CodexAdapter) Interrupt(context.Context, string) error { return nil }
+// Interrupt cancels the session's in-flight turn: it sends turn/interrupt,
+// waits up to codexInterruptGrace for the turn to end, and kills the
+// app-server process if it hasn't. No active turn is not an error.
+func (a *CodexAdapter) Interrupt(ctx context.Context, sessionKey string) error {
+	run := a.activeRun(sessionKey)
+	if run == nil {
+		return nil
+	}
+	var reqErr error
+	if turnID := run.currentTurnID(); turnID != "" {
+		rctx, cancel := context.WithTimeout(ctx, codexInterruptRequestTimeout)
+		_, reqErr = run.client.request(rctx, "turn/interrupt", map[string]any{"threadId": run.threadID, "turnId": turnID})
+		cancel()
+	} else {
+		reqErr = errors.New("turn id not known yet")
+	}
+	wait := codexInterruptGrace
+	if reqErr != nil {
+		// The app server didn't take the interrupt; don't wait for a turn end
+		// that may never come.
+		wait = 0
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-run.done:
+		return nil
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+	run.kill()
+	select {
+	case <-run.done:
+	case <-time.After(codexInterruptGrace):
+		return fmt.Errorf("codex session %q: process killed but stream did not end", codexSessionKey(sessionKey))
+	}
+	return nil
+}
+
+func codexSessionKey(k string) string {
+	if k == "" {
+		return "default"
+	}
+	return k
+}
+
+func (a *CodexAdapter) registerRun(sessionKey string, run *codexRun) error {
+	k := codexSessionKey(sessionKey)
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	if a.runs == nil {
+		a.runs = map[string]*codexRun{}
+	}
+	if a.runs[k] != nil {
+		return fmt.Errorf("codex session %q already has a turn in flight", k)
+	}
+	a.runs[k] = run
+	return nil
+}
+
+func (a *CodexAdapter) unregisterRun(sessionKey string, run *codexRun) {
+	k := codexSessionKey(sessionKey)
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	if a.runs[k] == run {
+		delete(a.runs, k)
+	}
+}
+
+func (a *CodexAdapter) activeRun(sessionKey string) *codexRun {
+	a.runsMu.Lock()
+	defer a.runsMu.Unlock()
+	return a.runs[codexSessionKey(sessionKey)]
+}
 
 func (a *CodexAdapter) CreateSession(_ context.Context, name string) (*Session, error) {
 	key := strings.TrimSpace(name)
@@ -411,12 +559,16 @@ func (a *CodexAdapter) codexThread(ctx context.Context, client *codexRPCClient, 
 	return threadID, nil
 }
 
-func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, stderr *bytes.Buffer, client *codexRPCClient, ch chan<- ChatEvent) {
+func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent) {
 	defer close(ch)
 	defer func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
 	}()
+	runCodexEventLoop(ctx, stderr, client, run, ch)
+}
+
+func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent) {
 
 	var full strings.Builder
 	var inputTokens, outputTokens int
@@ -446,6 +598,10 @@ func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, std
 					inputTokens = input
 					outputTokens = output
 				}
+				continue
+			}
+			if note.Method == "turn/started" && run != nil {
+				run.setTurnID(codexTurnIDFromResult(note.Params))
 				continue
 			}
 			if note.Method == "turn/completed" {
@@ -887,6 +1043,31 @@ func codexChatEventFromServerRequest(method string, params json.RawMessage) (Cha
 	}
 }
 
+// codexTurnStatusIsFailure: the app-server protocol's TurnStatus is
+// completed | interrupted | failed | inProgress. "cancelled" is kept for older
+// servers. An interrupted turn must not be reported as done.
+func codexTurnStatusIsFailure(status string) bool {
+	return status == "failed" || status == "interrupted" || status == "cancelled"
+}
+
+// codexTurnIDFromResult reads turn.id from a turn/start response or a
+// turn/started notification.
+func codexTurnIDFromResult(raw json.RawMessage) string {
+	var payload struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+		TurnID string `json:"turnId"`
+	}
+	if json.Unmarshal(raw, &payload) != nil {
+		return ""
+	}
+	if payload.Turn.ID != "" {
+		return payload.Turn.ID
+	}
+	return payload.TurnID
+}
+
 func codexTurnError(params json.RawMessage) string {
 	var payload map[string]any
 	if err := json.Unmarshal(params, &payload); err != nil {
@@ -898,11 +1079,11 @@ func codexTurnError(params json.RawMessage) string {
 				return msg
 			}
 		}
-		if status, _ := turn["status"].(string); status == "failed" || status == "cancelled" {
+		if status, _ := turn["status"].(string); codexTurnStatusIsFailure(status) {
 			return "Codex turn " + status
 		}
 	}
-	if status, _ := payload["status"].(string); status == "failed" || status == "cancelled" {
+	if status, _ := payload["status"].(string); codexTurnStatusIsFailure(status) {
 		return "Codex turn " + status
 	}
 	return ""
