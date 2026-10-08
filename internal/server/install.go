@@ -198,13 +198,21 @@ const frameworkVersionWaitDelay = 500 * time.Millisecond
 // probes deterministically; production never replaces it.
 var runVersionProbe = func(ctx context.Context, binaryPath string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, binaryPath, "--version")
-	// Own process group, and kill the whole group on timeout: CommandContext
-	// alone kills only the direct process, so a child the binary started
-	// would outlive the timeout. (Unix-only, like manager.go's Setpgid.)
+	// The probe runs in its own process group (Unix-only, like manager.go's
+	// Setpgid). CommandContext kills only the direct process on timeout, and
+	// if the binary exits on its own, nothing is killed at all, so children
+	// it started would outlive the call. A version probe has no business
+	// leaving processes: after the call returns, by any path, the whole
+	// group is killed (ESRCH when it's already empty, the normal case).
+	// WaitDelay bounds the wait if a child holds the output pipe, including
+	// one that left the group (setsid) and so survives the group kill.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
 	cmd.WaitDelay = frameworkVersionWaitDelay
-	return cmd.CombinedOutput()
+	out, err := cmd.CombinedOutput()
+	if cmd.Process != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+	return out, err
 }
 
 // handleListFrameworks returns all frameworks from the registry with installation status
