@@ -465,3 +465,51 @@ func TestSendMessageRuleClosedStreamWithoutTerminalFails(t *testing.T) {
 		t.Fatal("closed stream without a terminal event treated as success")
 	}
 }
+
+// Review finding: EOF can close requests while a successful turn/completed
+// still sits in notifications. It must be delivered as done.
+func TestCodexCompletionImmediatelyBeforeEOFIsDone(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		srv, c := startInterruptServer(t, "honour")
+		ch := make(chan ChatEvent, 16)
+		go runCodexStream(context.Background(), &lockedBuffer{}, c, nil, ch, func() {}, func() {}, codexTerminalDeliveryTimeout)
+		srv.mu.Lock()
+		_ = srv.enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "answer"}})
+		_ = srv.enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]any{"id": "t", "status": "completed"}}})
+		srv.mu.Unlock()
+		srv.hangUp()
+		got, err := (&chanAgent{ch: ch}).collect()
+		if err != nil || got != "answer" {
+			t.Fatalf("iteration %d: completion before EOF = %q, %v; want done with the answer", i, got, err)
+		}
+	}
+}
+
+// Review finding: success must be explicit.
+func TestCodexTurnErrorRequiresExplicitCompleted(t *testing.T) {
+	ok := []string{
+		`{"turn":{"id":"t","status":"completed"}}`,
+		`{"status":"completed"}`,
+	}
+	bad := []string{
+		`{"turn":{"id":"t"}}`,
+		`{"turn":{"id":"t","status":""}}`,
+		`{"turn":{"id":"t","status":"inProgress"}}`,
+		`{"turn":{"id":"t","status":"weird"}}`,
+		`{"turn":{"id":"t","status":"completed","error":{}}}`,
+		`{"turn":{"id":"t","status":"completed","error":{"message":"boom"}}}`,
+		`{}`,
+		`not json`,
+		`{"turn":{"id":"t","status":7}}`,
+	}
+	for _, p := range ok {
+		if msg := codexTurnError(json.RawMessage(p)); msg != "" {
+			t.Errorf("%s: error %q, want success", p, msg)
+		}
+	}
+	for _, p := range bad {
+		if codexTurnError(json.RawMessage(p)) == "" {
+			t.Errorf("%s: treated as success", p)
+		}
+	}
+}

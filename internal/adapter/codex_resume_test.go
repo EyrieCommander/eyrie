@@ -190,8 +190,13 @@ func TestMain(m *testing.M) {
 	}
 	if pidFile := os.Getenv("EYRIE_FAKE_CODEX_CHILD"); pidFile != "" {
 		// Spawns a long-lived grandchild (as a Codex tool call would), writes
-		// its pid, then hangs on turn/start like the HANG_TURN server.
+		// its pid, then hangs on turn/start like the HANG_TURN server. With
+		// EYRIE_FAKE_CODEX_CHILD_SETSID the grandchild leaves the process
+		// group by starting its own session, which a group kill misses.
 		child := exec.Command("sleep", "300")
+		if os.Getenv("EYRIE_FAKE_CODEX_CHILD_SETSID") != "" {
+			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+		}
 		if err := child.Start(); err == nil {
 			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(child.Process.Pid)), 0o600)
 		}
@@ -358,7 +363,10 @@ func runHasClient(r *codexRun) bool {
 	return c != nil
 }
 
-func TestCodexKillReachesSpawnedToolProcesses(t *testing.T) {
+func testCodexKillReachesTool(t *testing.T, setsid bool) {
+	if setsid {
+		t.Setenv("EYRIE_FAKE_CODEX_CHILD_SETSID", "1")
+	}
 	shortInterruptTimers(t)
 	dir := t.TempDir()
 	childPid := filepath.Join(dir, "child.pid")
@@ -402,6 +410,12 @@ func TestCodexKillReachesSpawnedToolProcesses(t *testing.T) {
 	}
 }
 
+func TestCodexKillReachesSpawnedToolProcesses(t *testing.T) { testCodexKillReachesTool(t, false) }
+
+// Review finding: a tool that calls setsid leaves the process group, and a
+// group kill alone misses it.
+func TestCodexKillReachesToolThatLeftTheGroup(t *testing.T) { testCodexKillReachesTool(t, true) }
+
 func TestCodexSendMessageFailsWhenServerExitsMidTurn(t *testing.T) {
 	dir := t.TempDir()
 	t.Setenv("EYRIE_FAKE_CODEX_EOF_MIDTURN", "1")
@@ -413,5 +427,46 @@ func TestCodexSendMessageFailsWhenServerExitsMidTurn(t *testing.T) {
 	msg, err := a.SendMessage(ctx, "hi", "s")
 	if err == nil {
 		t.Fatalf("SendMessage returned a partial reply as success: %q", msg.Content)
+	}
+}
+
+func TestCodexReadLoopUnblocksWhenNobodyReads(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	defer inW.Close()
+	go func() { _, _ = io.Copy(io.Discard, inR) }() // the "server" reads requests and never answers
+	c := newCodexRPCClient(inW, outR)
+	done := make(chan struct{})
+	go func() { c.readLoop(); close(done) }()
+	go func() { // flood well past the 128-entry notification buffer
+		enc := json.NewEncoder(outW)
+		for i := 0; i < 400; i++ {
+			if enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "x"}}) != nil {
+				return
+			}
+		}
+	}()
+	time.Sleep(100 * time.Millisecond) // buffer full, readLoop blocked on send
+	// A request waiting on a response must be released once we shut down.
+	reqDone := make(chan error, 1)
+	go func() {
+		_, err := c.request(context.Background(), "turn/start", map[string]any{})
+		reqDone <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	c.shutdown()
+	_ = outW.Close()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("readLoop stayed blocked on a full buffer after shutdown")
+	}
+	select {
+	case err := <-reqDone:
+		if err == nil {
+			t.Fatal("pending request succeeded with no response")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pending request not released after readLoop exit")
 	}
 }
