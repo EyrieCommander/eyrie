@@ -49,7 +49,9 @@ type Receipt struct {
 }
 
 // Recorder persists receipts. It must refuse a second StateDispatching
-// receipt for the same attempt ID with ErrDuplicateAttempt.
+// receipt for the same attempt ID with ErrDuplicateAttempt, and should
+// honour ctx: Run bounds every write by Limits.ReceiptTimeout and treats a
+// write that hasn't returned by then as failed.
 type Recorder interface {
 	Record(ctx context.Context, r Receipt) error
 }
@@ -78,6 +80,7 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	if err := Check(a.Name(), caps, req); err != nil {
 		return Receipt{}, err
 	}
+	ctx = context.WithValue(ctx, receiptTimeoutKey{}, req.Limits.ReceiptTimeout)
 	base := Receipt{
 		RequestID: req.RequestID, TaskID: req.TaskID, AttemptID: req.AttemptID,
 		OfferingID: req.OfferingID, Harness: req.Harness, Model: req.Model,
@@ -92,7 +95,9 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	}
 
 	// Persist before launch. If this fails (including a reused attempt
-	// ID), nothing starts.
+	// ID or a write that stalls past ReceiptTimeout), nothing starts. A
+	// stalled write that lands later leaves a dispatching receipt with no
+	// start; restart reconciliation (S2-04) marks such attempts unknown.
 	if err := record(ctx, rec, base, StateDispatching, ""); err != nil {
 		return Receipt{}, fmt.Errorf("not dispatched: %w", err)
 	}
@@ -128,6 +133,12 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	defer stopWork()
 	approvalsCtx, stopApprovals := context.WithCancel(runCtx)
 	defer stopApprovals()
+	if startWhy != "" {
+		// Cancellation arrived while Start was returning: no prompt for
+		// this attempt may be answered, not even one already buffered.
+		// (The pump below isn't started in this case either.)
+		stopApprovals()
+	}
 
 	base.NativeSession = h.NativeSession()
 	if err := record(ctx, rec, base, StateStarted, ""); err != nil {
@@ -138,7 +149,7 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	}
 
 	promptFail := make(chan error, 1)
-	go func() {
+	pump := func() {
 		for {
 			select {
 			case <-workCtx.Done():
@@ -169,7 +180,10 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 				}
 			}
 		}
-	}()
+	}
+	if startWhy == "" {
+		go pump()
+	}
 
 	type waited struct {
 		res Result
@@ -196,12 +210,10 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	}
 	stopApprovals()
 
-	// Cancel shows "requested" until the runtime confirms exit. The whole
-	// cancel (request plus confirmation) is bounded by grace.
-	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
-		boundedCancel(ctx, h, grace)
-		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
-	}
+	// Cancel first, then record: a stalled receipt write must not delay
+	// the cancel. The whole cancel (request plus confirmation) is bounded
+	// by grace; the attempt shows cancel_requested until exit is
+	// confirmed, and the terminal receipt is always written after it.
 	deadline := time.NewTimer(grace)
 	defer deadline.Stop()
 	cancelCtx, cancelCancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
@@ -209,15 +221,28 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	cancelErr := make(chan error, 1)
 	go func() { cancelErr <- h.Cancel(cancelCtx) }()
 
-	select {
-	case w := <-done:
+	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
+		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+	}
+
+	confirmed := func(w waited) (Receipt, error) {
 		// Exit is confirmed only by a clean Wait or ErrCancelled. Any other
 		// error (transport failure) leaves the runtime's state unknown.
 		if w.err == nil || errors.Is(w.err, ErrCancelled) {
 			return finish(ctx, rec, base, StateCancelled, why)
 		}
 		return finish(ctx, rec, base, StateUnknown, why+"; exit not confirmed: wait failed: "+errorClass(w.err))
+	}
+	select {
+	case w := <-done:
+		return confirmed(w)
 	case <-deadline.C:
+		// If the exit and the deadline are both ready, the exit wins.
+		select {
+		case w := <-done:
+			return confirmed(w)
+		default:
+		}
 		reason := why + "; exit not confirmed within " + grace.String()
 		select {
 		case err := <-cancelErr:
@@ -247,7 +272,7 @@ func boundedCancel(ctx context.Context, h Handle, grace time.Duration) {
 // sentinels and context errors by name, anything else as "runtime error".
 // Runtime error text can echo prompts or credentials, so it isn't stored.
 func errorClass(err error) string {
-	for _, known := range []error{ErrStartAmbiguous, errStartHung, ErrCancelled, ErrOptionNotOffered, context.DeadlineExceeded, context.Canceled} {
+	for _, known := range []error{ErrStartAmbiguous, errStartHung, errReceiptStalled, ErrCancelled, ErrOptionNotOffered, context.DeadlineExceeded, context.Canceled} {
 		if errors.Is(err, known) {
 			return known.Error()
 		}
@@ -282,6 +307,9 @@ func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativeP
 	if appr == nil {
 		return errNoApprover
 	}
+	if ctx.Err() != nil {
+		return errLateDecision // cancellation began; don't even ask
+	}
 	opt, err := appr.Decide(ctx, req, p)
 	if err != nil {
 		return errApproverError
@@ -298,6 +326,21 @@ func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativeP
 		return errRespondFailed
 	}
 	return nil
+}
+
+// beforeStartSelect is a test hook: tests use it to make Start's result
+// and a cancellation ready at the same time. No-op in production.
+var beforeStartSelect = func() {}
+
+// cancelReason names the cancellation in effect, or "" if none.
+func cancelReason(ctx, runCtx context.Context, req Request) string {
+	switch {
+	case ctx.Err() != nil:
+		return "cancelled by caller"
+	case runCtx.Err() != nil:
+		return fmt.Sprintf("timeout after %s", req.Limits.Timeout)
+	}
+	return ""
 }
 
 // errStartHung: Start ignored cancellation and didn't return in time.
@@ -318,11 +361,14 @@ func start(ctx, runCtx context.Context, a Adapter, req Request, grace time.Durat
 		h, err := a.Start(startCtx, req)
 		ch <- started{h, err}
 	}()
+	beforeStartSelect()
 	var why string
 	select {
 	case s := <-ch:
 		cancelStart()
-		return s.h, "", s.err
+		// Start may have returned because of cancellation that the select
+		// didn't pick (both ready at once): check before trusting it.
+		return s.h, cancelReason(ctx, runCtx, req), s.err
 	case <-ctx.Done():
 		why = "cancelled by caller"
 	case <-runCtx.Done():
@@ -367,7 +413,7 @@ func finishResult(ctx context.Context, rec Recorder, base Receipt, req Request, 
 func finish(ctx context.Context, rec Recorder, base Receipt, s State, reason string) (Receipt, error) {
 	r := base
 	r.State, r.Reason, r.At = s, reason, time.Now().UTC()
-	if err := rec.Record(context.WithoutCancel(ctx), r); err != nil {
+	if err := write(ctx, rec, r); err != nil {
 		return unknown(base, fmt.Errorf("record %s: %w", s, err))
 	}
 	return r, nil
@@ -376,7 +422,34 @@ func finish(ctx context.Context, rec Recorder, base Receipt, s State, reason str
 func record(ctx context.Context, rec Recorder, base Receipt, s State, reason string) error {
 	r := base
 	r.State, r.Reason, r.At = s, reason, time.Now().UTC()
-	return rec.Record(context.WithoutCancel(ctx), r)
+	return write(ctx, rec, r)
+}
+
+// receiptTimeoutKey carries Limits.ReceiptTimeout to write via ctx, so the
+// helpers keep their signatures.
+type receiptTimeoutKey struct{}
+
+var errReceiptStalled = errors.New("receipt write did not return in time")
+
+// write runs one bounded receipt write. Caller cancellation is stripped
+// (a cancelled attempt must still be recorded) but the write gets its own
+// deadline, and Run stops waiting at that deadline even if the Recorder
+// ignores ctx.
+func write(ctx context.Context, rec Recorder, r Receipt) error {
+	d, _ := ctx.Value(receiptTimeoutKey{}).(time.Duration)
+	if d <= 0 {
+		d = DefaultReceiptTimeout
+	}
+	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), d)
+	defer cancel()
+	res := make(chan error, 1)
+	go func() { res <- rec.Record(wctx, r) }()
+	select {
+	case err := <-res:
+		return err
+	case <-wctx.Done():
+		return errReceiptStalled
+	}
 }
 
 // unknown is returned when Eyrie couldn't record the truth. The adapter's

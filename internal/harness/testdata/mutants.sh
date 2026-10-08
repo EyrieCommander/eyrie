@@ -42,12 +42,14 @@ PY
   if ! go vet ./internal/harness >"$tmp/m.log" 2>&1; then
     echo "BUILD FAILED (mutant invalid): $2"; bad=1; return
   fi
-  if go test -count=1 -timeout 60s ./internal/harness >"$tmp/m.log" 2>&1; then
+  if go test -count=1 -timeout 30s ./internal/harness >"$tmp/m.log" 2>&1; then
     echo "SURVIVED: $2"; bad=1
-  elif grep -q "^panic: test timed out" "$tmp/m.log"; then
-    echo "TIMEOUT (not an assertion): $2"; bad=1
   elif grep -qE "^[[:space:]]*--- FAIL" "$tmp/m.log"; then
+    # An assertion fired. (A later test may also hang on the mutant; the
+    # assertion is what counts.)
     echo "caught:   $2 ($(grep -oE -- '--- FAIL: [A-Za-z0-9_]+' "$tmp/m.log" | sort -u | head -1 | cut -d' ' -f3))"
+  elif grep -q "^panic: test timed out" "$tmp/m.log"; then
+    echo "TIMEOUT (no assertion fired): $2"; bad=1
   else
     echo "ERROR (no assertion failure): $2"; tail -5 "$tmp/m.log"; bad=1
   fi
@@ -62,13 +64,15 @@ mut run.go "unbounded Cancel in receipt-failure cleanup" \
 	close(done)'
 mut run.go "late approver decision sent after cancel" \
   '	if ctx.Err() != nil {
-		return errLateDecision' '	if false {
-		return errLateDecision'
+		return errLateDecision
+	}' ''
 mut run.go "approvals not stopped when cancel begins" \
-  '	stopApprovals()
+  '	}
+	stopApprovals()
 
-	// Cancel shows' '
-	// Cancel shows'
+	// Cancel first' '	}
+
+	// Cancel first'
 mut run.go "runtime error text stored in receipts" \
   '	return "runtime error (detail withheld from receipt)"' '	return err.Error()'
 mut run.go "runtime summary stored in receipts" \
@@ -100,10 +104,10 @@ mut run.go "adapter claim trusted when terminal receipt fails" \
   '		return unknown(base, fmt.Errorf("record %s: %w", s, err))' '		return r, nil'
 mut run.go "reused attempt id allowed" \
   '	if r.State == StateDispatching {' '	if false {'
-mut run.go "timeout ignored" \
-  '	case <-runCtx.Done():
-		why = fmt.Sprintf' '	case <-make(chan struct{}):
-		why = fmt.Sprintf'
+mut run.go "timeout ignored (running attempt)" \
+  '		case <-runCtx.Done():
+			why = fmt.Sprintf' '		case <-make(chan struct{}):
+			why = fmt.Sprintf'
 mut contract.go "dispatch without cancel support" '	if !c.Cancel {' '	if false {'
 mut contract.go "silent model fallback" \
   '	if len(c.Models) > 0 && !slices.Contains(c.Models, r.Model) {' '	if false {'
@@ -142,4 +146,31 @@ mut run.go "pump blocks on a stuck approver" \
   '				case <-approvalsCtx.Done():
 					return
 				}' '				}'
+mut run.go "pump runs after a cancelled start" \
+  '	if startWhy == "" {
+		go pump()
+	}' '	go pump()' \
+  '	if ctx.Err() != nil {
+		return errLateDecision // cancellation began; don'"'"'t even ask
+	}' ''
+# Not a mutant: the early stopApprovals() after a cancelled start and the
+# pump gate are redundant (either alone blocks an answer). Removing both
+# leaves only a sub-microsecond race against the later stopApprovals(),
+# which no test hits reliably, so it is not counted either way.
+mut run.go "cancel_requested recorded before Cancel is sent" \
+  '	go func() { cancelErr <- h.Cancel(cancelCtx) }()
+
+	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
+		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+	}' '	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
+		boundedCancel(ctx, h, grace)
+		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+	}
+	go func() { cancelErr <- h.Cancel(cancelCtx) }()'
+mut run.go "receipt writes unbounded" \
+  '	case <-wctx.Done():
+		return errReceiptStalled' '	case <-make(chan struct{}):
+		return errReceiptStalled'
+mut run.go "start result trusted when cancellation also ready" \
+  '		return s.h, cancelReason(ctx, runCtx, req), s.err' '		return s.h, "", s.err'
 exit $bad

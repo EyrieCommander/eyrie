@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -268,7 +269,8 @@ func TestLifecycle(t *testing.T) {
 			if c.approver != nil {
 				appr = c.approver
 			}
-			r, err := Run(ctx, f, rec, appr, req)
+			t.Cleanup(f.Finish)
+			r, err := runCtxWithin(t, 5*time.Second, ctx, f, rec, appr, req)
 			if c.wantErr != nil {
 				if !errors.Is(err, c.wantErr) {
 					t.Fatalf("err = %v, want %v", err, c.wantErr)
@@ -842,4 +844,159 @@ func settleGoroutines(max int) int {
 		n = runtime.NumGoroutine()
 	}
 	return n
+}
+
+// countingApprover approves immediately and counts calls (race-safe).
+type countingApprover struct{ calls atomic.Int32 }
+
+func (a *countingApprover) Decide(context.Context, Request, NativePrompt) (string, error) {
+	a.calls.Add(1)
+	return "accept", nil
+}
+
+// Review 9dfffaf0 #1: when Start returns a handle after cancellation began,
+// a prompt the runtime already buffered is never put to the approver, let
+// alone answered.
+func TestPromptAfterCancelledStartIsNeverDecided(t *testing.T) {
+	for i := 0; i < 50; i++ {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{
+			StartDelay: 60 * time.Millisecond, StartIgnoresCtx: true,
+			Prompts: []NativePrompt{cmdPrompt}, KeepEventsOpen: true,
+		}}
+		appr := &countingApprover{}
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(10*time.Millisecond, cancel)
+		r, err := Run(ctx, f, rec, appr, goodRequest("a1"))
+		f.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(r.Reason, "cancelled by caller") {
+			t.Fatalf("reason = %q", r.Reason)
+		}
+		time.Sleep(10 * time.Millisecond)
+		if n := appr.calls.Load(); n != 0 {
+			t.Fatalf("run %d: approver asked %d times for a cancelled attempt", i, n)
+		}
+		if got := f.Responses(); len(got) != 0 {
+			t.Fatalf("run %d: answered %v for a cancelled attempt", i, got)
+		}
+	}
+}
+
+// stallRecorder blocks (ignoring ctx) on receipts of one state until
+// release closes; onStall runs when such a write begins.
+type stallRecorder struct {
+	MemoryRecorder
+	state   State
+	release chan struct{}
+	onStall func()
+}
+
+func (s *stallRecorder) Record(ctx context.Context, r Receipt) error {
+	if r.State == s.state {
+		if s.onStall != nil {
+			s.onStall()
+		}
+		<-s.release
+	}
+	return s.MemoryRecorder.Record(ctx, r)
+}
+
+// Review #2: a stalled receipt write can neither delay cancellation nor
+// hang Run. Every write is bounded by Limits.ReceiptTimeout.
+func TestStalledRecorder(t *testing.T) {
+	t.Run("cancel is sent before the cancel_requested write", func(t *testing.T) {
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true}}
+		var cancelledFirst atomic.Bool
+		rec := &stallRecorder{state: StateCancelRequested, release: make(chan struct{})}
+		rec.onStall = func() {
+			deadline := time.Now().Add(500 * time.Millisecond)
+			for time.Now().Before(deadline) {
+				if f.Cancelled() {
+					cancelledFirst.Store(true)
+					break
+				}
+				time.Sleep(5 * time.Millisecond)
+			}
+			close(rec.release)
+		}
+		req := goodRequest("a1")
+		req.Limits.Timeout = 30 * time.Millisecond
+		req.Limits.ReceiptTimeout = 2 * time.Second
+		r, err := Run(context.Background(), f, rec, nil, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !cancelledFirst.Load() {
+			t.Fatal("Cancel was not sent while the cancel_requested write was stalled")
+		}
+		if r.State != StateCancelled {
+			t.Fatalf("state = %v", r.State)
+		}
+	})
+	for _, st := range []State{StateDispatching, StateStarted, StateCancelRequested, StateCancelled} {
+		t.Run("write stalls forever at "+string(st), func(t *testing.T) {
+			rec := &stallRecorder{state: st, release: make(chan struct{})}
+			t.Cleanup(func() { close(rec.release) })
+			f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true}}
+			t.Cleanup(f.Finish)
+			req := goodRequest("a1")
+			req.Limits.Timeout = 30 * time.Millisecond
+			req.Limits.ReceiptTimeout = 150 * time.Millisecond
+			start := time.Now()
+			ch := make(chan error, 1)
+			var r Receipt
+			go func() { var err error; r, err = Run(context.Background(), f, rec, nil, req); ch <- err }()
+			var err error
+			select {
+			case err = <-ch:
+			case <-time.After(3 * time.Second):
+				t.Fatalf("Run hung on a stalled %s write", st)
+			}
+			if err == nil {
+				t.Fatalf("stalled %s write: no error (state %v)", st, r.State)
+			}
+			if el := time.Since(start); el > 2*time.Second {
+				t.Fatalf("Run took %v", el)
+			}
+			if st == StateDispatching {
+				if f.Starts() != 0 {
+					t.Fatal("launched without a pre-launch receipt")
+				}
+				return
+			}
+			if r.State != StateUnknown {
+				t.Fatalf("state = %v, want unknown", r.State)
+			}
+			if !f.Cancelled() {
+				t.Fatal("attempt left running after a stalled receipt write")
+			}
+		})
+	}
+}
+
+// Review #3: when Start's result and the timeout are ready together,
+// cancellation is still recognised. Timeout 1ns has expired before Start
+// runs; Start sees its context done and returns at once, and the hook
+// holds the select until that result is buffered, so both cases are ready
+// and select picks either at random.
+func TestStartResultAndTimeoutTogether(t *testing.T) {
+	orig := beforeStartSelect
+	beforeStartSelect = func() { time.Sleep(5 * time.Millisecond) }
+	t.Cleanup(func() { beforeStartSelect = orig })
+	for i := 0; i < 100; i++ {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{StartChecksCtx: true, Result: Result{Success: true}}}
+		req := goodRequest("a1")
+		req.Limits.Timeout = time.Nanosecond
+		r, err := Run(context.Background(), f, rec, nil, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if r.State != StateCancelled || !strings.Contains(r.Reason, "timeout") {
+			t.Fatalf("run %d: state = %v reason = %q, want cancelled by timeout", i, r.State, r.Reason)
+		}
+	}
 }

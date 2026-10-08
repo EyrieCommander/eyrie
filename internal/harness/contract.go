@@ -71,9 +71,15 @@ type Limits struct {
 	// CancelGrace is how long Run waits for the harness to confirm exit
 	// after cancelling. Zero means DefaultCancelGrace.
 	CancelGrace time.Duration
+	// ReceiptTimeout bounds each receipt write; a write that doesn't
+	// return in time counts as failed. Zero means DefaultReceiptTimeout.
+	ReceiptTimeout time.Duration
 }
 
-const DefaultCancelGrace = 10 * time.Second
+const (
+	DefaultCancelGrace    = 10 * time.Second
+	DefaultReceiptTimeout = 5 * time.Second
+)
 
 // Capabilities is what an adapter can actually do. Missing means missing.
 type Capabilities struct {

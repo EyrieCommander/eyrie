@@ -39,7 +39,9 @@ type FakeScript struct {
 	// ctx ends first, unless StartIgnoresCtx.
 	StartDelay      time.Duration
 	StartIgnoresCtx bool
-	RespondErr      error
+	// StartChecksCtx makes Start return ctx.Err() at once if ctx is done.
+	StartChecksCtx bool
+	RespondErr     error
 }
 
 func (f *Fake) Name() string { return f.NameValue }
@@ -71,6 +73,9 @@ func (f *Fake) Cancelled() bool {
 
 func (f *Fake) Start(ctx context.Context, req Request) (Handle, error) {
 	f.starts.Add(1)
+	if f.Script.StartChecksCtx && ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
 	if d := f.Script.StartDelay; d > 0 {
 		if f.Script.StartIgnoresCtx {
 			time.Sleep(d)
