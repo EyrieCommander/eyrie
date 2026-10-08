@@ -124,7 +124,7 @@ func New(cfg config.Config) (*Server, error) {
 	s.mux = http.NewServeMux()
 	s.registerRoutes()
 	s.server = &http.Server{
-		Handler:      corsHandler(s.mux),
+		Handler:      managementHandler(s.mux, cfg.Dashboard.Host),
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 0, // SSE streams need unbounded writes
 		IdleTimeout:  60 * time.Second,
@@ -299,6 +299,13 @@ func (s *Server) runDiscovery(ctx context.Context) discovery.Result {
 	}
 
 	return result
+}
+
+// managementHandler is the full middleware stack for the management API:
+// browserGuard (Host/Origin/fetch-metadata, see browser_guard.go) around
+// the localhost CORS wrapper around the route mux.
+func managementHandler(mux http.Handler, bindHost string) http.Handler {
+	return newBrowserGuard(corsHandler(mux), bindHost)
 }
 
 // corsHandler wraps a handler with CORS headers. Only localhost origins are

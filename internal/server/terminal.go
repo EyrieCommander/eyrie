@@ -37,6 +37,9 @@ func (s *Server) handleShellTerminal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Origin is enforced by browserGuard (same-origin as the request,
+	// including the Vite dev proxy); the library's own check is skipped
+	// because it compares against r.Host differently behind the proxy.
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
 		InsecureSkipVerify: true,
 	})
@@ -179,7 +182,7 @@ func (s *Server) handleTerminal(w http.ResponseWriter, r *http.Request) {
 
 	// Accept WebSocket connection
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{
-		InsecureSkipVerify: true, // Allow local connections without origin check
+		InsecureSkipVerify: true, // Origin enforced by browserGuard; see handleShellTerminal
 	})
 	if err != nil {
 		slog.Error("Failed to accept WebSocket", "error", err)
