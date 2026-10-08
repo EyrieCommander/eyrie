@@ -302,11 +302,17 @@ func isRunePrefix(t []byte) bool {
 }
 
 func sniff(fh *os.File) (bool, error) {
-	buf := make([]byte, sniffBytes)
+	// Read one byte past the sniff window so "the buffer is full" and "the
+	// file ended exactly here" can be told apart: a partial rune is only
+	// forgiven when more of the file really follows.
+	buf := make([]byte, sniffBytes+1)
 	n, err := io.ReadFull(fh, buf)
 	eof := errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 	if err != nil && !eof {
 		return false, err
+	}
+	if n > sniffBytes {
+		n = sniffBytes // more follows: judge the window, not EOF
 	}
 	if _, err := fh.Seek(0, io.SeekStart); err != nil {
 		return false, err

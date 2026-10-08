@@ -71,6 +71,10 @@ Any other path is 404; a wrong method on a bridge route is 405.
 - **HTTP:** bodies ≤ 64 KB, no CORS headers, `Cache-Control: no-store`.
 - **Access log:** `~/.eyrie/logs/bridge-access.jsonl` (0600, append-only): time, remote, method, route label, root alias, relative path, status, bytes, duration, and an `auth_failed` flag. Never file contents, prompt or reply text, query strings, or tokens.
 
+## Management side (loopback)
+
+The Chief tab talks to `/api/chief/*` on the dashboard (management API), never to the bridge. `POST /api/chief/messages` and `.../retry` refuse cross-site requests: the `Host` must be a loopback name (blocks DNS rebinding), an `Origin` header must equal the request's own `scheme://Host`, a `Sec-Fetch-Site` other than `same-origin`/`none` is refused, and the body must be `Content-Type: application/json` (so a cross-site form or `text/plain` post can't wake the chief).
+
 ## Local state
 
 - `~/.eyrie/bridge.toml`: secret config (0600).

@@ -70,8 +70,15 @@ func TestChiefSendStoresBeforeDelivery(t *testing.T) {
 	s.AttachChief(svc)
 	s.registerChiefRoutes()
 
-	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/chief/messages", strings.NewReader(`{"text":"hello"}`)))
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("POST", "/api/chief/messages", strings.NewReader(body))
+		req.Host = "127.0.0.1:7200"
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	rec := post(`{"text":"hello"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("send: %d %s", rec.Code, rec.Body.String())
 	}
@@ -85,8 +92,7 @@ func TestChiefSendStoresBeforeDelivery(t *testing.T) {
 		t.Fatalf("not stored: %v %+v", err, got)
 	}
 
-	rec = httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, httptest.NewRequest("POST", "/api/chief/messages", strings.NewReader(`{"text":"   "}`)))
+	rec = post(`{"text":"   "}`)
 	if rec.Code != 400 {
 		t.Fatalf("empty prompt: %d", rec.Code)
 	}

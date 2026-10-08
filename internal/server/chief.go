@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"mime"
+	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/bridge"
@@ -37,9 +40,60 @@ func (s *Server) AttachChief(svc *bridge.Service) {
 func (s *Server) registerChiefRoutes() {
 	s.mux.HandleFunc("GET /api/chief/status", s.handleChiefStatus)
 	s.mux.HandleFunc("GET /api/chief/messages", s.handleChiefMessages)
-	s.mux.HandleFunc("POST /api/chief/messages", s.handleChiefSend)
-	s.mux.HandleFunc("POST /api/chief/messages/{id}/retry", s.handleChiefRetry)
+	s.mux.HandleFunc("POST /api/chief/messages", sameOriginJSON(s.handleChiefSend))
+	s.mux.HandleFunc("POST /api/chief/messages/{id}/retry", sameOriginJSON(s.handleChiefRetry))
 	s.mux.HandleFunc("GET /api/chief/events", s.handleChiefEvents)
+}
+
+// sameOriginJSON guards Chief mutations against cross-site requests. A
+// prompt POST wakes the chief, so a page on another origin must not be able
+// to send one through Dan's browser. Rules:
+//   - Host must be a loopback name (blocks DNS rebinding, where an attacker's
+//     domain resolves to 127.0.0.1 and Origin matches Host).
+//   - If Origin is present it must equal the request's own scheme://Host.
+//     The production UI is same-origin; the Vite dev proxy forwards the dev
+//     server's Host and Origin unchanged, so they match too. Browsers always
+//     send Origin on POST; only non-browser clients (curl) omit it, and those
+//     must also not send Sec-Fetch-Site.
+//   - Content-Type must be application/json, so a cross-origin request can't
+//     be a CORS "simple request" (text/plain form posts are refused).
+func sameOriginJSON(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden host"})
+			return
+		}
+		origin := r.Header.Get("Origin")
+		if origin != "" {
+			if origin != "http://"+r.Host && origin != "https://"+r.Host {
+				writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
+				return
+			}
+		} else if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
+			return
+		}
+		ct, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+		if ct != "application/json" {
+			writeJSON(w, http.StatusUnsupportedMediaType, map[string]string{"error": "Content-Type must be application/json"})
+			return
+		}
+		next(w, r)
+	}
+}
+
+// loopbackHost reports whether a Host header names this machine's loopback.
+func loopbackHost(hostport string) bool {
+	host := hostport
+	if h, _, err := net.SplitHostPort(hostport); err == nil {
+		host = h
+	}
+	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func (s *Server) handleChiefStatus(w http.ResponseWriter, r *http.Request) {

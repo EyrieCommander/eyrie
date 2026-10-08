@@ -1030,7 +1030,11 @@ export async function sendChiefMessage(text: string, conversation = "chief"): Pr
 }
 
 export async function retryChiefMessage(messageId: string): Promise<ChiefMessage> {
-  const res = await fetchWithTimeout(`${BASE}/api/chief/messages/${encodeURIComponent(messageId)}/retry`, { method: "POST" });
+  const res = await fetchWithTimeout(`${BASE}/api/chief/messages/${encodeURIComponent(messageId)}/retry`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  });
   if (!res.ok) {
     const body = await res.json().catch(() => ({ error: res.statusText }));
     throw new Error(body.error || "retry failed");
