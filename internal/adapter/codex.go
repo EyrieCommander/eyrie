@@ -208,6 +208,13 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 		return nil, fmt.Errorf("starting codex app-server: %w", err)
 	}
 
+	// abort ends the app server on an early error exit. Wait reaps the child
+	// and closes its pipes; Kill alone leaves a zombie per failed attempt.
+	abort := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
+
 	client := newCodexRPCClient(stdin, stdout)
 	go client.readLoop()
 
@@ -220,18 +227,18 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 			"experimentalApi": true,
 		},
 	}); err != nil {
-		_ = cmd.Process.Kill()
+		abort()
 		return nil, fmt.Errorf("codex initialize: %w", err)
 	}
 	_ = client.notify("initialized", map[string]any{})
 
 	threadID, err := a.codexThread(ctx, client, sessionKey, cfg)
 	if err != nil {
-		_ = cmd.Process.Kill()
+		abort()
 		return nil, err
 	}
 	if _, err := client.request(ctx, "turn/start", codexTurnStartParams(threadID, message, cfg)); err != nil {
-		_ = cmd.Process.Kill()
+		abort()
 		return nil, fmt.Errorf("codex turn/start: %w", err)
 	}
 

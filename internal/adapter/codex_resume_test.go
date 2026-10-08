@@ -8,7 +8,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -152,5 +154,66 @@ func TestCodexThreadAfterResetStartsAndSavesNewThread(t *testing.T) {
 	}
 	if a.currentConfig().Threads["review"] != "thr_new" {
 		t.Fatalf("new thread not saved: %v", a.currentConfig().Threads)
+	}
+}
+
+// TestMain lets the test binary stand in for `codex app-server`: when
+// EYRIE_FAKE_CODEX_RESUME_FAIL is set it serves a minimal app server whose
+// thread/resume always fails, after writing its pid to that path.
+func TestMain(m *testing.M) {
+	if pidFile := os.Getenv("EYRIE_FAKE_CODEX_RESUME_FAIL"); pidFile != "" {
+		_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600)
+		sc := bufio.NewScanner(os.Stdin)
+		enc := json.NewEncoder(os.Stdout)
+		for sc.Scan() {
+			var req struct {
+				ID     json.RawMessage `json:"id"`
+				Method string          `json:"method"`
+			}
+			if json.Unmarshal(sc.Bytes(), &req) != nil || len(req.ID) == 0 {
+				continue
+			}
+			if req.Method == "thread/resume" {
+				_ = enc.Encode(map[string]any{"id": req.ID, "error": map[string]any{"code": -32000, "message": "thread not found"}})
+				continue
+			}
+			_ = enc.Encode(map[string]any{"id": req.ID, "result": map[string]any{}})
+		}
+		os.Exit(0)
+	}
+	os.Exit(m.Run())
+}
+
+func TestCodexStreamMessageFailedResumeReapsAppServer(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "fake.pid")
+	t.Setenv("EYRIE_FAKE_CODEX_RESUME_FAIL", pidFile)
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "source-codex-home")) // keep seedCodexAuth off ~/.codex
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := newTestCodexAdapter(t, codexConfig{BinaryPath: self, CWD: dir, Threads: map[string]string{"review": "thr_saved"}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ch, err := a.StreamMessage(ctx, "hello", "review")
+	if err == nil {
+		for range ch {
+		}
+		t.Fatal("StreamMessage succeeded after a failed resume")
+	}
+	var re *CodexResumeError
+	if !errors.As(err, &re) {
+		t.Fatalf("err = %v, want *CodexResumeError", err)
+	}
+	raw, err := os.ReadFile(pidFile)
+	if err != nil {
+		t.Fatalf("fake app server never ran: %v", err)
+	}
+	pid, _ := strconv.Atoi(string(raw))
+	// A killed-but-unwaited child is a zombie and still answers signal 0.
+	if err := syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
+		t.Fatalf("app server pid %d not reaped after StreamMessage returned (kill 0: %v)", pid, err)
 	}
 }
