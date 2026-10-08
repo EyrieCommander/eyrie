@@ -59,8 +59,23 @@ export function renderInline(text: string, keyBase = "i"): React.ReactNode[] {
   return out;
 }
 
+/** True when `line` starts a non-paragraph block. Shared by the block
+ *  dispatcher and the paragraph loop so the two can never disagree (if the
+ *  paragraph loop refused a line the dispatcher also refused, nothing would
+ *  consume it and rendering would spin forever). */
+function startsBlock(line: string): boolean {
+  return (
+    line.startsWith("```") ||
+    /^#{1,3} \S/.test(line) ||
+    line.startsWith(">") ||
+    /^ *([-*]|\d+\.) +\S/.test(line)
+  );
+}
+
 export function SafeMarkdown({ text }: { text: string }) {
-  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  // Normalise every line terminator, including U+2028/U+2029 and other
+  // vertical whitespace that JS regexes treat as line breaks.
+  const lines = text.replace(/\r\n?|[\u2028\u2029\u0085\v\f]/g, "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let i = 0;
   let b = 0;
@@ -79,18 +94,18 @@ export function SafeMarkdown({ text }: { text: string }) {
       );
       continue;
     }
-    const h = /^(#{1,3})\s+(.*)$/.exec(line);
+    const h = /^(#{1,3}) (\S.*)$/.exec(line);
     if (h) {
       const cls = h[1].length === 1 ? "text-sm font-semibold" : "text-xs font-semibold";
       blocks.push(<div key={key} className={cls}>{renderInline(h[2], key)}</div>);
       i++;
       continue;
     }
-    if (/^\s*([-*]|\d+\.)\s+/.test(line)) {
-      const ordered = /^\s*\d+\./.test(line);
+    if (/^ *([-*]|\d+\.) +\S/.test(line)) {
+      const ordered = /^ *\d+\./.test(line);
       const items: React.ReactNode[] = [];
-      while (i < lines.length && /^\s*([-*]|\d+\.)\s+/.test(lines[i])) {
-        items.push(<li key={`${key}-${items.length}`}>{renderInline(lines[i].replace(/^\s*([-*]|\d+\.)\s+/, ""), `${key}-${items.length}`)}</li>);
+      while (i < lines.length && /^ *([-*]|\d+\.) +\S/.test(lines[i])) {
+        items.push(<li key={`${key}-${items.length}`}>{renderInline(lines[i].replace(/^ *([-*]|\d+\.) +/, ""), `${key}-${items.length}`)}</li>);
         i++;
       }
       blocks.push(
@@ -108,8 +123,10 @@ export function SafeMarkdown({ text }: { text: string }) {
       i++;
       continue;
     }
-    const para: string[] = [];
-    while (i < lines.length && lines[i].trim() !== "" && !/^(```|#{1,3}\s|>|\s*([-*]|\d+\.)\s+)/.test(lines[i])) para.push(lines[i++]);
+    // Paragraph: always consumes at least the current line, so the loop
+    // makes progress whatever the input.
+    const para: string[] = [lines[i++]];
+    while (i < lines.length && lines[i].trim() !== "" && !startsBlock(lines[i])) para.push(lines[i++]);
     blocks.push(<p key={key}>{renderInline(para.join(" "), key)}</p>);
   }
   return <div className="space-y-1.5 text-xs text-text break-words">{blocks}</div>;

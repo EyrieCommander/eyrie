@@ -107,10 +107,15 @@ func (w *Waker) sendOnce(ctx context.Context, p WakePayload) error {
 	return nil
 }
 
+// errSuperseded: a reply arrived (or the message otherwise left pending)
+// between attempts, so further wakes are pointless.
+var errSuperseded = errors.New("wake: superseded by a reply")
+
 // Deliver tries once plus len(wakeRetryDelays) retries, all with the same
 // message_id. onAttempt is called after each attempt with the attempt number
-// and its error (nil on success). Returns the last error, nil on success.
-func (w *Waker) Deliver(ctx context.Context, m *Message, onAttempt func(n int, err error)) error {
+// and its error (nil on success). stillPending, if set, is checked before
+// each retry. Returns the last error, nil on success.
+func (w *Waker) Deliver(ctx context.Context, m *Message, onAttempt func(n int, err error), stillPending func() bool) error {
 	p := BuildWake(m)
 	var err error
 	for i := 0; i <= len(wakeRetryDelays); i++ {
@@ -119,6 +124,9 @@ func (w *Waker) Deliver(ctx context.Context, m *Message, onAttempt func(n int, e
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(wakeRetryDelays[i-1]):
+			}
+			if stillPending != nil && !stillPending() {
+				return errSuperseded
 			}
 		}
 		err = w.sendOnce(ctx, p)

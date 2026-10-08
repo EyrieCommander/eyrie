@@ -408,21 +408,21 @@ func (f *FS) searchDir(d *os.File, prefix string, depth int, st *searchState) {
 			sub.Close()
 		case t.IsRegular():
 			st.files++
-			rel := prefix + name
-			if strings.Contains(strings.ToLower(name), st.lq) {
-				st.hits = append(st.hits, Hit{Path: rel, Line: 0, Snippet: snippet(name, st.lq)})
-			}
 			fh, err := openChild(d, name, wantFile)
 			if err != nil {
 				continue
 			}
-			f.searchFile(fh, rel, st)
+			f.searchFile(fh, name, prefix+name, st)
 			fh.Close()
 		}
 	}
 }
 
-func (f *FS) searchFile(fh *os.File, rel string, st *searchState) {
+// searchFile skips binary and oversized files entirely (name included),
+// then matches the name and every line. Lines are read whole (the file is
+// already capped at maxReadFileSize), so a long line can't end the scan
+// early; a read error marks the result truncated.
+func (f *FS) searchFile(fh *os.File, name, rel string, st *searchState) {
 	fi, err := fh.Stat()
 	if err != nil || fi.Size() > maxReadFileSize {
 		return
@@ -430,22 +430,32 @@ func (f *FS) searchFile(fh *os.File, rel string, st *searchState) {
 	if bin, err := sniff(fh); err != nil || bin {
 		return
 	}
-	sc := bufio.NewScanner(io.LimitReader(fh, maxReadFileSize))
-	sc.Buffer(make([]byte, 64<<10), 1<<20)
+	if strings.Contains(strings.ToLower(name), st.lq) {
+		st.hits = append(st.hits, Hit{Path: rel, Line: 0, Snippet: snippet(name, st.lq)})
+	}
+	br := bufio.NewReader(io.LimitReader(fh, maxReadFileSize))
 	n := 0
-	for sc.Scan() {
-		n++
-		if len(st.hits) >= st.max {
-			st.truncated = true
-			return
+	for {
+		line, rerr := br.ReadString('\n')
+		if line != "" {
+			n++
+			if len(st.hits) >= st.max {
+				st.truncated = true
+				return
+			}
+			if n%1024 == 0 && time.Now().After(st.deadline) {
+				st.truncated = true
+				return
+			}
+			if strings.Contains(strings.ToLower(line), st.lq) {
+				st.hits = append(st.hits, Hit{Path: rel, Line: n, Snippet: snippet(strings.TrimRight(line, "\r\n"), st.lq)})
+			}
 		}
-		if n%1024 == 0 && time.Now().After(st.deadline) {
-			st.truncated = true
+		if rerr != nil {
+			if rerr != io.EOF {
+				st.truncated = true
+			}
 			return
-		}
-		line := sc.Text()
-		if strings.Contains(strings.ToLower(line), st.lq) {
-			st.hits = append(st.hits, Hit{Path: rel, Line: n, Snippet: snippet(line, st.lq)})
 		}
 	}
 }

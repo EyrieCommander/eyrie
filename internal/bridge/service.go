@@ -20,10 +20,16 @@ type Service struct {
 	// always re-reads the store; Notify carries no data that matters.
 	Notify func(conversationID string)
 
-	ctx      context.Context
-	cancel   context.CancelFunc
-	inflight sync.Map // message_id -> struct{}: one delivery loop per message
-	wg       sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
+
+	// mu guards inflight. Acquiring a delivery slot, resetting state for a
+	// retry, and a delivery's final "failed" write plus release all happen
+	// under mu, so a Retry can never reset a message and then find the slot
+	// still held by a delivery that has already finished deciding.
+	mu       sync.Mutex
+	inflight map[string]bool // message_id -> delivery loop running
 }
 
 // ErrWakeNotConfigured: prompts can be stored but not sent.
@@ -38,7 +44,7 @@ const MaxPromptBytes = 64 << 10
 // NewService wires a store and (optionally) the chief wake endpoint.
 func NewService(store *Store, cfg Config) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &Service{Store: store, ctx: ctx, cancel: cancel}
+	s := &Service{Store: store, ctx: ctx, cancel: cancel, inflight: map[string]bool{}}
 	if cfg.WakeConfigured() {
 		s.waker = &Waker{URL: cfg.ChiefWakeURL, Key: cfg.ChiefWakeKey, Client: &http.Client{}}
 	}
@@ -84,14 +90,24 @@ func (s *Service) Retry(messageID string) (*Message, error) {
 	if err != nil {
 		return nil, err
 	}
-	if m.State == StateAnswered {
+	s.mu.Lock()
+	if s.inflight[m.MessageID] {
+		// A delivery loop is still running and owns the message.
+		s.mu.Unlock()
 		return m, nil
 	}
-	if err := s.Store.SetState(m.MessageID, StatePending, 0, ""); err != nil {
-		return nil, err
+	ok, err := s.Store.ResetForRetry(m.MessageID)
+	if err != nil || !ok {
+		s.mu.Unlock()
+		if err != nil {
+			return nil, err
+		}
+		return m, nil // answered: nothing to retry
 	}
+	s.inflight[m.MessageID] = true
+	s.mu.Unlock()
 	m.State = StatePending
-	s.deliver(m)
+	s.run(m)
 	return m, nil
 }
 
@@ -110,30 +126,43 @@ func (s *Service) ResumePending() {
 	}
 }
 
+// deliver starts a delivery loop for m unless one is already running.
 func (s *Service) deliver(m *Message) {
-	if _, busy := s.inflight.LoadOrStore(m.MessageID, struct{}{}); busy {
+	s.mu.Lock()
+	if s.inflight[m.MessageID] {
+		s.mu.Unlock()
 		return
 	}
+	s.inflight[m.MessageID] = true
+	s.mu.Unlock()
+	s.run(m)
+}
+
+// run is the delivery loop; the caller already holds the inflight slot.
+func (s *Service) run(m *Message) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
-		defer s.inflight.Delete(m.MessageID)
-		err := s.waker.Deliver(s.ctx, m, func(n int, err error) {
-			if err == nil {
-				_ = s.Store.SetState(m.MessageID, StateWaiting, n, "")
-			} else {
-				_ = s.Store.SetState(m.MessageID, StatePending, n, err.Error())
-			}
-			s.notify(m.ConversationID)
-		})
-		if err != nil && s.ctx.Err() == nil {
-			cur, gerr := s.Store.GetMessage(m.MessageID)
-			if gerr == nil && cur.State == StatePending {
-				_ = s.Store.SetState(m.MessageID, StateFailed, cur.Attempts, err.Error())
-			}
-			slog.Warn("bridge: chief wake failed", "message_id", m.MessageID, "error", err)
-			s.notify(m.ConversationID)
+		stillPending := func() bool {
+			cur, err := s.Store.GetMessage(m.MessageID)
+			return err == nil && cur.State == StatePending
 		}
+		err := s.waker.Deliver(s.ctx, m, func(n int, err error) {
+			msg := ""
+			if err != nil {
+				msg = err.Error()
+			}
+			_ = s.Store.RecordAttempt(m.MessageID, n, msg)
+			s.notify(m.ConversationID)
+		}, stillPending)
+		s.mu.Lock()
+		if err != nil && err != errSuperseded && s.ctx.Err() == nil {
+			_ = s.Store.MarkFailed(m.MessageID) // only if still pending
+			slog.Warn("bridge: chief wake failed", "message_id", m.MessageID, "error", err)
+		}
+		delete(s.inflight, m.MessageID)
+		s.mu.Unlock()
+		s.notify(m.ConversationID)
 	}()
 }
 

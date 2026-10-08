@@ -164,7 +164,7 @@ func TestWakeDoesNotFollowRedirects(t *testing.T) {
 	defer wake.Close()
 
 	w := &Waker{URL: wake.URL, Key: "wake-key", Client: &http.Client{}}
-	err := w.Deliver(t.Context(), &Message{ConversationID: "chief", MessageID: "m1", Text: "x", TS: time.Now()}, nil)
+	err := w.Deliver(t.Context(), &Message{ConversationID: "chief", MessageID: "m1", Text: "x", TS: time.Now()}, nil, nil)
 	if err == nil {
 		t.Fatal("redirect counted as delivered")
 	}

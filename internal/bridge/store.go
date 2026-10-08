@@ -130,6 +130,44 @@ func (s *Store) SetState(messageID, state string, attempts int, lastErr string) 
 	return err
 }
 
+// RecordAttempt records one wake attempt with conditional writes, so a
+// delivery outcome never demotes a message that a reply already moved on.
+//   - success: pending/failed -> waiting (waiting/answered untouched).
+//   - failure: attempts and last_error only; the state is left alone.
+func (s *Store) RecordAttempt(messageID string, attempt int, errText string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if errText == "" {
+		_, err := s.db.Exec(`UPDATE messages SET state=?, attempts=?, last_error='' WHERE message_id=? AND state IN (?, ?)`,
+			StateWaiting, attempt, messageID, StatePending, StateFailed)
+		return err
+	}
+	_, err := s.db.Exec(`UPDATE messages SET attempts=?, last_error=? WHERE message_id=?`, attempt, errText, messageID)
+	return err
+}
+
+// MarkFailed moves a message to failed only if it is still pending.
+func (s *Store) MarkFailed(messageID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`UPDATE messages SET state=? WHERE message_id=? AND state=?`, StateFailed, messageID, StatePending)
+	return err
+}
+
+// ResetForRetry moves a failed or waiting message back to pending. Returns
+// false (and changes nothing) if it is answered or unknown.
+func (s *Store) ResetForRetry(messageID string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	res, err := s.db.Exec(`UPDATE messages SET state=?, attempts=0, last_error='' WHERE message_id=? AND state IN (?, ?, ?)`,
+		StatePending, messageID, StatePending, StateFailed, StateWaiting)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
+}
+
 // GetMessage returns one message with its replies.
 func (s *Store) GetMessage(messageID string) (*Message, error) {
 	row := s.db.QueryRow(`SELECT message_id, conversation_id, text, ts, state, attempts, last_error FROM messages WHERE message_id=?`, messageID)
