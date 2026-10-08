@@ -358,37 +358,66 @@ func TestConsumeCannotCommitAfterExpiryUsingAStaleClock(t *testing.T) {
 	}
 }
 
+// sqliteHeader reports whether p is a SQLite database. securePaths creates
+// an empty file at the checked path, so existence alone proves nothing.
+func sqliteHeader(p string) bool {
+	b, err := os.ReadFile(p)
+	return err == nil && len(b) >= 16 && string(b[:15]) == "SQLite format 3"
+}
+
 func TestOddPathCharactersOpenTheCheckedFile(t *testing.T) {
-	for _, name := range []string{"a?mode=ro.db", "b#frag.db", "c%2e%2e.db", "d e.db"} {
+	for _, name := range []string{"a?mode=ro.db", "b#frag.db", "c%2e%2e.db", "d%20e.db", "e e.db"} {
 		dir := filepath.Join(t.TempDir(), "x")
 		path := filepath.Join(dir, name)
 		s, err := Open(path, Options{})
 		if err != nil {
 			t.Fatalf("%q: %v", name, err)
 		}
-		r, err := s.Create(ctx, binding(), "x", time.Hour)
-		if err != nil {
+		if _, err := s.Create(ctx, binding(), "x", time.Hour); err != nil {
 			t.Fatalf("%q create: %v", name, err)
 		}
 		_ = s.Close()
+		if !sqliteHeader(path) {
+			t.Fatalf("%q: no database at the checked path", name)
+		}
 		entries, _ := os.ReadDir(dir)
-		found := false
 		for _, e := range entries {
-			if e.Name() == name {
-				found = true
+			n := e.Name()
+			if n != name && n != name+"-wal" && n != name+"-shm" {
+				t.Fatalf("%q: stray file %q (SQLite opened another path)", name, n)
 			}
 		}
-		if !found {
-			var names []string
-			for _, e := range entries {
-				names = append(names, e.Name())
-			}
-			t.Fatalf("%q: database written elsewhere; dir has %v", name, names)
+		if parent, _ := os.ReadDir(filepath.Dir(dir)); len(parent) != 1 {
+			t.Fatalf("%q: files outside the db directory: %v", name, parent)
 		}
-		s2, _ := Open(path, Options{})
-		if _, err := s2.Get(ctx, r.ID); err != nil {
-			t.Fatalf("%q reopen: %v", name, err)
-		}
-		_ = s2.Close()
+	}
+}
+
+func TestDotDotThroughSymlinkUsesOneResolvedPath(t *testing.T) {
+	root := t.TempDir()
+	safe := filepath.Join(root, "safe")
+	sub := filepath.Join(root, "other", "sub")
+	_ = os.MkdirAll(safe, 0o700)
+	_ = os.MkdirAll(sub, 0o700)
+	if err := os.Symlink(sub, filepath.Join(safe, "link")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(safe+"/link/../a.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Create(ctx, binding(), "x", time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	osPath := filepath.Join(root, "other", "a.db")
+	if !sqliteHeader(osPath) {
+		t.Fatalf("database not at the OS-resolved path %s", osPath)
+	}
+	if _, err := os.Stat(filepath.Join(safe, "a.db")); err == nil {
+		t.Fatal("a database file appeared at the lexically cleaned path")
+	}
+	if fi, _ := os.Stat(osPath); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("resolved db mode = %v", fi.Mode().Perm())
 	}
 }

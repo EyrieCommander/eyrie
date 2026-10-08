@@ -23,6 +23,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -140,6 +141,10 @@ func Open(path string, opts Options) (*Store, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
+	path, err := resolvePath(path)
+	if err != nil {
+		return nil, err
+	}
 	if err := securePaths(path); err != nil {
 		return nil, err
 	}
@@ -160,12 +165,84 @@ func Open(path string, opts Options) (*Store, error) {
 // concatenation would let '?', '#' or '%xx' in path open a different file
 // from the one securePaths checked.
 func sqliteDSN(path string) string {
-	abs, err := filepath.Abs(path)
-	if err == nil {
-		path = abs
-	}
 	u := url.URL{Scheme: "file", Path: path, OmitHost: true}
 	return u.String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+}
+
+// resolvePath turns path into the one absolute, symlink-free path that both
+// the permission checks and SQLite then use. The directory is created first
+// and resolved the way the OS resolves it (EvalSymlinks follows a symlink
+// before applying "..", as open(2) does); a lexical filepath.Abs would turn
+// "/safe/link/../a.db" into "/safe/a.db" while the OS opens
+// "<link target>/../a.db".
+// resolveExisting resolves dir the way open(2) would. EvalSymlinks does
+// that for an existing path. If dir doesn't exist yet, the missing tail is
+// peeled off component by component (by hand, no lexical clean), the
+// existing head is resolved, and the tail is re-attached. A ".." in the
+// missing tail is refused, because it can't be resolved without the
+// directory existing.
+func resolveExisting(dir string) (string, error) {
+	var tail []string
+	cur := dir
+	for {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			r, err = filepath.Abs(r)
+			if err != nil {
+				return "", err
+			}
+			for i := len(tail) - 1; i >= 0; i-- {
+				r = filepath.Join(r, tail[i])
+			}
+			return r, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		i := strings.LastIndexByte(cur, filepath.Separator)
+		if i < 0 {
+			if cur == "" || cur == "." {
+				return "", fmt.Errorf("cannot resolve %q", dir)
+			}
+			tail = append(tail, cur)
+			cur = "."
+			continue
+		}
+		comp := cur[i+1:]
+		if comp == ".." {
+			return "", fmt.Errorf("%q has '..' below a directory that doesn't exist yet", dir)
+		}
+		if comp != "" && comp != "." {
+			tail = append(tail, comp)
+		}
+		cur = cur[:i]
+		if cur == "" {
+			cur = string(filepath.Separator)
+		}
+	}
+}
+
+func resolvePath(path string) (string, error) {
+	// Split on the last separator by hand: filepath.Dir/Base clean the path
+	// lexically, which is the bug this function exists to avoid.
+	dir, base := ".", path
+	if i := strings.LastIndexByte(path, filepath.Separator); i >= 0 {
+		dir, base = path[:i], path[i+1:]
+		if dir == "" {
+			dir = string(filepath.Separator)
+		}
+	}
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("approvals: %q does not name a file", path)
+	}
+	// Resolve the existing part of dir as the OS would, before anything
+	// touches it: os.MkdirAll, filepath.Join and Abs all clean lexically.
+	real, err := resolveExisting(dir)
+	if err != nil {
+		return "", fmt.Errorf("approvals: %w", err)
+	}
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		return "", fmt.Errorf("approvals: %w", err)
+	}
+	return filepath.Join(real, base), nil
 }
 
 // Close closes the store.
