@@ -138,6 +138,10 @@ not ship private mesh files.
 
 <img width="1323" height="749" alt="Screen Shot 2026-03-29 at 2 18 31 PM" src="https://github.com/user-attachments/assets/cdeab567-150e-48d4-b6dd-add402953a59" />
 
+## Bridge
+
+Off by default. The bridge is a separate loopback listener that lets the chief (Workbench) reply to Dan in the **Chief** chat tab and read allowlisted folders, read-only. Setup, Funnel/tunnel, token rotation, and how to turn it off: [docs/bridge.md](docs/bridge.md). Example config (placeholders only): [docs/bridge.example.toml](docs/bridge.example.toml).
+
 ## Architecture
 
 Eyrie uses an adapter pattern: each Claw framework gets a dedicated adapter that translates the common `Agent` interface into framework-specific gateway calls. ZeroClaw speaks HTTP REST; OpenClaw speaks WebSocket RPC; PicoClaw uses a hybrid of REST and the Pico Protocol WebSocket. Eyrie handles all transparently.

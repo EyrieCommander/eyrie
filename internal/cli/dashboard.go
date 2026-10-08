@@ -60,6 +60,11 @@ func runDashboard(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("initializing server: %w", err)
 	}
 
+	// The bridge is a separate loopback listener with its own mux; it is
+	// off unless ~/.eyrie/bridge.toml exists (see docs/bridge.md).
+	stopBridge := startBridge(srv)
+	defer stopBridge()
+
 	if cfg.Dashboard.OpenBrowser && !dashboardNoOpen {
 		go openBrowser(url)
 	}

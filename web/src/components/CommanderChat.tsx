@@ -36,6 +36,7 @@ import type {
 import { useAutoScroll } from "../lib/useAutoScroll";
 import { KEYS_CHANGED_EVENT, COMMANDER_PREFILL_EVENT } from "../lib/events";
 import { useData } from "../lib/DataContext";
+import ChiefChat from "./ChiefChat";
 
 // ── Types ────────────────────────────────────────────────────────────
 
@@ -72,6 +73,9 @@ interface ContextUsage {
 // ── Component ────────────────────────────────────────────────────────
 
 const STORAGE_KEY = "eyrie-commander-chat-expanded";
+const TARGET_KEY = "eyrie-chat-target";
+
+type ChatTarget = "commander" | "chief";
 
 interface Props {
   /** Current onboarding phase — drives context-aware greeting + chips. */
@@ -88,6 +92,16 @@ export default function CommanderChat({ phase }: Props) {
       return true;
     }
   });
+  const [target, setTarget] = useState<ChatTarget>(() => {
+    try {
+      return localStorage.getItem(TARGET_KEY) === "chief" ? "chief" : "commander";
+    } catch {
+      return "commander";
+    }
+  });
+  useEffect(() => {
+    try { localStorage.setItem(TARGET_KEY, target); } catch { /* private mode */ }
+  }, [target]);
   const [items, setItems] = useState<ChatItem[]>([]);
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
@@ -376,8 +390,24 @@ export default function CommanderChat({ phase }: Props) {
       {/* Header */}
       <div className="flex items-center gap-2 border-b border-border px-3 py-2">
         <MessageSquare className="h-3.5 w-3.5 text-purple" />
-        <span className="text-xs font-semibold text-text flex-1">commander</span>
+        <div className="flex flex-1 items-center gap-1" role="tablist" aria-label="chat target">
+          {(["commander", "chief"] as const).map((t) => (
+            <button
+              key={t}
+              role="tab"
+              aria-selected={target === t}
+              onClick={() => setTarget(t)}
+              className={`rounded px-1.5 py-0.5 text-xs font-semibold transition-colors ${
+                target === t ? "bg-surface-hover text-text" : "text-text-muted hover:text-text"
+              }`}
+              title={t === "chief" ? "talk to the chief (same as Workbench)" : "talk to the Eyrie commander"}
+            >
+              {t === "chief" ? "Chief" : "commander"}
+            </button>
+          ))}
+        </div>
 
+        {target === "commander" && (<>
         {/* Memory badge */}
         {memories.length > 0 && (
           <button
@@ -414,6 +444,8 @@ export default function CommanderChat({ phase }: Props) {
           <Trash2 className="h-3 w-3" />
         </button>
 
+        </>)}
+
         {/* Collapse */}
         <button
           onClick={() => setExpanded(false)}
@@ -424,6 +456,7 @@ export default function CommanderChat({ phase }: Props) {
         </button>
       </div>
 
+      {target === "chief" ? <ChiefChat /> : (<>
       {/* Memory drawer */}
       {memoryOpen && memories.length > 0 && (
         <div className="border-b border-border bg-bg px-3 py-2 max-h-48 overflow-y-auto">
@@ -544,6 +577,7 @@ export default function CommanderChat({ phase }: Props) {
           </button>
         </div>
       </div>
+      </>)}
     </div>
   );
 }

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/adapter"
+	"github.com/Audacity88/eyrie/internal/bridge"
 	"github.com/Audacity88/eyrie/internal/commander"
 	"github.com/Audacity88/eyrie/internal/config"
 	"github.com/Audacity88/eyrie/internal/discovery"
@@ -62,6 +63,10 @@ type Server struct {
 	// pairAttempted tracks which agents we've already tried to auto-pair
 	// so we don't spawn goroutines on every discovery poll.
 	pairAttempted sync.Map // map[string]bool
+
+	// chief is the Chief front door (see chief.go). nil when the bridge
+	// is not configured.
+	chief *bridge.Service
 }
 
 func New(cfg config.Config) (*Server, error) {
@@ -133,6 +138,7 @@ func New(cfg config.Config) (*Server, error) {
 }
 
 func (s *Server) registerRoutes() {
+	s.registerChiefRoutes()
 	s.mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	s.mux.HandleFunc("GET /api/agents/{name}/config", s.handleAgentConfig)
 	s.mux.HandleFunc("POST /api/agents/{name}/{action}", s.handleAgentAction)

@@ -981,3 +981,71 @@ export async function validateKey(
   }
   return res.json();
 }
+
+// ── Chief front door (loopback management API) ──────────────────────
+
+export interface ChiefReply {
+  reply_id: string;
+  in_reply_to: string;
+  text: string;
+  final: boolean;
+  ts: string;
+}
+
+export interface ChiefMessage {
+  conversation_id: string;
+  message_id: string;
+  text: string;
+  ts: string;
+  state: "pending" | "waiting" | "answered" | "failed";
+  attempts: number;
+  last_error?: string;
+  replies?: ChiefReply[];
+}
+
+export async function fetchChiefStatus(): Promise<{ enabled: boolean; wake_configured: boolean }> {
+  const res = await fetchWithTimeout(`${BASE}/api/chief/status`);
+  if (!res.ok) throw new Error(`chief status: ${res.statusText}`);
+  return res.json();
+}
+
+export async function fetchChiefMessages(conversation = "chief"): Promise<ChiefMessage[]> {
+  const res = await fetchWithTimeout(`${BASE}/api/chief/messages?conversation=${encodeURIComponent(conversation)}`);
+  if (!res.ok) throw new Error(`chief messages: ${res.statusText}`);
+  const data = await res.json();
+  return data.messages ?? [];
+}
+
+export async function sendChiefMessage(text: string, conversation = "chief"): Promise<ChiefMessage> {
+  const res = await fetchWithTimeout(`${BASE}/api/chief/messages`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ conversation_id: conversation, text }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || "send failed");
+  }
+  return res.json();
+}
+
+export async function retryChiefMessage(messageId: string): Promise<ChiefMessage> {
+  const res = await fetchWithTimeout(`${BASE}/api/chief/messages/${encodeURIComponent(messageId)}/retry`, { method: "POST" });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(body.error || "retry failed");
+  }
+  return res.json();
+}
+
+/** Subscribe to chief refresh hints. Returns an unsubscribe function. */
+export function subscribeChiefEvents(onChange: () => void): () => void {
+  const es = new EventSource(`${BASE}/api/chief/events`);
+  es.onmessage = (e) => {
+    try {
+      const ev = JSON.parse(e.data);
+      if (ev.type === "chief_updated") onChange();
+    } catch { /* ignore */ }
+  };
+  return () => es.close();
+}

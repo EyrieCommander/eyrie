@@ -1,0 +1,35 @@
+# Example Eyrie bridge config. PLACEHOLDERS ONLY: never commit real values.
+#
+# Copy to ~/.eyrie/bridge.toml (or set EYRIE_BRIDGE_CONFIG), then:
+#   chmod 600 ~/.eyrie/bridge.toml
+#   eyrie bridge token rotate     # fills bridge_token_sha256, prints the token once
+#   eyrie bridge check
+# The bridge refuses to start if this file is group or world readable.
+# Delete the file (or move it away) to turn the bridge off.
+
+# Loopback port the bridge binds (127.0.0.1 only). Point Funnel / the tunnel here.
+port = 7201
+
+# Where Eyrie sends prompts for the chief. Dan sets these privately.
+chief_wake_url = "https://REPLACE_ME.example/wake"
+chief_wake_key = "REPLACE_ME"
+
+# SHA-256 (hex) of the bridge bearer token. Written by `eyrie bridge token rotate`.
+bridge_token_sha256 = "0000000000000000000000000000000000000000000000000000000000000000"
+
+# Optional: when requests arrive via Funnel/cloudflared (peer is loopback),
+# take the client address from this header for rate limiting and the log.
+# client_ip_header = "X-Forwarded-For"     # Tailscale Funnel
+# client_ip_header = "Cf-Connecting-Ip"    # cloudflared
+
+# Optional: access log path. Default ~/.eyrie/logs/bridge-access.jsonl
+# access_log = "/Users/REPLACE_ME/.eyrie/logs/bridge-access.jsonl"
+
+# Optional: extra deny patterns (case-insensitive globs on each path
+# component). These add to the built-in deny list; they cannot remove from it.
+# extra_deny = ["*.sqlite", "private*"]
+
+# Folders the chief may read. Alias -> absolute path. Empty = every fs call 404s.
+[roots]
+# picker-docs = "/Users/REPLACE_ME/path/to/picker/docs"
+# eyrie-docs  = "/Users/REPLACE_ME/path/to/eyrie/docs"
