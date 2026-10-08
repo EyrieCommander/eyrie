@@ -27,6 +27,8 @@ bridge_token_sha256 = "000000000000000000000000000000000000000000000000000000000
 
 # Optional: extra deny patterns (case-insensitive globs on each path
 # component). These add to the built-in deny list; they cannot remove from it.
+# ASCII only: use * for accented letters (e.g. "r*sum*.txt"), because the
+# filesystem accepts several spellings of an accented name.
 # extra_deny = ["*.sqlite", "private*"]
 
 # Folders the chief may read. Alias -> absolute path. Empty = every fs call 404s.

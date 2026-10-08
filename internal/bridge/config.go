@@ -146,6 +146,16 @@ func (c *Config) Validate() error {
 		}
 	}
 	for _, g := range c.ExtraDeny {
+		// Patterns must be ASCII. The filesystem treats composed and
+		// decomposed spellings of an accented name as the same file, and
+		// matching a non-ASCII pattern against both needs Unicode
+		// normalisation tables the standard library doesn't have. Refusing
+		// them fails closed instead of silently missing a spelling.
+		for i := 0; i < len(g); i++ {
+			if g[i] >= 0x80 {
+				return fmt.Errorf("extra_deny pattern %q: only ASCII patterns are supported (use * for accented letters)", g)
+			}
+		}
 		if _, err := filepath.Match(strings.ToLower(g), "x"); err != nil {
 			return fmt.Errorf("extra_deny pattern %q: %w", g, err)
 		}
