@@ -416,3 +416,25 @@ func TestOpenRefusesSymlinkedDB(t *testing.T) {
 		t.Fatal("opened a symlinked database")
 	}
 }
+
+func TestOddPathCharactersOpenTheCheckedFile(t *testing.T) {
+	for _, name := range []string{"a?mode=ro.db", "b#frag.db", "c%2e%2e.db", "d e.db"} {
+		dir := filepath.Join(t.TempDir(), "x")
+		path := filepath.Join(dir, name)
+		s, err := Open(path, Options{})
+		if err != nil {
+			t.Fatalf("%q: %v", name, err)
+		}
+		mustEnqueue(t, s, "m1", "codex", "x")
+		_ = s.Close()
+		if _, err := os.Stat(path); err != nil {
+			entries, _ := os.ReadDir(dir)
+			t.Fatalf("%q: database not at the checked path (%v); dir has %v", name, err, entries)
+		}
+		s2, _ := Open(path, Options{})
+		if _, err := s2.Get(ctx, "m1"); err != nil {
+			t.Fatalf("%q reopen: %v", name, err)
+		}
+		_ = s2.Close()
+	}
+}

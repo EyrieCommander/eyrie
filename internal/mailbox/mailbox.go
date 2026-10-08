@@ -18,6 +18,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -121,7 +122,7 @@ func Open(path string, opts Options) (*Store, error) {
 	if err := securePaths(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("mailbox: %w", err)
 	}
@@ -172,6 +173,18 @@ func securePaths(path string) error {
 		}
 	}
 	return nil
+}
+
+// sqliteDSN builds a file: URI SQLite opens at exactly path. SQLite
+// percent-decodes URI paths and the driver splits on the first '?', so a raw
+// concatenation would let '?', '#' or '%xx' in path open a different file
+// from the one securePaths checked.
+func sqliteDSN(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	u := url.URL{Scheme: "file", Path: path, OmitHost: true}
+	return u.String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 }
 
 const schema = `
