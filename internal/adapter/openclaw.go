@@ -52,7 +52,7 @@ func NewOpenClawAdapter(id, name, host string, port int, token, configPath strin
 
 func (o *OpenClawAdapter) ID() string        { return o.id }
 func (o *OpenClawAdapter) Name() string      { return o.name }
-func (o *OpenClawAdapter) Framework() string  { return "openclaw" }
+func (o *OpenClawAdapter) Framework() string { return "openclaw" }
 func (o *OpenClawAdapter) BaseURL() string {
 	return fmt.Sprintf("ws://%s:%d", o.host, o.port)
 }

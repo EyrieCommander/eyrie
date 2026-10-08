@@ -63,13 +63,61 @@ type codexRunKey struct{ agent, session string }
 // codexRun is one in-flight turn: the app-server process serving it and the
 // ids turn/interrupt needs. done closes when the stream goroutine exits.
 type codexRun struct {
+	done      chan struct{}
+	startedAt time.Time
+
+	mu       sync.Mutex
 	client   *codexRPCClient
 	threadID string
-	kill     func()
-	done     chan struct{}
+	turnID   string
+	killFn   func()
+	killed   bool // Interrupt had to force-kill; the stream must end in an error
+	stopping bool // Interrupt arrived before the process existed
+}
 
-	mu     sync.Mutex
-	turnID string
+func (r *codexRun) setThread(c *codexRPCClient, threadID string) {
+	r.mu.Lock()
+	r.client, r.threadID = c, threadID
+	r.mu.Unlock()
+}
+
+// interruptTarget returns what turn/interrupt needs, or ok=false if the turn
+// hasn't started far enough to be interrupted politely.
+func (r *codexRun) interruptTarget() (c *codexRPCClient, threadID, turnID string, ok bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.client, r.threadID, r.turnID, r.client != nil && r.turnID != ""
+}
+
+func (r *codexRun) setKill(f func()) {
+	r.mu.Lock()
+	r.killFn = f
+	stop := r.stopping
+	r.mu.Unlock()
+	if stop {
+		r.kill()
+	}
+}
+
+// kill force-ends the run's app server. Before the process exists it marks
+// the run so setKill kills it the moment it starts.
+func (r *codexRun) kill() {
+	r.mu.Lock()
+	r.killed = true
+	f := r.killFn
+	if f == nil {
+		r.stopping = true
+	}
+	r.mu.Unlock()
+	if f != nil {
+		f()
+	}
+}
+
+func (r *codexRun) wasKilled() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.killed
 }
 
 func (r *codexRun) setTurnID(id string) {
@@ -254,6 +302,20 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 		cfg.CWD = "."
 	}
 
+	// Reserve the session before launching anything, so a second concurrent
+	// turn is refused without starting (and leaking) another app server.
+	run := &codexRun{done: make(chan struct{}), startedAt: time.Now()}
+	if err := a.registerRun(sessionKey, run); err != nil {
+		return nil, err
+	}
+	launched := false
+	defer func() {
+		if !launched {
+			a.unregisterRun(sessionKey, run)
+			close(run.done)
+		}
+	}()
+
 	cmd := exec.CommandContext(ctx, a.commandPath(), "app-server")
 	cmd.Dir = cfg.CWD
 	if err := a.prepareCodexRuntime(cfg); err != nil {
@@ -274,6 +336,14 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting codex app-server: %w", err)
 	}
+	run.setKill(func() { _ = cmd.Process.Kill() })
+
+	// abort ends the app server on an early error exit. Wait reaps the child
+	// and closes its pipes; Kill alone leaves a zombie per failed attempt.
+	abort := func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	}
 
 	client := newCodexRPCClient(stdin, stdout)
 	go client.readLoop()
@@ -287,35 +357,25 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 			"experimentalApi": true,
 		},
 	}); err != nil {
-		_ = cmd.Process.Kill()
+		abort()
 		return nil, fmt.Errorf("codex initialize: %w", err)
 	}
 	_ = client.notify("initialized", map[string]any{})
 
 	threadID, err := a.codexThread(ctx, client, sessionKey, cfg)
 	if err != nil {
-		_ = cmd.Process.Kill()
+		abort()
 		return nil, err
 	}
-	run := &codexRun{
-		client:   client,
-		threadID: threadID,
-		kill:     func() { _ = cmd.Process.Kill() },
-		done:     make(chan struct{}),
-	}
-	if err := a.registerRun(sessionKey, run); err != nil {
-		_ = cmd.Process.Kill()
-		return nil, err
-	}
+	run.setThread(client, threadID)
 	result, err := client.request(ctx, "turn/start", codexTurnStartParams(threadID, message, cfg))
 	if err != nil {
-		a.unregisterRun(sessionKey, run)
-		close(run.done)
-		_ = cmd.Process.Kill()
+		abort()
 		return nil, fmt.Errorf("codex turn/start: %w", err)
 	}
 	run.setTurnID(codexTurnIDFromResult(result))
 
+	launched = true
 	ch := make(chan ChatEvent, 64)
 	go func() {
 		defer close(run.done)
@@ -334,9 +394,9 @@ func (a *CodexAdapter) Interrupt(ctx context.Context, sessionKey string) error {
 		return nil
 	}
 	var reqErr error
-	if turnID := run.currentTurnID(); turnID != "" {
+	if client, threadID, turnID, ok := run.interruptTarget(); ok {
 		rctx, cancel := context.WithTimeout(ctx, codexInterruptRequestTimeout)
-		_, reqErr = run.client.request(rctx, "turn/interrupt", map[string]any{"threadId": run.threadID, "turnId": turnID})
+		_, reqErr = client.request(rctx, "turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID})
 		cancel()
 	} else {
 		reqErr = errors.New("turn id not known yet")
@@ -545,9 +605,14 @@ func (a *CodexAdapter) codexThread(ctx context.Context, client *codexRPCClient, 
 		threadID = cfg.Threads[sessionKey]
 	}
 	if threadID != "" {
-		if _, err := client.request(ctx, "thread/resume", map[string]any{"threadId": threadID}); err == nil {
-			return threadID, nil
+		// A saved thread that can't be resumed is an error, not a cue to start
+		// over: silently minting a new thread drops the conversation's context
+		// and leaves the caller believing it continued. Starting fresh is an
+		// explicit choice, made through ResetSession.
+		if _, err := client.request(ctx, "thread/resume", map[string]any{"threadId": threadID}); err != nil {
+			return "", &CodexResumeError{SessionKey: sessionKey, ThreadID: threadID, Err: err}
 		}
+		return threadID, nil
 	}
 
 	result, err := client.request(ctx, "thread/start", codexThreadStartParams(cfg))
@@ -570,6 +635,21 @@ func (a *CodexAdapter) codexThread(ctx context.Context, client *codexRPCClient, 
 	return threadID, nil
 }
 
+// CodexResumeError reports that a session's saved Codex thread could not be
+// resumed. The saved mapping is left in place; ResetSession clears it so the
+// next message starts a new thread.
+type CodexResumeError struct {
+	SessionKey string
+	ThreadID   string
+	Err        error
+}
+
+func (e *CodexResumeError) Error() string {
+	return fmt.Sprintf("codex thread/resume failed for session %q (thread %s): %v; reset the session to start a new thread", e.SessionKey, e.ThreadID, e.Err)
+}
+
+func (e *CodexResumeError) Unwrap() error { return e.Err }
+
 func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent) {
 	defer close(ch)
 	defer func() {
@@ -580,17 +660,27 @@ func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, std
 }
 
 func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent) {
+	// A stream that ends because Interrupt killed the app server must not
+	// look like a finished reply to SendMessage.
+	sentTerminal := false
+	defer func() {
+		if !sentTerminal && run != nil && run.wasKilled() {
+			ch <- ChatEvent{Type: "error", Error: "Codex turn interrupted"}
+		}
+	}()
 
 	var full strings.Builder
 	var inputTokens, outputTokens int
 	for {
 		select {
 		case <-ctx.Done():
+			sentTerminal = true
 			ch <- ChatEvent{Type: "error", Error: ctx.Err().Error()}
 			return
 		case req, ok := <-client.requests:
 			if !ok {
 				if stderr.Len() > 0 {
+					sentTerminal = true
 					ch <- ChatEvent{Type: "error", Error: strings.TrimSpace(stderr.String())}
 				}
 				return
@@ -617,9 +707,11 @@ func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexR
 			}
 			if note.Method == "turn/completed" {
 				if errMsg := codexTurnError(note.Params); errMsg != "" {
+					sentTerminal = true
 					ch <- ChatEvent{Type: "error", Error: errMsg}
 					return
 				}
+				sentTerminal = true
 				ch <- ChatEvent{Type: "done", Content: full.String(), InputTokens: inputTokens, OutputTokens: outputTokens}
 				return
 			}
@@ -759,6 +851,7 @@ type codexRPCClient struct {
 	nextID        int
 	pendingMu     sync.Mutex
 	pending       map[string]chan codexRPCMessage
+	closed        bool // output ended; guarded by pendingMu
 	notifications chan codexRPCMessage
 	requests      chan codexRPCMessage
 }
@@ -787,6 +880,9 @@ func newCodexRPCClient(in io.WriteCloser, out io.Reader) *codexRPCClient {
 func (c *codexRPCClient) readLoop() {
 	defer close(c.notifications)
 	defer close(c.requests)
+	// When the app server's output ends (exit or kill), no response will ever
+	// arrive: fail every pending request instead of leaving it to its context.
+	defer c.failPending()
 	scanner := bufio.NewScanner(c.out)
 	scanner.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
 	for scanner.Scan() {
@@ -819,6 +915,16 @@ func (c *codexRPCClient) readLoop() {
 	}
 }
 
+func (c *codexRPCClient) failPending() {
+	c.pendingMu.Lock()
+	defer c.pendingMu.Unlock()
+	c.closed = true
+	for k, ch := range c.pending {
+		close(ch)
+		delete(c.pending, k)
+	}
+}
+
 func (c *codexRPCClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	c.writeMu.Lock()
 	c.nextID++
@@ -826,6 +932,11 @@ func (c *codexRPCClient) request(ctx context.Context, method string, params any)
 	key := strconv.Itoa(id)
 	ch := make(chan codexRPCMessage, 1)
 	c.pendingMu.Lock()
+	if c.closed {
+		c.pendingMu.Unlock()
+		c.writeMu.Unlock()
+		return nil, io.ErrUnexpectedEOF
+	}
 	c.pending[key] = ch
 	c.pendingMu.Unlock()
 	err := c.writeLocked(map[string]any{"id": id, "method": method, "params": params})
