@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Fake is a scripted in-process adapter for fixtures. Each Start returns a
@@ -34,6 +35,11 @@ type FakeScript struct {
 	CancelBlocks bool
 	// KeepEventsOpen keeps the event stream open until the attempt ends.
 	KeepEventsOpen bool
+	// StartDelay makes Start take this long. Start returns ctx.Err() if
+	// ctx ends first, unless StartIgnoresCtx.
+	StartDelay      time.Duration
+	StartIgnoresCtx bool
+	RespondErr      error
 }
 
 func (f *Fake) Name() string { return f.NameValue }
@@ -65,6 +71,17 @@ func (f *Fake) Cancelled() bool {
 
 func (f *Fake) Start(ctx context.Context, req Request) (Handle, error) {
 	f.starts.Add(1)
+	if d := f.Script.StartDelay; d > 0 {
+		if f.Script.StartIgnoresCtx {
+			time.Sleep(d)
+		} else {
+			select {
+			case <-time.After(d):
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+	}
 	if f.Script.StartErr != nil {
 		return nil, f.Script.StartErr
 	}
@@ -132,6 +149,9 @@ func (h *fakeHandle) Respond(_ context.Context, promptID, optionID string) error
 	h.mu.Lock()
 	h.responses = append(h.responses, [2]string{promptID, optionID})
 	h.mu.Unlock()
+	if h.script.RespondErr != nil {
+		return h.script.RespondErr
+	}
 	h.answers <- struct{}{}
 	return nil
 }

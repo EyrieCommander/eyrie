@@ -91,9 +91,11 @@ type Capabilities struct {
 type Adapter interface {
 	Name() string
 	Capabilities(ctx context.Context) (Capabilities, error)
-	// Start launches the attempt. Returning an error wrapping
-	// ErrStartAmbiguous means the runtime may have accepted it; Run records
-	// unknown and the attempt must be reconciled before any retry.
+	// Start launches the attempt and must respect ctx: Run cancels it if
+	// the caller cancels or the timeout passes during startup. Returning an
+	// error wrapping ErrStartAmbiguous means the runtime may have accepted
+	// it; Run records unknown and the attempt must be reconciled before any
+	// retry. Any other error means nothing is running.
 	Start(ctx context.Context, req Request) (Handle, error)
 }
 

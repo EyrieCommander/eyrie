@@ -56,6 +56,8 @@ type Recorder interface {
 
 // Approver decides a native prompt for an attempt. It returns one of the
 // prompt's option IDs. Chat text and agent replies are not approvers.
+// Decide must return promptly once ctx is done: Run stops waiting for it
+// then, and a decision returned after that is never sent.
 type Approver interface {
 	Decide(ctx context.Context, req Request, p NativePrompt) (optionID string, err error)
 }
@@ -84,6 +86,11 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 		base.ApprovalID = req.Approval.ApprovalID
 	}
 
+	// A request cancelled before dispatch never launches or records.
+	if err := ctx.Err(); err != nil {
+		return Receipt{}, fmt.Errorf("not dispatched: %w", err)
+	}
+
 	// Persist before launch. If this fails (including a reused attempt
 	// ID), nothing starts.
 	if err := record(ctx, rec, base, StateDispatching, ""); err != nil {
@@ -99,13 +106,18 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 		grace = DefaultCancelGrace
 	}
 
-	h, err := a.Start(runCtx, req)
+	h, startWhy, err := start(ctx, runCtx, a, req, grace)
 	if err != nil {
 		state := StateFailed
-		if errors.Is(err, ErrStartAmbiguous) {
+		reason := "start failed: " + errorClass(err)
+		switch {
+		case errors.Is(err, ErrStartAmbiguous) || errors.Is(err, errStartHung):
 			state = StateUnknown // may be running; reconcile before retry
+		case startWhy != "":
+			// Start honoured cancellation and nothing is running.
+			state, reason = StateCancelled, startWhy+" during start"
 		}
-		return finish(ctx, rec, base, state, "start failed: "+errorClass(err))
+		return finish(ctx, rec, base, state, reason)
 	}
 
 	// Background workers (event pump, Wait) get a cleanup context that
@@ -138,7 +150,18 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 				if ev.Kind != EventApproval || ev.Approval == nil {
 					continue
 				}
-				if err := answer(approvalsCtx, h, appr, req, *ev.Approval); err != nil {
+				// Decide runs off the pump so a slow approver can't keep
+				// Run's workers alive; the pump waits only while work runs.
+				res := make(chan error, 1)
+				p := *ev.Approval
+				go func() { res <- answer(approvalsCtx, h, appr, req, p) }()
+				var err error
+				select {
+				case err = <-res:
+				case <-approvalsCtx.Done():
+					return
+				}
+				if err != nil {
 					select {
 					case promptFail <- err:
 					default:
@@ -158,16 +181,18 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 		done <- waited{r, err}
 	}()
 
-	var why string
-	select {
-	case w := <-done:
-		return finishResult(ctx, rec, base, req, w.res, w.err)
-	case <-ctx.Done():
-		why = "cancelled by caller"
-	case <-runCtx.Done():
-		why = fmt.Sprintf("timeout after %s", req.Limits.Timeout)
-	case err := <-promptFail:
-		why = "approval: " + err.Error()
+	why := startWhy // set if cancellation arrived while Start was returning
+	if why == "" {
+		select {
+		case w := <-done:
+			return finishResult(ctx, rec, base, req, w.res, w.err)
+		case <-ctx.Done():
+			why = "cancelled by caller"
+		case <-runCtx.Done():
+			why = fmt.Sprintf("timeout after %s", req.Limits.Timeout)
+		case err := <-promptFail:
+			why = "approval: " + approvalClass(err)
+		}
 	}
 	stopApprovals()
 
@@ -222,7 +247,7 @@ func boundedCancel(ctx context.Context, h Handle, grace time.Duration) {
 // sentinels and context errors by name, anything else as "runtime error".
 // Runtime error text can echo prompts or credentials, so it isn't stored.
 func errorClass(err error) string {
-	for _, known := range []error{ErrStartAmbiguous, ErrCancelled, ErrOptionNotOffered, context.DeadlineExceeded, context.Canceled} {
+	for _, known := range []error{ErrStartAmbiguous, errStartHung, ErrCancelled, ErrOptionNotOffered, context.DeadlineExceeded, context.Canceled} {
 		if errors.Is(err, known) {
 			return known.Error()
 		}
@@ -230,25 +255,93 @@ func errorClass(err error) string {
 	return "runtime error (detail withheld from receipt)"
 }
 
+// Approval failure classes. Receipt reasons use these names only: prompt
+// fields and Respond/approver error text come from the runtime or approver
+// and may echo the prompt or credentials.
+var (
+	errNoApprover    = errors.New("runtime asked for approval and no approver is configured")
+	errApproverError = errors.New("approver returned an error")
+	errLateDecision  = errors.New("decision arrived after cancellation; not sent")
+	errRespondFailed = errors.New("sending the decision to the runtime failed")
+)
+
+// approvalClass names an answer() error for a receipt.
+func approvalClass(err error) string {
+	for _, known := range []error{errNoApprover, errApproverError, ErrOptionNotOffered, errLateDecision, errRespondFailed} {
+		if errors.Is(err, known) {
+			return known.Error()
+		}
+	}
+	return "approval failed"
+}
+
 // answer forwards an approver decision verbatim, only if the runtime
 // offered it. With no approver, no answer is invented: the attempt stops.
+// Returned errors wrap a fixed class; detail is not kept.
 func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativePrompt) error {
 	if appr == nil {
-		return fmt.Errorf("runtime asked %q (%s) and no approver is configured", p.ID, p.Action)
+		return errNoApprover
 	}
 	opt, err := appr.Decide(ctx, req, p)
 	if err != nil {
-		return fmt.Errorf("prompt %q: approver: %w", p.ID, err)
+		return errApproverError
 	}
 	if !p.Offers(opt) {
-		return fmt.Errorf("prompt %q: %w: %q", p.ID, ErrOptionNotOffered, opt)
+		return ErrOptionNotOffered
 	}
 	// Cancellation may have begun while the approver was deciding; a late
 	// decision must not reach the runtime.
 	if ctx.Err() != nil {
-		return fmt.Errorf("prompt %q: decision arrived after cancellation; not sent", p.ID)
+		return errLateDecision
 	}
-	return h.Respond(ctx, p.ID, opt)
+	if err := h.Respond(ctx, p.ID, opt); err != nil {
+		return errRespondFailed
+	}
+	return nil
+}
+
+// errStartHung: Start ignored cancellation and didn't return in time.
+var errStartHung = errors.New("start did not return after cancellation")
+
+// start runs a.Start so caller cancellation and the timeout reach it.
+// why is set if cancellation began during startup. If Start ignores its
+// context past grace, start gives up with errStartHung, and cancels any
+// handle Start returns later.
+func start(ctx, runCtx context.Context, a Adapter, req Request, grace time.Duration) (Handle, string, error) {
+	startCtx, cancelStart := context.WithCancel(runCtx)
+	type started struct {
+		h   Handle
+		err error
+	}
+	ch := make(chan started, 1)
+	go func() {
+		h, err := a.Start(startCtx, req)
+		ch <- started{h, err}
+	}()
+	var why string
+	select {
+	case s := <-ch:
+		cancelStart()
+		return s.h, "", s.err
+	case <-ctx.Done():
+		why = "cancelled by caller"
+	case <-runCtx.Done():
+		why = fmt.Sprintf("timeout after %s", req.Limits.Timeout)
+	}
+	cancelStart()
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case s := <-ch:
+		return s.h, why, s.err
+	case <-timer.C:
+		go func() { // late handle: stop it, bounded
+			if s := <-ch; s.err == nil && s.h != nil {
+				boundedCancel(ctx, s.h, grace)
+			}
+		}()
+		return nil, why, errStartHung
+	}
 }
 
 func finishResult(ctx context.Context, rec Recorder, base Receipt, req Request, res Result, werr error) (Receipt, error) {

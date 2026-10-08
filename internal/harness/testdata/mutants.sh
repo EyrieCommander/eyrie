@@ -2,29 +2,54 @@
 # Mutation check for the harness contract's safety rules (H-01).
 # Each mutant disables one rule; the package tests must fail for every one.
 # Run from the repo root: sh internal/harness/testdata/mutants.sh
-# Restores the sources afterwards; exits non-zero if any mutant survives.
+#
+# It edits internal/harness/{run,contract}.go in place and restores them on
+# exit (a copy is kept in a temp dir). Use a scratch checkout if the tree
+# must stay read-only.
+#
+# A mutant counts as caught only if it builds and a test assertion fails
+# ("--- FAIL" in the output). Build failures, panics/timeouts, missing
+# anchors and a failing baseline are reported separately, and the script
+# exits non-zero for any of them.
 set -u
 cd "$(git rev-parse --show-toplevel)" || exit 2
 tmp=$(mktemp -d) || exit 2
 cp internal/harness/run.go internal/harness/contract.go "$tmp/"
 restore() { cp "$tmp/run.go" "$tmp/contract.go" internal/harness/; rm -rf "$tmp"; }
 trap restore EXIT INT TERM
-survived=0
-mut() { # file, name, python find, python replace
+
+if ! go vet ./internal/harness >/dev/null 2>&1 || ! go test -count=1 -timeout 120s ./internal/harness >"$tmp/base.log" 2>&1; then
+  echo "BASELINE FAILED: fix the unmutated tests first"; tail -20 "$tmp/base.log"; exit 2
+fi
+echo "baseline: ok"
+
+bad=0
+mut() { # file, name, find, replace [, find2, replace2]
   cp "$tmp/run.go" "$tmp/contract.go" internal/harness/
-  python3 - "$1" "$3" "$4" <<'PY' || { echo "MUTANT ANCHOR MISSING: $2"; survived=1; return; }
+  python3 - "$1" "$3" "$4" "${5-}" "${6-}" <<'PY' || { echo "ANCHOR MISSING: $2"; bad=1; return; }
 import sys
 p = "internal/harness/" + sys.argv[1]
 s = open(p).read()
-a, b = sys.argv[2], sys.argv[3]
-if a not in s:
-    sys.exit(1)
-open(p, "w").write(s.replace(a, b, 1))
+pairs = [(sys.argv[2], sys.argv[3])]
+if sys.argv[4]:
+    pairs.append((sys.argv[4], sys.argv[5]))
+for a, b in pairs:
+    if a not in s:
+        sys.exit(1)
+    s = s.replace(a, b, 1)
+open(p, "w").write(s)
 PY
-  if go test -count=1 -timeout 60s ./internal/harness >/dev/null 2>&1; then
-    echo "SURVIVED: $2"; survived=1
+  if ! go vet ./internal/harness >"$tmp/m.log" 2>&1; then
+    echo "BUILD FAILED (mutant invalid): $2"; bad=1; return
+  fi
+  if go test -count=1 -timeout 60s ./internal/harness >"$tmp/m.log" 2>&1; then
+    echo "SURVIVED: $2"; bad=1
+  elif grep -q "^panic: test timed out" "$tmp/m.log"; then
+    echo "TIMEOUT (not an assertion): $2"; bad=1
+  elif grep -qE "^[[:space:]]*--- FAIL" "$tmp/m.log"; then
+    echo "caught:   $2 ($(grep -oE -- '--- FAIL: [A-Za-z0-9_]+' "$tmp/m.log" | sort -u | head -1 | cut -d' ' -f3))"
   else
-    echo "caught:   $2"
+    echo "ERROR (no assertion failure): $2"; tail -5 "$tmp/m.log"; bad=1
   fi
 }
 mut run.go "wait error after cancel counts as confirmed exit" \
@@ -37,8 +62,8 @@ mut run.go "unbounded Cancel in receipt-failure cleanup" \
 	close(done)'
 mut run.go "late approver decision sent after cancel" \
   '	if ctx.Err() != nil {
-		return fmt.Errorf("prompt %q: decision arrived' '	if false {
-		return fmt.Errorf("prompt %q: decision arrived'
+		return errLateDecision' '	if false {
+		return errLateDecision'
 mut run.go "approvals not stopped when cancel begins" \
   '	stopApprovals()
 
@@ -55,11 +80,10 @@ mut run.go "option the runtime did not offer is sent" \
   '	if !p.Offers(opt) {' '	if false {'
 mut run.go "approve invented when no approver" \
   '	if appr == nil {
-		return fmt.Errorf' '	if appr == nil {
+		return errNoApprover
+	}' '	if appr == nil {
 		return h.Respond(ctx, p.ID, "accept")
-	}
-	if false {
-		return fmt.Errorf'
+	}'
 mut run.go "unconfirmed cancel reported cancelled" \
   '		return finish(ctx, rec, base, StateUnknown, reason)' '		return finish(ctx, rec, base, StateCancelled, reason)'
 mut run.go "ambiguous start reported failed" \
@@ -86,4 +110,36 @@ mut contract.go "silent model fallback" \
 mut contract.go "resume without support" '	if r.ResumeSession != "" && !c.Resume {' '	if false {'
 mut contract.go "no timeout required" '	if r.Limits.Timeout <= 0 {' '	if false {'
 mut contract.go "wrong harness accepted" '	if r.Harness != name {' '	if false {'
-exit $survived
+mut run.go "respond error text stored in receipts (both layers)" \
+  '		return errRespondFailed' '		return fmt.Errorf("respond: %v", err)' \
+  '	return "approval failed"' '	return err.Error()'
+mut run.go "approver error text stored in receipts (both layers)" \
+  '		return errApproverError' '		return fmt.Errorf("approver: %v", err)' \
+  '	return "approval failed"' '	return err.Error()'
+mut run.go "already-cancelled request launches" \
+  '	if err := ctx.Err(); err != nil {
+		return Receipt{}, fmt.Errorf("not dispatched: %w", err)
+	}' ''
+mut run.go "caller cancel does not reach Start" \
+  '	case <-ctx.Done():
+		why = "cancelled by caller"
+	case <-runCtx.Done():
+		why = fmt.Sprintf("timeout after %s", req.Limits.Timeout)
+	}
+	cancelStart()' '	case <-make(chan struct{}):
+		why = "cancelled by caller"
+	case <-runCtx.Done():
+		why = fmt.Sprintf("timeout after %s", req.Limits.Timeout)
+	}
+	cancelStart()'
+mut run.go "hung Start waited on forever" \
+  '	case <-timer.C:
+		go func() { // late handle' '	case <-make(chan struct{}):
+		go func() { // late handle'
+mut run.go "late handle from hung Start left running" \
+  '				boundedCancel(ctx, s.h, grace)' '				_ = s'
+mut run.go "pump blocks on a stuck approver" \
+  '				case <-approvalsCtx.Done():
+					return
+				}' '				}'
+exit $bad

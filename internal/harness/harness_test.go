@@ -188,7 +188,7 @@ func TestLifecycle(t *testing.T) {
 			approver:   &fixedApprover{err: errors.New("approval expired")},
 			wantStarts: 1,
 			wantStates: []State{StateDispatching, StateStarted, StateCancelRequested, StateCancelled},
-			wantReason: "approval expired",
+			wantReason: "approver returned an error",
 		},
 		// Refused before dispatch: no receipt, no Start.
 		{
@@ -595,4 +595,251 @@ func TestNoWorkerLeakAfterUnconfirmedCancel(t *testing.T) {
 	if n := settle(before); n > before {
 		t.Fatalf("goroutines %d -> %d after the fake finished", before, n)
 	}
+}
+
+// Review 1b9573cd #1: approval paths don't leak runtime or approver text
+// (prompt fields, Respond errors, approver errors) into receipts.
+func TestApprovalTextNotInReceipts(t *testing.T) {
+	const secret = "sk-live-SECRET-456"
+	leaky := NativePrompt{
+		ID: "p-" + secret, Action: "command " + secret, Detail: "curl -H 'Authorization: " + secret + "'",
+		Options: []NativeOption{{ID: "accept", Label: "Yes " + secret}},
+	}
+	cases := map[string]struct {
+		script FakeScript
+		appr   Approver
+	}{
+		"no approver":        {FakeScript{Prompts: []NativePrompt{leaky}, KeepEventsOpen: true}, nil},
+		"approver error":     {FakeScript{Prompts: []NativePrompt{leaky}, KeepEventsOpen: true}, &fixedApprover{err: errors.New("denied: " + secret)}},
+		"option not offered": {FakeScript{Prompts: []NativePrompt{leaky}, KeepEventsOpen: true}, &fixedApprover{option: "approve-" + secret}},
+		"respond error":      {FakeScript{Prompts: []NativePrompt{leaky}, KeepEventsOpen: true, RespondErr: errors.New("rpc: " + secret)}, &fixedApprover{option: "accept"}},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			rec := &MemoryRecorder{}
+			f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: c.script}
+			t.Cleanup(f.Finish)
+			r, _ := Run(context.Background(), f, rec, c.appr, goodRequest("a1"))
+			if r.State != StateCancelled {
+				t.Fatalf("state = %v, want cancelled after the approval failure", r.State)
+			}
+			for _, x := range append(rec.Receipts(), r) {
+				if strings.Contains(x.Reason, secret) {
+					t.Fatalf("receipt leaks approval text: %q", x.Reason)
+				}
+			}
+		})
+	}
+}
+
+// Review #2: caller cancellation reaches startup.
+func TestCancellationDuringStart(t *testing.T) {
+	t.Run("already cancelled: nothing launches or records", func(t *testing.T) {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Result: Result{Success: true}}}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if _, err := Run(ctx, f, rec, nil, goodRequest("a1")); !errors.Is(err, context.Canceled) {
+			t.Fatalf("err = %v, want context.Canceled", err)
+		}
+		if f.Starts() != 0 || len(rec.Receipts()) != 0 {
+			t.Fatalf("starts = %d receipts = %d, want none", f.Starts(), len(rec.Receipts()))
+		}
+	})
+	t.Run("slow start honours cancel", func(t *testing.T) {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{StartDelay: 10 * time.Second}}
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(30*time.Millisecond, cancel)
+		start := time.Now()
+		r, err := Run(ctx, f, rec, nil, goodRequest("a1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("Run took %v; cancel didn't reach Start", el)
+		}
+		if got := rec.States("a1"); !slices.Equal(got, []State{StateDispatching, StateCancelled}) {
+			t.Fatalf("states = %v", got)
+		}
+		if !strings.Contains(r.Reason, "cancelled by caller during start") {
+			t.Fatalf("reason = %q", r.Reason)
+		}
+	})
+	t.Run("timeout during slow start", func(t *testing.T) {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{StartDelay: 10 * time.Second}}
+		req := goodRequest("a1")
+		req.Limits.Timeout = 30 * time.Millisecond
+		r, err := Run(context.Background(), f, rec, nil, req)
+		if err != nil || r.State != StateCancelled || !strings.Contains(r.Reason, "timeout") {
+			t.Fatalf("state = %v reason = %q err = %v", r.State, r.Reason, err)
+		}
+	})
+	t.Run("start ignores cancel: bounded, unknown", func(t *testing.T) {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{StartDelay: 2 * time.Second, StartIgnoresCtx: true, Hang: true}}
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(30*time.Millisecond, cancel)
+		start := time.Now()
+		r, err := Run(ctx, f, rec, nil, goodRequest("a1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if el := time.Since(start); el > time.Second {
+			t.Fatalf("Run took %v with a 200ms grace", el)
+		}
+		if r.State != StateUnknown {
+			t.Fatalf("state = %v, want unknown (start may still succeed)", r.State)
+		}
+		// The handle Start returns later is cancelled, not left running.
+		deadline := time.Now().Add(4 * time.Second)
+		for !f.Cancelled() && time.Now().Before(deadline) {
+			time.Sleep(20 * time.Millisecond)
+		}
+		if !f.Cancelled() {
+			t.Fatal("late handle from a hung Start was never cancelled")
+		}
+	})
+	t.Run("start returns a handle as cancel arrives: cancelled", func(t *testing.T) {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{StartDelay: 100 * time.Millisecond, StartIgnoresCtx: true, Hang: true}}
+		ctx, cancel := context.WithCancel(context.Background())
+		time.AfterFunc(20*time.Millisecond, cancel)
+		r, err := Run(ctx, f, rec, nil, goodRequest("a1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rec.States("a1"); !slices.Equal(got, []State{StateDispatching, StateStarted, StateCancelRequested, StateCancelled}) {
+			t.Fatalf("states = %v", got)
+		}
+		if !f.Cancelled() || r.State != StateCancelled {
+			t.Fatalf("state = %v cancelled = %v", r.State, f.Cancelled())
+		}
+	})
+}
+
+// ctxApprover blocks until its context ends (an outstanding decision).
+type ctxApprover struct{ entered chan struct{} }
+
+func (a *ctxApprover) Decide(ctx context.Context, _ Request, _ NativePrompt) (string, error) {
+	close(a.entered)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
+// Review #3: shutdown with an outstanding approver decision leaves nothing
+// running once Run returns (the approver honours ctx, as Approver requires).
+func TestNoLeakWithOutstandingDecision(t *testing.T) {
+	settle := func(max int) int {
+		deadline := time.Now().Add(2 * time.Second)
+		n := runtime.NumGoroutine()
+		for n > max && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			n = runtime.NumGoroutine()
+		}
+		return n
+	}
+	before := settle(runtime.NumGoroutine())
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, IgnoreCancel: true, KeepEventsOpen: true}}
+	appr := &ctxApprover{entered: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-appr.entered; cancel() }()
+	r, _ := Run(ctx, f, &MemoryRecorder{}, appr, goodRequest("a1"))
+	if r.State != StateUnknown {
+		t.Fatalf("state = %v", r.State)
+	}
+	// Only the fake's own runner (which ignored cancel) remains: +1.
+	if n := settle(before + 1); n > before+1 {
+		buf := make([]byte, 1<<16)
+		t.Fatalf("goroutines %d -> %d after Run returned:\n%s", before, n, buf[:runtime.Stack(buf, true)])
+	}
+	f.Finish()
+	if n := settle(before); n > before {
+		t.Fatalf("goroutines %d -> %d after the fake finished", before, n)
+	}
+}
+
+// gatedApprover ignores ctx and returns "accept" only when release closes.
+type gatedApprover struct {
+	entered, release, done chan struct{}
+}
+
+func (a *gatedApprover) Decide(context.Context, Request, NativePrompt) (string, error) {
+	defer close(a.done)
+	close(a.entered)
+	<-a.release
+	return "accept", nil
+}
+
+// A ctx-ignoring approver can't hold Run's own workers: Run returns, its
+// event pump exits while the approver is still stuck, and the decision it
+// returns later is not sent.
+func TestStuckApproverDoesNotHoldRun(t *testing.T) {
+	before := settleGoroutines(runtime.NumGoroutine())
+	rec := &MemoryRecorder{}
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, KeepEventsOpen: true}}
+	t.Cleanup(f.Finish)
+	appr := &gatedApprover{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
+	t.Cleanup(func() {
+		select {
+		case <-appr.release:
+		default:
+			close(appr.release)
+		}
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { <-appr.entered; cancel() }()
+	r, err := runCtxWithin(t, 3*time.Second, ctx, f, rec, appr, goodRequest("a1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != StateCancelled {
+		t.Fatalf("state = %v", r.State)
+	}
+	// The approver is still blocked (not released). Only its own call may
+	// remain: +1. Run's event pump must have exited.
+	if n := settleGoroutines(before + 1); n > before+1 {
+		buf := make([]byte, 1<<16)
+		t.Fatalf("goroutines %d -> %d while the approver is stuck:\n%s", before, n, buf[:runtime.Stack(buf, true)])
+	}
+	close(appr.release)
+	<-appr.done
+	time.Sleep(50 * time.Millisecond)
+	if got := f.Responses(); len(got) != 0 {
+		t.Fatalf("late decision sent: %v", got)
+	}
+	if n := settleGoroutines(before); n > before {
+		t.Fatalf("goroutines %d -> %d after the approver returned", before, n)
+	}
+}
+
+// runCtxWithin is runWithin with a caller context and approver.
+func runCtxWithin(t *testing.T, d time.Duration, ctx context.Context, f *Fake, rec *MemoryRecorder, appr Approver, req Request) (Receipt, error) {
+	t.Helper()
+	type out struct {
+		r   Receipt
+		err error
+	}
+	ch := make(chan out, 1)
+	go func() { r, err := Run(ctx, f, rec, appr, req); ch <- out{r, err} }()
+	select {
+	case o := <-ch:
+		return o.r, o.err
+	case <-time.After(d):
+		t.Fatalf("Run did not return within %v", d)
+		return Receipt{}, nil
+	}
+}
+
+// settleGoroutines waits up to 2s for the goroutine count to drop to max
+// and returns the count it reached.
+func settleGoroutines(max int) int {
+	deadline := time.Now().Add(2 * time.Second)
+	n := runtime.NumGoroutine()
+	for n > max && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+		n = runtime.NumGoroutine()
+	}
+	return n
 }
