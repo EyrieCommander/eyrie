@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	_ "modernc.org/sqlite"
 )
 
@@ -45,9 +46,12 @@ var (
 	ErrNotFound = errors.New("mailbox: message not found")
 	// ErrConflict: Enqueue reused an ID with a different recipient or body.
 	ErrConflict = errors.New("mailbox: message id reused with different content")
-	// ErrNotLeaseHolder: Ack or Release by someone who doesn't hold the lease
-	// (it expired and was reclaimed, or never existed).
+	// ErrNotLeaseHolder: Ack or Release with a lease token that is not the
+	// message's current lease (it was reclaimed, even by the same owner, or
+	// never existed).
 	ErrNotLeaseHolder = errors.New("mailbox: caller does not hold the lease")
+	// ErrInsecurePath: the mailbox directory is writable by group or others.
+	ErrInsecurePath = errors.New("mailbox: directory is group- or world-writable")
 )
 
 // Message is one queued item.
@@ -61,9 +65,12 @@ type Message struct {
 	CreatedAt     time.Time
 	NextAttemptAt time.Time
 	LeaseOwner    string
-	LeaseUntil    time.Time
-	DeliveredAt   time.Time
-	LastError     string
+	// LeaseToken identifies one claim. Ack and Release must present it, so a
+	// call left over from an earlier attempt can't touch a newer one.
+	LeaseToken  string
+	LeaseUntil  time.Time
+	DeliveredAt time.Time
+	LastError   string
 }
 
 // Options tune retry behaviour. Zero values take the defaults.
@@ -97,8 +104,10 @@ type Store struct {
 	opts Options
 }
 
-// Open opens (creating if needed) the mailbox at path. The file and its
-// directory are created owner-only: messages can carry private prompts.
+// Open opens (creating if needed) the mailbox at path. Messages can carry
+// private prompts, so the database and its -wal/-shm files are forced to
+// 0600, a new directory is created 0700, and an existing directory that group
+// or others can write is refused (they could swap the files).
 func Open(path string, opts Options) (*Store, error) {
 	if opts.MaxAttempts <= 0 {
 		opts.MaxAttempts = defaultMaxAttempts
@@ -109,24 +118,60 @@ func Open(path string, opts Options) (*Store, error) {
 	if opts.Now == nil {
 		opts.Now = time.Now
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, fmt.Errorf("mailbox: %w", err)
+	if err := securePaths(path); err != nil {
+		return nil, err
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
 	if err != nil {
 		return nil, fmt.Errorf("mailbox: %w", err)
 	}
-	_ = f.Close()
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)")
-	if err != nil {
-		return nil, fmt.Errorf("mailbox: %w", err)
-	}
+	// One connection per Store, and transactions take the write lock at BEGIN
+	// (_txlock=immediate): a deferred read-then-write transaction racing
+	// another Store on the same file fails with SQLITE_BUSY_SNAPSHOT instead
+	// of waiting on busy_timeout.
 	db.SetMaxOpenConns(1)
 	if _, err := db.Exec(schema); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("mailbox: schema: %w", err)
 	}
 	return &Store{db: db, opts: opts}, nil
+}
+
+func securePaths(path string) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("mailbox: %w", err)
+	}
+	di, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("mailbox: %w", err)
+	}
+	if di.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("%w: %s (%v)", ErrInsecurePath, dir, di.Mode().Perm())
+	}
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("mailbox: %w", err)
+	}
+	_ = f.Close()
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Lstat(p)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return fmt.Errorf("mailbox: %w", err)
+		}
+		if !fi.Mode().IsRegular() {
+			return fmt.Errorf("mailbox: %s is not a regular file", p)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			if err := os.Chmod(p, 0o600); err != nil {
+				return fmt.Errorf("mailbox: securing %s: %w", p, err)
+			}
+		}
+	}
+	return nil
 }
 
 const schema = `
@@ -140,6 +185,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	created_at      INTEGER NOT NULL,
 	next_attempt_at INTEGER NOT NULL,
 	lease_owner     TEXT NOT NULL DEFAULT '',
+	lease_token     TEXT NOT NULL DEFAULT '',
 	lease_until     INTEGER NOT NULL DEFAULT 0,
 	delivered_at    INTEGER NOT NULL DEFAULT 0,
 	last_error      TEXT NOT NULL DEFAULT ''
@@ -214,11 +260,17 @@ func (s *Store) Claim(ctx context.Context, agent, owner string, lease time.Durat
 			_ = tx.Rollback()
 			return Message{}, err
 		}
+		// Every write below is conditional on the row still being in the
+		// state we just read (same attempts count, still deliverable), so a
+		// second Store on the same file that got there first wins cleanly and
+		// this one retries.
+		stillDeliverable := ` WHERE id = ? AND attempts = ? AND ((state = ? AND next_attempt_at <= ?) OR (state = ? AND lease_until <= ?))`
+		cond := []any{id, attempts, Queued, now.UnixNano(), Leased, now.UnixNano()}
 		if attempts >= s.opts.MaxAttempts {
 			// Only reachable via an expired lease: the last attempt never acked.
 			if _, err := tx.ExecContext(ctx,
-				`UPDATE messages SET state = ?, lease_owner = '', lease_until = 0, last_error = CASE WHEN last_error = '' THEN 'lease expired' ELSE last_error END WHERE id = ?`,
-				Dead, id); err != nil {
+				`UPDATE messages SET state = ?, lease_owner = '', lease_token = '', lease_until = 0, last_error = CASE WHEN last_error = '' THEN 'lease expired' ELSE last_error END`+stillDeliverable,
+				append([]any{Dead}, cond...)...); err != nil {
 				_ = tx.Rollback()
 				return Message{}, err
 			}
@@ -227,11 +279,16 @@ func (s *Store) Claim(ctx context.Context, agent, owner string, lease time.Durat
 			}
 			continue
 		}
-		if _, err := tx.ExecContext(ctx,
-			`UPDATE messages SET state = ?, attempts = attempts + 1, lease_owner = ?, lease_until = ? WHERE id = ?`,
-			Leased, owner, now.Add(lease).UnixNano(), id); err != nil {
+		res, err := tx.ExecContext(ctx,
+			`UPDATE messages SET state = ?, attempts = attempts + 1, lease_owner = ?, lease_token = ?, lease_until = ?`+stillDeliverable,
+			append([]any{Leased, owner, uuid.NewString(), now.Add(lease).UnixNano()}, cond...)...)
+		if err != nil {
 			_ = tx.Rollback()
 			return Message{}, err
+		}
+		if n, _ := res.RowsAffected(); n != 1 {
+			_ = tx.Rollback()
+			continue
 		}
 		m, err := s.get(ctx, tx, id)
 		if err != nil {
@@ -242,59 +299,65 @@ func (s *Store) Claim(ctx context.Context, agent, owner string, lease time.Durat
 	}
 }
 
-// Ack records delivery: the message becomes Delivered with DeliveredAt as the
-// receipt. Acking an already-Delivered message is a no-op (safe retry of the
-// ack itself). A lease that expired but was not reclaimed still belongs to its
-// owner, so a late ack is accepted. Once another deliverer has reclaimed the
-// message, the old owner gets ErrNotLeaseHolder: the message is out for
-// delivery again and the receiver dedupes on ID.
-func (s *Store) Ack(ctx context.Context, id, owner string) (Message, error) {
+// Ack records delivery with the lease token from Claim: the message becomes
+// Delivered with DeliveredAt as the receipt. Acking an already-Delivered
+// message is a no-op (safe retry of the ack itself). A lease that expired but
+// was not reclaimed is still current, so a late ack is accepted. Once the
+// message is reclaimed (by anyone, including the same owner) the old token
+// gets ErrNotLeaseHolder: it is out for delivery again and the receiver
+// dedupes on ID.
+func (s *Store) Ack(ctx context.Context, id, token string) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	now := s.opts.Now().UTC()
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE messages SET state = ?, delivered_at = ?, lease_owner = '', lease_token = '', lease_until = 0, last_error = ''
+		 WHERE id = ? AND state = ? AND lease_token = ? AND lease_token != ''`,
+		Delivered, now.UnixNano(), id, Leased, token)
+	if err != nil {
+		return Message{}, err
+	}
 	m, err := s.get(ctx, s.db, id)
 	if err != nil {
 		return Message{}, err
 	}
-	if m.State == Delivered {
+	if n, _ := res.RowsAffected(); n == 1 || m.State == Delivered {
 		return m, nil
 	}
-	now := s.opts.Now().UTC()
-	if m.State != Leased || m.LeaseOwner != owner {
-		return Message{}, ErrNotLeaseHolder
-	}
-	if _, err := s.db.ExecContext(ctx,
-		`UPDATE messages SET state = ?, delivered_at = ?, lease_owner = '', lease_until = 0, last_error = '' WHERE id = ?`,
-		Delivered, now.UnixNano(), id); err != nil {
-		return Message{}, err
-	}
-	return s.get(ctx, s.db, id)
+	return Message{}, ErrNotLeaseHolder
 }
 
 // Release gives a leased message back after a failed delivery attempt. It is
 // requeued after Backoff(attempts), or goes Dead once attempts reach
 // MaxAttempts. reason is stored as LastError; keep it free of message content.
-func (s *Store) Release(ctx context.Context, id, owner, reason string) (Message, error) {
+func (s *Store) Release(ctx context.Context, id, token, reason string) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m, err := s.get(ctx, s.db, id)
 	if err != nil {
 		return Message{}, err
 	}
-	now := s.opts.Now().UTC()
-	if m.State != Leased || m.LeaseOwner != owner {
+	if m.State != Leased || token == "" || m.LeaseToken != token {
 		return Message{}, ErrNotLeaseHolder
 	}
+	now := s.opts.Now().UTC()
+	var res sql.Result
+	// Conditional on the token, so a reclaim between the read and this write
+	// (another Store on the same file) makes this a no-op, not an overwrite.
 	if m.Attempts >= s.opts.MaxAttempts {
-		_, err = s.db.ExecContext(ctx,
-			`UPDATE messages SET state = ?, lease_owner = '', lease_until = 0, last_error = ? WHERE id = ?`,
-			Dead, reason, id)
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE messages SET state = ?, lease_owner = '', lease_token = '', lease_until = 0, last_error = ? WHERE id = ? AND state = ? AND lease_token = ?`,
+			Dead, reason, id, Leased, token)
 	} else {
-		_, err = s.db.ExecContext(ctx,
-			`UPDATE messages SET state = ?, lease_owner = '', lease_until = 0, next_attempt_at = ?, last_error = ? WHERE id = ?`,
-			Queued, now.Add(s.opts.Backoff(m.Attempts)).UnixNano(), reason, id)
+		res, err = s.db.ExecContext(ctx,
+			`UPDATE messages SET state = ?, lease_owner = '', lease_token = '', lease_until = 0, next_attempt_at = ?, last_error = ? WHERE id = ? AND state = ? AND lease_token = ?`,
+			Queued, now.Add(s.opts.Backoff(m.Attempts)).UnixNano(), reason, id, Leased, token)
 	}
 	if err != nil {
 		return Message{}, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return Message{}, ErrNotLeaseHolder
 	}
 	return s.get(ctx, s.db, id)
 }
@@ -332,7 +395,7 @@ func (s *Store) List(ctx context.Context, agent string, states ...State) ([]Mess
 	return out, rows.Err()
 }
 
-const cols = `id, agent, sender, body, state, attempts, created_at, next_attempt_at, lease_owner, lease_until, delivered_at, last_error`
+const cols = `id, agent, sender, body, state, attempts, created_at, next_attempt_at, lease_owner, lease_token, lease_until, delivered_at, last_error`
 
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -353,7 +416,7 @@ func scan(r scanner) (Message, error) {
 	var state string
 	var created, next, leaseUntil, delivered int64
 	if err := r.Scan(&m.ID, &m.Agent, &m.Sender, &m.Body, &state, &m.Attempts,
-		&created, &next, &m.LeaseOwner, &leaseUntil, &delivered, &m.LastError); err != nil {
+		&created, &next, &m.LeaseOwner, &m.LeaseToken, &leaseUntil, &delivered, &m.LastError); err != nil {
 		return Message{}, err
 	}
 	m.State = State(state)
