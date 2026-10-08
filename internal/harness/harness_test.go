@@ -1079,46 +1079,120 @@ func TestLateReceiptWriteCountsAsFailed(t *testing.T) {
 	}
 }
 
-// perPromptApprover: p1 gets an option the runtime didn't offer (which
-// starts cancellation); p2 blocks, ignoring ctx, until release, then
-// approves.
-type perPromptApprover struct {
-	entered chan struct{}
-	release chan struct{}
-	done    chan struct{}
-}
+// countingFailApprover returns a non-offered option for p1 and approves
+// everything else at once, counting calls.
+type countingFailApprover struct{ others atomic.Int32 }
 
-func (a *perPromptApprover) Decide(_ context.Context, _ Request, p NativePrompt) (string, error) {
+func (a *countingFailApprover) Decide(_ context.Context, _ Request, p NativePrompt) (string, error) {
 	if p.ID == "p1" {
 		return "not-an-option", nil
 	}
-	defer close(a.done)
-	close(a.entered)
-	<-a.release
+	a.others.Add(1)
 	return "accept", nil
 }
 
-// When an approval failure starts cancellation (no caller cancel, no
-// timeout), approvals still stop: a decision already in progress for the
-// next prompt, returned after cancellation began, is not sent. The hook
-// holds Run until that decision is in progress, so the case is exercised.
-func TestApprovalFailureStopsOtherPendingDecisions(t *testing.T) {
+// Review 14b9c2b6 #3: after an approval failure, the pump closes the gate
+// itself, so another prompt that is already buffered and would be approved
+// at once is not answered. The hook stalls the main loop after the pump
+// reports, the window where the old code answered the next prompt.
+func TestApprovalFailureStopsOtherPrompts(t *testing.T) {
+	orig := beforeStopApprovals
+	beforeStopApprovals = func() { time.Sleep(50 * time.Millisecond) }
+	t.Cleanup(func() { beforeStopApprovals = orig })
 	p2 := cmdPrompt
 	p2.ID = "p2"
-	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{
-		Prompts: []NativePrompt{cmdPrompt, p2}, ConcurrentPrompts: true, IgnoreCancel: true,
-	}}
-	t.Cleanup(f.Finish)
-	appr := &perPromptApprover{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
-	orig := beforeStopApprovals
-	beforeStopApprovals = func() {
-		select {
-		case <-appr.entered:
-		case <-time.After(2 * time.Second):
+	for i := 0; i < 20; i++ {
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{
+			Prompts: []NativePrompt{cmdPrompt, p2}, ConcurrentPrompts: true,
+		}}
+		appr := &countingFailApprover{}
+		r, err := runCtxWithin(t, 5*time.Second, context.Background(), f, &MemoryRecorder{}, appr, goodRequest("a1"))
+		f.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(r.Reason, "not offered") {
+			t.Fatalf("reason = %q", r.Reason)
+		}
+		if got := f.Responses(); len(got) != 0 {
+			t.Fatalf("run %d: another prompt answered after an approval failure: %v", i, got)
 		}
 	}
-	t.Cleanup(func() { beforeStopApprovals = orig })
-	go func() { // release p2 once cancellation has begun
+}
+
+// Review #1: a decision returned immediately after caller cancellation is
+// refused synchronously, before any AfterFunc or main-loop reaction. The
+// approver cancels the caller context itself and returns at once.
+type cancellingApprover struct{ cancel context.CancelFunc }
+
+func (a *cancellingApprover) Decide(context.Context, Request, NativePrompt) (string, error) {
+	a.cancel()
+	return "accept", nil
+}
+
+func TestDecisionRightAfterCallerCancelIsRefused(t *testing.T) {
+	for i := 0; i < 200; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, KeepEventsOpen: true}}
+		r, err := runCtxWithin(t, 5*time.Second, ctx, f, &MemoryRecorder{}, &cancellingApprover{cancel: cancel}, goodRequest("a1"))
+		f.Finish()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := f.Responses(); len(got) != 0 {
+			t.Fatalf("run %d: decision sent after caller cancellation: %v", i, got)
+		}
+		if !strings.Contains(r.Reason, "cancelled by caller") {
+			t.Fatalf("run %d: reason = %q", i, r.Reason)
+		}
+	}
+}
+
+// Review #2: Wait failing (transport error) while the runtime keeps running
+// doesn't cut the cancel RPC short, on the normal path or when the
+// cancel_requested write fails.
+func TestWaitErrorDoesNotAbortCancel(t *testing.T) {
+	for _, failWrite := range []bool{false, true} {
+		name := "normal path"
+		if failWrite {
+			name = "cancel_requested write fails"
+		}
+		t.Run(name, func(t *testing.T) {
+			rec := &MemoryRecorder{}
+			if failWrite {
+				rec.Fail = func(r Receipt) error {
+					if r.State == StateCancelRequested {
+						return errors.New("disk full")
+					}
+					return nil
+				}
+			}
+			f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{
+				Hang: true, WaitErr: errors.New("broken pipe"), WaitErrEarly: true, CancelDelay: 150 * time.Millisecond,
+			}}
+			t.Cleanup(f.Finish)
+			req := goodRequest("a1")
+			req.Limits.Timeout = 20 * time.Millisecond
+			req.Limits.CancelGrace = time.Second
+			r, _ := runCtxWithin(t, 5*time.Second, context.Background(), f, rec, nil, req)
+			if r.State != StateUnknown {
+				t.Fatalf("state = %v, want unknown", r.State)
+			}
+			if !f.Cancelled() {
+				t.Fatal("cancel RPC aborted before delivery after Wait failed")
+			}
+		})
+	}
+}
+
+// On timeout (no caller cancel, no approval failure), the main loop's
+// stopApprovals is what closes the gate: a ctx-ignoring approver that
+// returns after cancellation began has its decision refused.
+func TestLateApprovalAfterTimeoutIsNotSent(t *testing.T) {
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, IgnoreCancel: true, KeepEventsOpen: true}}
+	t.Cleanup(f.Finish)
+	appr := &gatedApprover{entered: make(chan struct{}), release: make(chan struct{}), done: make(chan struct{})}
+	go func() { // release once cancellation has been sent
 		deadline := time.Now().Add(4 * time.Second)
 		for !f.Cancelled() && time.Now().Before(deadline) {
 			time.Sleep(5 * time.Millisecond)
@@ -1126,21 +1200,18 @@ func TestApprovalFailureStopsOtherPendingDecisions(t *testing.T) {
 		close(appr.release)
 	}()
 	req := goodRequest("a1")
-	req.Limits.CancelGrace = 500 * time.Millisecond // still cancelling when p2 returns
+	req.Limits.Timeout = 30 * time.Millisecond
+	req.Limits.CancelGrace = 500 * time.Millisecond
 	r, err := runCtxWithin(t, 5*time.Second, context.Background(), f, &MemoryRecorder{}, appr, req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(r.Reason, "not offered") {
+	if !strings.Contains(r.Reason, "timeout") {
 		t.Fatalf("reason = %q", r.Reason)
 	}
-	select {
-	case <-appr.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("p2 decision never ran; case not exercised")
-	}
+	<-appr.done
 	time.Sleep(50 * time.Millisecond)
 	if got := f.Responses(); len(got) != 0 {
-		t.Fatalf("decision sent after cancellation began: %v", got)
+		t.Fatalf("decision sent after the timeout began cancellation: %v", got)
 	}
 }

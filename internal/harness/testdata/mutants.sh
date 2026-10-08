@@ -55,24 +55,25 @@ PY
   fi
 }
 mut run.go "wait error after cancel counts as confirmed exit" \
-  '		if w.err == nil || errors.Is(w.err, ErrCancelled) {' '		if true {'
+  '	exitConfirmed := func(w waited) bool { return w.err == nil || errors.Is(w.err, ErrCancelled) }' '	exitConfirmed := func(w waited) bool { return true }'
 mut run.go "unbounded Cancel on the main path" \
   '	go func() { cancelErr <- h.Cancel(cancelCtx) }()' '	_ = cancelCtx
 	cancelErr <- h.Cancel(context.WithoutCancel(ctx))'
 mut run.go "unbounded Cancel in receipt-failure cleanup" \
   '	go func() { _ = h.Cancel(cctx); close(done) }()' '	_ = h.Cancel(context.WithoutCancel(ctx))
 	close(done)'
-mut run.go "late approver decision sent after cancel" \
-  '	if ctx.Err() != nil {
+mut run.go "late approver decision sent after cancel (gate send unchecked)" \
+  '	defer func() { <-g.sem }()
+	if !g.open() {
 		return errLateDecision
-	}' ''
+	}
+	return fn()' '	defer func() { <-g.sem }()
+	return fn()'
 mut run.go "approvals not stopped when cancel begins" \
   '	beforeStopApprovals()
 	stopApprovals()
-
-	// Cancel first' '	beforeStopApprovals()
-
-	// Cancel first'
+' '	beforeStopApprovals()
+'
 mut run.go "runtime error text stored in receipts" \
   '	return "runtime error (detail withheld from receipt)"' '	return err.Error()'
 mut run.go "runtime summary stored in receipts" \
@@ -154,17 +155,20 @@ mut run.go "pump runs after a cancelled start" \
 		stopApprovals()
 	}' '	go pump()
 	afterPumpStart()' \
-  '	if ctx.Err() != nil {
+  '	if !g.open() || ctx.Err() != nil {
 		return errLateDecision // cancellation began; don'"'"'t even ask
 	}' ''
 mut run.go "cancel_requested recorded before Cancel is sent" \
   '	go func() { cancelErr <- h.Cancel(cancelCtx) }()
 
-	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {' '	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
-		go func() { cancelErr <- h.Cancel(cancelCtx) }()' \
-  '		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+	// exitConfirmed' '
+	// exitConfirmed' \
+  '		holdCancel()
+		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
 	}
-' '		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
+' '		go func() { cancelErr <- h.Cancel(cancelCtx) }()
+		holdCancel()
+		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
 	}
 	go func() { cancelErr <- h.Cancel(cancelCtx) }()
 '
@@ -174,22 +178,46 @@ mut run.go "receipt writes unbounded" \
 		return errReceiptStalled'
 mut run.go "start result trusted when cancellation also ready" \
   '		return s.h, cancelReason(ctx, runCtx, req), s.err' '		return s.h, "", s.err'
-mut run.go "caller cancel during the started write: pump starts anyway" \
-  '	stopOnCaller := context.AfterFunc(ctx, stopApprovals)
-	defer stopOnCaller()' '' \
+# Not a mutant: the post-started-write cancelReason recheck and the
+# AfterFunc are now redundant with the gate, which checks the caller's
+# context directly on every ask and send (mutant "gate ignores caller
+# cancellation" covers that). Removing both is still blocked by the gate.
+mut run.go "caller cancel during the started write: gate and recheck both gone" \
   '	if startWhy == "" {
 		startWhy = cancelReason(ctx, runCtx, req)
-	}' ''
+	}' '' \
+  'func (g *approvalGate) open() bool { return !g.closed.Load() && g.caller.Err() == nil }' 'func (g *approvalGate) open() bool { return !g.closed.Load() }'
 mut run.go "failed cancel_requested write aborts the cancel" \
-  '		select {
-		case <-cancelErr:
-		case <-done:
-		case <-deadline.C:
-		}
-		return unknown(base, fmt.Errorf("record cancel_requested' '		return unknown(base, fmt.Errorf("record cancel_requested'
+  '		holdCancel()
+		return unknown(base, fmt.Errorf("record cancel_requested' '		_ = holdCancel
+		return unknown(base, fmt.Errorf("record cancel_requested'
 mut run.go "late receipt write accepted" \
   '		if wctx.Err() != nil {
 			return errReceiptStalled
 		}
 		return err' '		return err'
+mut run.go "gate ignores caller cancellation (async only)" \
+  'func (g *approvalGate) open() bool { return !g.closed.Load() && g.caller.Err() == nil }' 'func (g *approvalGate) open() bool { return !g.closed.Load() }'
+mut run.go "pump keeps answering after an approval failure" \
+  '					stopApprovals()
+					select {
+					case promptFail <- err:
+					default:
+					}
+					return' '					select {
+					case promptFail <- err:
+					default:
+					}'
+mut run.go "Wait error ends the cancel early (normal path)" \
+  '		select {
+		case err := <-cancelErr:
+			if err != nil {
+				reason += "; cancel failed: " + errorClass(err)
+			}
+		case <-deadline.C:
+			reason += "; cancel request did not return within " + grace.String()
+		}
+		return finish(ctx, rec, base, StateUnknown, reason)' '		return finish(ctx, rec, base, StateUnknown, reason)'
+mut run.go "Wait error ends the cancel early (failed write)" \
+  '				doneCh = nil // Wait failed; keep waiting on the cancel' '				return'
 exit $bad

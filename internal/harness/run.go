@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -131,12 +132,18 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	// cancellation begins, no approver decision can reach the runtime.
 	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
 	defer stopWork()
-	// approvalsCtx ends on timeout, on caller cancellation (at any point,
-	// including during the receipt writes below), or when Run stops
-	// approvals explicitly.
-	approvalsCtx, stopApprovals := context.WithCancel(runCtx)
-	defer stopApprovals()
-	stopOnCaller := context.AfterFunc(ctx, stopApprovals)
+	// Approvals go through a gate. gate.stop() is synchronous: once it
+	// returns, no Respond can begin. Every send also checks the caller's
+	// context directly, so a decision that returns just after caller
+	// cancellation is refused even before Run notices the cancel.
+	// approvalsCtx (handed to the approver and to Respond) is cancelled by
+	// stop, by the timeout, and on caller cancellation, so pending
+	// decisions unblock; it is not what the gate relies on.
+	approvalsCtx, cancelApprovals := context.WithCancel(runCtx)
+	gate := newApprovalGate(ctx, cancelApprovals)
+	stopApprovals := func() { gate.stop(grace) }
+	defer gate.close()
+	stopOnCaller := context.AfterFunc(ctx, cancelApprovals)
 	defer stopOnCaller()
 	if startWhy != "" {
 		// Cancellation arrived while Start was returning: no prompt for
@@ -170,18 +177,28 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 				// Run's workers alive; the pump waits only while work runs.
 				res := make(chan error, 1)
 				p := *ev.Approval
-				go func() { res <- answer(approvalsCtx, h, appr, req, p) }()
+				go func() { res <- answer(approvalsCtx, gate, h, appr, req, p) }()
 				var err error
 				select {
 				case err = <-res:
 				case <-approvalsCtx.Done():
 					return
 				}
+				if errors.Is(err, errLateDecision) {
+					// Cancellation is already under way; it, not this
+					// refused decision, is the reason the attempt ends.
+					return
+				}
 				if err != nil {
+					// Close the gate before reporting, so no other prompt
+					// (buffered or concurrent) is answered while the main
+					// loop gets round to cancelling.
+					stopApprovals()
 					select {
 					case promptFail <- err:
 					default:
 					}
+					return
 				}
 			}
 		}
@@ -234,33 +251,57 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	cancelErr := make(chan error, 1)
 	go func() { cancelErr <- h.Cancel(cancelCtx) }()
 
-	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
-		// Keep the cancel alive for its full grace period: returning would
-		// run the deferred cancelCancel and could abort the RPC mid-flight.
-		select {
-		case <-cancelErr:
-		case <-done:
-		case <-deadline.C:
+	// exitConfirmed: a clean Wait or ErrCancelled. Anything else (e.g. a
+	// transport error) doesn't establish that the runtime stopped.
+	exitConfirmed := func(w waited) bool { return w.err == nil || errors.Is(w.err, ErrCancelled) }
+	// holdCancel keeps the cancel RPC alive (its context is cancelled when
+	// Run returns) until it returns, exit is confirmed, or grace runs out.
+	holdCancel := func() {
+		doneCh := done
+		for {
+			select {
+			case <-cancelErr:
+				return
+			case w := <-doneCh:
+				if exitConfirmed(w) {
+					return
+				}
+				doneCh = nil // Wait failed; keep waiting on the cancel
+			case <-deadline.C:
+				return
+			}
 		}
+	}
+
+	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
+		holdCancel()
 		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
 	}
 
-	confirmed := func(w waited) (Receipt, error) {
-		// Exit is confirmed only by a clean Wait or ErrCancelled. Any other
-		// error (transport failure) leaves the runtime's state unknown.
-		if w.err == nil || errors.Is(w.err, ErrCancelled) {
-			return finish(ctx, rec, base, StateCancelled, why)
-		}
-		return finish(ctx, rec, base, StateUnknown, why+"; exit not confirmed: wait failed: "+errorClass(w.err))
-	}
 	select {
 	case w := <-done:
-		return confirmed(w)
+		if exitConfirmed(w) {
+			return finish(ctx, rec, base, StateCancelled, why)
+		}
+		// Wait failed: the runtime may still be running. Give the cancel
+		// its full chance before recording unknown.
+		reason := why + "; exit not confirmed: wait failed: " + errorClass(w.err)
+		select {
+		case err := <-cancelErr:
+			if err != nil {
+				reason += "; cancel failed: " + errorClass(err)
+			}
+		case <-deadline.C:
+			reason += "; cancel request did not return within " + grace.String()
+		}
+		return finish(ctx, rec, base, StateUnknown, reason)
 	case <-deadline.C:
 		// If the exit and the deadline are both ready, the exit wins.
 		select {
 		case w := <-done:
-			return confirmed(w)
+			if exitConfirmed(w) {
+				return finish(ctx, rec, base, StateCancelled, why)
+			}
 		default:
 		}
 		reason := why + "; exit not confirmed within " + grace.String()
@@ -323,11 +364,11 @@ func approvalClass(err error) string {
 // answer forwards an approver decision verbatim, only if the runtime
 // offered it. With no approver, no answer is invented: the attempt stops.
 // Returned errors wrap a fixed class; detail is not kept.
-func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativePrompt) error {
+func answer(ctx context.Context, g *approvalGate, h Handle, appr Approver, req Request, p NativePrompt) error {
 	if appr == nil {
 		return errNoApprover
 	}
-	if ctx.Err() != nil {
+	if !g.open() || ctx.Err() != nil {
 		return errLateDecision // cancellation began; don't even ask
 	}
 	opt, err := appr.Decide(ctx, req, p)
@@ -338,14 +379,63 @@ func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativeP
 		return ErrOptionNotOffered
 	}
 	// Cancellation may have begun while the approver was deciding; a late
-	// decision must not reach the runtime.
-	if ctx.Err() != nil {
+	// decision must not reach the runtime. The gate decides that
+	// synchronously.
+	return g.send(func() error {
+		if err := h.Respond(ctx, p.ID, opt); err != nil {
+			return errRespondFailed
+		}
+		return nil
+	})
+}
+
+// approvalGate serialises sends against stop. A send holds sem while it
+// checks the gate and calls Respond; stop marks the gate closed, cancels
+// the approvals context, then takes sem (waiting at most grace for a send
+// already in progress). After stop returns, no new send can begin.
+type approvalGate struct {
+	caller context.Context
+	cancel context.CancelFunc
+	sem    chan struct{}
+	closed atomic.Bool
+}
+
+func newApprovalGate(caller context.Context, cancel context.CancelFunc) *approvalGate {
+	return &approvalGate{caller: caller, cancel: cancel, sem: make(chan struct{}, 1)}
+}
+
+func (g *approvalGate) open() bool { return !g.closed.Load() && g.caller.Err() == nil }
+
+func (g *approvalGate) send(fn func() error) error {
+	select {
+	case g.sem <- struct{}{}:
+	case <-g.caller.Done():
 		return errLateDecision
 	}
-	if err := h.Respond(ctx, p.ID, opt); err != nil {
-		return errRespondFailed
+	defer func() { <-g.sem }()
+	if !g.open() {
+		return errLateDecision
 	}
-	return nil
+	return fn()
+}
+
+// stop closes the gate and waits (bounded) for an in-progress send.
+func (g *approvalGate) stop(grace time.Duration) {
+	g.closed.Store(true)
+	g.cancel()
+	t := time.NewTimer(grace)
+	defer t.Stop()
+	select {
+	case g.sem <- struct{}{}:
+		<-g.sem
+	case <-t.C:
+	}
+}
+
+// close is stop without waiting, for Run's exit.
+func (g *approvalGate) close() {
+	g.closed.Store(true)
+	g.cancel()
 }
 
 // beforeStopApprovals is a test hook: tests use it to let another pending

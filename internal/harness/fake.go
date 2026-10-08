@@ -44,6 +44,11 @@ type FakeScript struct {
 	// ConcurrentPrompts emits every prompt at once instead of waiting for
 	// each answer, as runtimes that run tools in parallel do.
 	ConcurrentPrompts bool
+	// DecideHook, if set, runs inside Respond before recording (tests).
+	RespondHook func()
+	// WaitErrEarly makes Wait return WaitErr as soon as Cancel is called,
+	// while the attempt keeps running (a transport failure).
+	WaitErrEarly bool
 	// CancelDelay makes Cancel take this long to deliver, honouring ctx:
 	// if ctx ends first, the cancel is not delivered.
 	CancelDelay time.Duration
@@ -97,11 +102,12 @@ func (f *Fake) Start(ctx context.Context, req Request) (Handle, error) {
 		return nil, f.Script.StartErr
 	}
 	h := &fakeHandle{
-		script:  f.Script,
-		events:  make(chan Event, len(f.Script.Prompts)+1),
-		ended:   make(chan struct{}),
-		answers: make(chan struct{}, len(f.Script.Prompts)),
-		session: "fake-session-" + req.AttemptID,
+		script:      f.Script,
+		events:      make(chan Event, len(f.Script.Prompts)+1),
+		ended:       make(chan struct{}),
+		answers:     make(chan struct{}, len(f.Script.Prompts)),
+		cancelAsked: make(chan struct{}),
+		session:     "fake-session-" + req.AttemptID,
 	}
 	f.mu.Lock()
 	f.last = h
@@ -118,6 +124,9 @@ type fakeHandle struct {
 	answers   chan struct{}
 	session   string
 	cancelled atomic.Bool
+	// cancelAsked closes when Cancel is first called (before delivery).
+	cancelAsked chan struct{}
+	askOnce     sync.Once
 
 	mu        sync.Mutex
 	responses [][2]string
@@ -165,6 +174,9 @@ func (h *fakeHandle) NativeSession() string { return h.session }
 func (h *fakeHandle) Events() <-chan Event  { return h.events }
 
 func (h *fakeHandle) Respond(_ context.Context, promptID, optionID string) error {
+	if h.script.RespondHook != nil {
+		h.script.RespondHook()
+	}
 	h.mu.Lock()
 	h.responses = append(h.responses, [2]string{promptID, optionID})
 	h.mu.Unlock()
@@ -176,6 +188,7 @@ func (h *fakeHandle) Respond(_ context.Context, promptID, optionID string) error
 }
 
 func (h *fakeHandle) Cancel(ctx context.Context) error {
+	h.askOnce.Do(func() { close(h.cancelAsked) })
 	if d := h.script.CancelDelay; d > 0 {
 		select {
 		case <-time.After(d):
@@ -195,6 +208,14 @@ func (h *fakeHandle) Cancel(ctx context.Context) error {
 }
 
 func (h *fakeHandle) Wait(ctx context.Context) (Result, error) {
+	if h.script.WaitErrEarly {
+		select {
+		case <-h.cancelAsked:
+			return Result{}, h.script.WaitErr
+		case <-ctx.Done():
+			return Result{}, ctx.Err()
+		}
+	}
 	select {
 	case <-h.ended:
 	case <-ctx.Done():
