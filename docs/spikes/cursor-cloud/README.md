@@ -58,7 +58,10 @@ create without `prompt`). It exits 0 only if all of that holds. The spec is
 Cursor's document and is not vendored; the pin makes a changed spec stop
 the check instead of silently validating against something else. Needs
 PyYAML and jsonschema. Result at the pin: 14 fixtures ok, 3 controls
-rejected. A fixture with a made-up status fails it (checked).
+rejected. A fixture with a made-up status fails it (checked). For an
+offline check on the Air, a copy at the pinned hash is at
+`/Users/dan/.zeroclaw/agents/experiment_fable/workspace/workbench/cursor/openapi.yaml`
+(not in the repo; pass it as the argument).
 
 The fixtures:
 
@@ -88,8 +91,17 @@ The adapter rules:
    false**. Usage is tokens with kind `quota` and cost unknown (P3).
 5. The adapter's Wait returns the terminal status it actually read
    (`FINISHED`, `ERROR`, `CANCELLED`, `EXPIRED`), and H-01 records that
-   (P2). A cancel call that errors, or a poll that fails, leaves the
-   attempt `unknown`.
+   (P2). A cancel call that errors (including `409 run_not_cancellable`,
+   which means the run was already terminal) or times out does not decide
+   the outcome: the adapter reconciles with `GET .../runs/{runId}` within
+   the cancel grace. A terminal state read there wins: `FINISHED` is
+   succeeded even though a cancel was requested, `CANCELLED` is cancelled,
+   `ERROR`/`EXPIRED` are failed. Only an outcome still unresolved when the
+   grace runs out (no terminal read, or the reads keep failing) is
+   `unknown`. Required H-CUR1 fixture sequences: cancel 409 then GET
+   FINISHED (succeeded); cancel 200 then GET CANCELLED (cancelled); cancel
+   timeout then GET RUNNING until grace ends (unknown); cancel 200 then GET
+   failing until grace ends (unknown).
 6. Never persist `result`, assistant or thinking text in receipts.
 
 ## H-01 prerequisites (block H-CUR1)
@@ -111,7 +123,9 @@ Checked against h-01-execution-contract @ 1b9573cd.
   receipt would say cancelled. Needed: the adapter's Result (or a typed
   error) carries the runtime's observed terminal state, and Run records
   that state: `FINISHED` stays succeeded even after a cancel request, only
-  `CANCELLED` is cancelled, and a poll or cancel failure is unknown.
+  `CANCELLED` is cancelled. A cancel or poll error triggers reconciliation
+  (rule 5); only an outcome still unresolved at the end of the grace is
+  unknown.
 - **P3, token usage without cost.** H-01 `Usage` has `CostUSD float64`, so
   missing cost reads as $0, and its kinds follow eyrie-api.md where
   `reported` means a reported cost. Needed: cost as a nullable field (or a
