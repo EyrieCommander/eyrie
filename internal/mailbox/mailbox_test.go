@@ -375,18 +375,50 @@ func TestOpenTightensExistingFilePermissions(t *testing.T) {
 		}
 		_ = os.Chmod(p, 0o644)
 	}
-	// An empty -wal/-shm is valid for SQLite; remove them so it starts clean,
-	// but keep the 0644 main file.
-	_ = os.Remove(path + "-wal")
-	_ = os.Remove(path + "-shm")
+	// Pre-existing sidecars stay in place (empty -wal/-shm are valid for
+	// SQLite), so the check below covers their tightening too.
 	s, err := Open(path, Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	fi, _ := os.Stat(path)
-	if fi.Mode().Perm() != 0o600 {
-		t.Fatalf("existing db mode = %v, want 0600", fi.Mode().Perm())
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		fi, err := os.Stat(p)
+		if err != nil {
+			t.Fatalf("%s: %v", filepath.Base(p), err)
+		}
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %v, want 0600", filepath.Base(p), fi.Mode().Perm())
+		}
+	}
+}
+
+// securePaths itself tightens existing sidecars. Tested directly because
+// SQLite also gives -wal/-shm the main file's mode when it opens, which
+// would hide a regression in our own chmod in the end-to-end test above.
+func TestSecurePathsTightensSidecars(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mb")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, err := resolvePath(filepath.Join(dir, "mailbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		if err := os.WriteFile(p, nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Chmod(p, 0o644)
+	}
+	if err := securePaths(path); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+		fi, _ := os.Stat(p)
+		if fi.Mode().Perm() != 0o600 {
+			t.Fatalf("%s mode = %v after securePaths, want 0600", filepath.Base(p), fi.Mode().Perm())
+		}
 	}
 }
 
