@@ -188,6 +188,20 @@ const frameworkVersionCacheTTL = 5 * time.Minute
 // production never changes it.
 var frameworkVersionProbeTimeout = 3 * time.Second
 
+// frameworkVersionWaitDelay bounds how long a timed-out probe may keep the
+// call waiting on its output pipe. Killing the probe doesn't kill children
+// it started; without this, a child holding stdout keeps CombinedOutput
+// blocked until the child exits.
+const frameworkVersionWaitDelay = 500 * time.Millisecond
+
+// runVersionProbe runs one `<binary> --version`. A var so tests can count
+// probes deterministically; production never replaces it.
+var runVersionProbe = func(ctx context.Context, binaryPath string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, binaryPath, "--version")
+	cmd.WaitDelay = frameworkVersionWaitDelay
+	return cmd.CombinedOutput()
+}
+
 // handleListFrameworks returns all frameworks from the registry with installation status
 func (s *Server) handleListFrameworks(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
@@ -267,8 +281,9 @@ func frameworkStatus(fw registry.Framework) (installed, configured bool) {
 
 // frameworkVersion runs `<binary> --version` and returns the first line of
 // output, trimmed. Returns "" if the binary doesn't exist, isn't executable,
-// or the command fails. Bounded by frameworkVersionProbeTimeout (3s) to avoid
-// hanging on unresponsive binaries.
+// or the command fails. Bounded by frameworkVersionProbeTimeout (3s) plus
+// frameworkVersionWaitDelay, even if the binary leaves a child holding its
+// output pipe.
 func frameworkVersion(fw registry.Framework) string {
 	binaryPath := resolveFrameworkBinaryPath(fw)
 	now := time.Now()
@@ -286,7 +301,7 @@ func frameworkVersion(fw registry.Framework) string {
 
 	ctx, cancel := context.WithTimeout(context.Background(), frameworkVersionProbeTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, binaryPath, "--version").CombinedOutput()
+	out, err := runVersionProbe(ctx, binaryPath)
 	version := ""
 	if err != nil {
 		version = ""

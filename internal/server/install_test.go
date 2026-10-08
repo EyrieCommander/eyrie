@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -52,6 +53,20 @@ func TestScaffoldConfigCreatesSchemaDefaultConfig(t *testing.T) {
 
 // fakeVersionBinary writes a shell script that counts its invocations in
 // counterPath and prints version. Extra shell is inserted before printing.
+// countProbes wraps runVersionProbe to count invocations in-process, so
+// cache assertions don't depend on the fake script getting scheduled.
+func countProbes(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	var n atomic.Int32
+	orig := runVersionProbe
+	runVersionProbe = func(ctx context.Context, path string) ([]byte, error) {
+		n.Add(1)
+		return orig(ctx, path)
+	}
+	t.Cleanup(func() { runVersionProbe = orig })
+	return &n
+}
+
 func fakeVersionBinary(t *testing.T, dir, version, extra string) (binaryPath, counterPath string) {
 	t.Helper()
 	counterPath = filepath.Join(dir, "counter")
@@ -97,6 +112,7 @@ func TestFrameworkVersionCachesBinaryProbe(t *testing.T) {
 	t.Cleanup(resetFrameworkVersionCacheForTest)
 	withProbeTimeout(t, time.Minute)
 
+	probes := countProbes(t)
 	binaryPath, counterPath := fakeVersionBinary(t, t.TempDir(), "fake-framework 1.2.3", "")
 	fw := registry.Framework{ID: "fake-framework", BinaryPath: binaryPath}
 	if got := frameworkVersion(fw); got != "fake-framework 1.2.3" {
@@ -105,8 +121,11 @@ func TestFrameworkVersionCachesBinaryProbe(t *testing.T) {
 	if got := frameworkVersion(fw); got != "fake-framework 1.2.3" {
 		t.Fatalf("second frameworkVersion = %q", got)
 	}
+	if got := probes.Load(); got != 1 {
+		t.Fatalf("probes run = %d, want 1", got)
+	}
 	if got := probeCount(t, counterPath); got != "1" {
-		t.Fatalf("binary probe count = %s, want 1", got)
+		t.Fatalf("binary ran %s times, want 1", got)
 	}
 }
 
@@ -116,8 +135,9 @@ func TestFrameworkVersionCacheInvalidatesOnBinaryChange(t *testing.T) {
 	t.Cleanup(resetFrameworkVersionCacheForTest)
 	withProbeTimeout(t, time.Minute)
 
+	probes := countProbes(t)
 	dir := t.TempDir()
-	binaryPath, counterPath := fakeVersionBinary(t, dir, "fake-framework 1.2.3", "")
+	binaryPath, _ := fakeVersionBinary(t, dir, "fake-framework 1.2.3", "")
 	fw := registry.Framework{ID: "fake-framework", BinaryPath: binaryPath}
 	if got := frameworkVersion(fw); got != "fake-framework 1.2.3" {
 		t.Fatalf("first = %q", got)
@@ -130,22 +150,24 @@ func TestFrameworkVersionCacheInvalidatesOnBinaryChange(t *testing.T) {
 	if got := frameworkVersion(fw); got != "fake-framework 1.3.0-upgraded" {
 		t.Fatalf("after upgrade = %q, want the new version", got)
 	}
-	if got := probeCount(t, counterPath); got != "2" {
-		t.Fatalf("probe count = %s, want 2", got)
+	if got := probes.Load(); got != 2 {
+		t.Fatalf("probes run = %d, want 2", got)
 	}
 }
 
-// The production bound still holds: a binary that never answers returns ""
-// promptly (here it also leaves a background child holding the output
-// pipe), and the failure is cached rather than re-probed on every request.
+// The production bound still holds even when the binary leaves a child
+// holding its output pipe: the call returns "" within timeout+WaitDelay
+// instead of waiting for the child. The fake signals (via a ready file) that
+// the child is running before it blocks, and the probe timeout is long
+// enough that this happens before the kill, so the held-pipe case is
+// actually exercised. The failure is cached: a second call runs no probe.
 func TestFrameworkVersionProbeIsBounded(t *testing.T) {
 	resetFrameworkVersionCacheForTest()
 	t.Cleanup(resetFrameworkVersionCacheForTest)
-	withProbeTimeout(t, 300*time.Millisecond)
+	const bound = 2 * time.Second
+	withProbeTimeout(t, bound)
+	probes := countProbes(t)
 
-	// A background child keeps stdout open after the probe is killed; exec
-	// makes the killed process the foreground sleeper.
-	// The child's pid is recorded so the test leaves nothing running.
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "child.pid")
 	t.Cleanup(func() {
@@ -157,30 +179,29 @@ func TestFrameworkVersionProbeIsBounded(t *testing.T) {
 			}
 		}
 	})
-	binaryPath, counterPath := fakeVersionBinary(t, dir, "never", fmt.Sprintf("sleep 30 &\necho $! > %q\nexec sleep 30", pidFile))
+	// The background child inherits stdout; exec makes the foreground
+	// process (the one CommandContext kills) a long sleep.
+	binaryPath, _ := fakeVersionBinary(t, dir, "never",
+		fmt.Sprintf("sleep 60 &\necho $! > %[1]q.tmp && mv %[1]q.tmp %[1]q\nexec sleep 60", pidFile))
 	fw := registry.Framework{ID: "fake-framework", BinaryPath: binaryPath}
+
 	start := time.Now()
-	if got := frameworkVersion(fw); got != "" {
+	got := frameworkVersion(fw)
+	elapsed := time.Since(start)
+	if got != "" {
 		t.Fatalf("hung binary version = %q, want empty", got)
 	}
-	if el := time.Since(start); el > 3*time.Second {
-		t.Fatalf("probe took %v with a 300ms bound", el)
+	if _, err := os.Stat(pidFile); err != nil {
+		t.Skip("fake binary was killed before its child started (machine too loaded); held-pipe case not exercised")
 	}
-	// The failure is cached: the second call must not run (and wait out)
-	// another probe. Timing is used because under load the script may be
-	// killed before it records anything.
-	start = time.Now()
+	if limit := bound + frameworkVersionWaitDelay + 5*time.Second; elapsed > limit {
+		t.Fatalf("probe took %v; bound is %v + %v WaitDelay (child kept stdout open)", elapsed, bound, frameworkVersionWaitDelay)
+	}
 	if got := frameworkVersion(fw); got != "" {
 		t.Fatalf("second = %q", got)
 	}
-	if el := time.Since(start); el >= frameworkVersionProbeTimeout {
-		t.Fatalf("second call took %v: failed probe was re-run instead of cached", el)
-	}
-	// The probe can be killed before the script's first line runs under
-	// load, so count >= 1 is not guaranteed; what matters is that the
-	// second call didn't re-probe. Counter content, if any, is "1".
-	if b, err := os.ReadFile(counterPath); err == nil && strings.TrimSpace(string(b)) != "1" {
-		t.Fatalf("failed probe re-run (count %s), want cached after 1", strings.TrimSpace(string(b)))
+	if n := probes.Load(); n != 1 {
+		t.Fatalf("probes run = %d, want 1 (failure should be cached)", n)
 	}
 }
 
