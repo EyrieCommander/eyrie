@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"strings"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/bridge"
@@ -82,14 +84,32 @@ func init() {
 // func (always non-nil). Any config problem leaves the bridge off and is
 // logged; the dashboard itself still runs.
 // bridgeConflict reports why a bridge config can't run next to this
-// dashboard, or "" if it can. The bridge binds first, so a bridge port equal
-// to the dashboard port would take the dashboard's port and leave
-// management unable to start.
+// dashboard, or "" if it can.
+//   - The management API must be bound to loopback (acceptance check d).
+//     With the bridge on, /api/chief/* can send prompts and read the chief
+//     transcript; on 0.0.0.0 or a tailnet address, any client on that
+//     network could reach it (a Host header check is not authentication).
+//   - The bridge binds first, so a bridge port equal to the dashboard port
+//     would take it and leave management unable to start.
 func bridgeConflict(cfg bridge.Config, dash config.Config) string {
+	if !loopbackBind(dash.Dashboard.Host) {
+		return fmt.Sprintf("dashboard.host is %q; the bridge requires the management API to bind loopback (127.0.0.1, ::1 or localhost)", dash.Dashboard.Host)
+	}
 	if cfg.Port == dash.Dashboard.Port {
 		return fmt.Sprintf("bridge port %d is the dashboard port; pick another (default %d)", cfg.Port, bridge.DefaultPort)
 	}
 	return ""
+}
+
+// loopbackBind reports whether a listen host binds only loopback. An empty
+// host means every interface, so it is not loopback.
+func loopbackBind(host string) bool {
+	h := strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(host), "["), "]")
+	if strings.EqualFold(h, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(h)
+	return ip != nil && ip.IsLoopback()
 }
 
 func startBridge(srv *server.Server, dash config.Config) func() {

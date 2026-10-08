@@ -20,7 +20,7 @@ The bridge starts with `eyrie dashboard` only when `~/.eyrie/bridge.toml` exists
 3. Pick roots: `[roots]` maps an alias to an absolute folder, e.g. `picker-docs = "/abs/path"`. The chief only ever sees aliases, never paths.
 4. Generate the token: `eyrie bridge token rotate`. It prints the token **once** and saves only its SHA-256. Give the token and the public bridge URL to the chief through a private secret request.
 5. `eyrie bridge check` validates the file without starting anything.
-6. Restart `eyrie dashboard`. The log line `bridge listening addr=127.0.0.1:7201` confirms it. If the port is taken, the bridge logs `bridge refused to start` and the Chief tab stays off (no prompts are sent with nowhere for replies to land). A bridge `port` equal to the dashboard port is refused before anything binds, so the dashboard always keeps its own port; `eyrie bridge check` reports the same conflict.
+6. Restart `eyrie dashboard`. The log line `bridge listening addr=127.0.0.1:7201` confirms it. If the port is taken, the bridge logs `bridge refused to start` and the Chief tab stays off (no prompts are sent with nowhere for replies to land). A bridge `port` equal to the dashboard port is refused before anything binds, so the dashboard always keeps its own port. The bridge also refuses to start unless `dashboard.host` is a loopback address (`127.0.0.1`, `::1` or `localhost`): with the bridge on, the management API can send prompts and read the chief transcript, so it must not listen on `0.0.0.0` or a tailnet address. `eyrie bridge check` reports both conflicts.
 
 ## Exposing it: Funnel or a tunnel (bridge port only)
 
