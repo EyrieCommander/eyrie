@@ -115,7 +115,7 @@ func drain(ch <-chan ChatEvent) []ChatEvent {
 
 func TestCodexInterruptSendsTurnInterruptAndTurnEndsAsError(t *testing.T) {
 	shortInterruptTimers(t)
-	a := &CodexAdapter{}
+	a := &CodexAdapter{id: "t-1"}
 	srv, c := startInterruptServer(t, "honour")
 	ch, kills := startTestRun(t, a, "review", srv, c, "turn_7")
 
@@ -141,7 +141,7 @@ func TestCodexInterruptSendsTurnInterruptAndTurnEndsAsError(t *testing.T) {
 
 func TestCodexInterruptKillsWhenTurnDoesNotEnd(t *testing.T) {
 	shortInterruptTimers(t)
-	a := &CodexAdapter{}
+	a := &CodexAdapter{id: "t-2"}
 	srv, c := startInterruptServer(t, "ignore")
 	ch, kills := startTestRun(t, a, "", srv, c, "turn_1")
 
@@ -161,7 +161,7 @@ func TestCodexInterruptKillsWhenTurnDoesNotEnd(t *testing.T) {
 func TestCodexInterruptRejectedKillsImmediately(t *testing.T) {
 	shortInterruptTimers(t)
 	codexInterruptGrace = 5 * time.Second // must not be waited on
-	a := &CodexAdapter{}
+	a := &CodexAdapter{id: "t-3"}
 	srv, c := startInterruptServer(t, "reject")
 	ch, kills := startTestRun(t, a, "x", srv, c, "turn_1")
 
@@ -180,7 +180,7 @@ func TestCodexInterruptRejectedKillsImmediately(t *testing.T) {
 
 func TestCodexInterruptLearnsTurnIDFromTurnStarted(t *testing.T) {
 	shortInterruptTimers(t)
-	a := &CodexAdapter{}
+	a := &CodexAdapter{id: "t-4"}
 	srv, c := startInterruptServer(t, "honour")
 	ch, _ := startTestRun(t, a, "s", srv, c, "")
 	srv.mu.Lock()
@@ -200,14 +200,14 @@ func TestCodexInterruptLearnsTurnIDFromTurnStarted(t *testing.T) {
 }
 
 func TestCodexInterruptWithNoActiveTurnIsNoop(t *testing.T) {
-	if err := (&CodexAdapter{}).Interrupt(context.Background(), "nothing"); err != nil {
+	if err := (&CodexAdapter{id: "t-noop"}).Interrupt(context.Background(), "nothing"); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func TestCodexStopInterruptsEveryRun(t *testing.T) {
 	shortInterruptTimers(t)
-	a := &CodexAdapter{}
+	a := &CodexAdapter{id: "t-5"}
 	s1, c1 := startInterruptServer(t, "honour")
 	s2, c2 := startInterruptServer(t, "ignore")
 	ch1, k1 := startTestRun(t, a, "one", s1, c1, "t1")
@@ -227,7 +227,7 @@ func TestCodexStopInterruptsEveryRun(t *testing.T) {
 }
 
 func TestCodexOneTurnPerSession(t *testing.T) {
-	a := &CodexAdapter{}
+	a := &CodexAdapter{id: "t-6"}
 	if err := a.registerRun("s", &codexRun{done: make(chan struct{})}); err != nil {
 		t.Fatal(err)
 	}
@@ -245,4 +245,37 @@ func TestCodexTurnErrorTreatsInterruptedAsFailure(t *testing.T) {
 	if msg := codexTurnError(json.RawMessage(`{"turn":{"id":"t","status":"completed"}}`)); msg != "" {
 		t.Errorf("completed reported as error %q", msg)
 	}
+}
+
+func TestCodexStopFromAFreshAdapterReachesTheRun(t *testing.T) {
+	// discovery.NewAgent builds a new adapter per lookup; Stop on that new
+	// instance must still find the turn the first instance started.
+	shortInterruptTimers(t)
+	starter := &CodexAdapter{id: "shared-agent"}
+	srv, c := startInterruptServer(t, "honour")
+	ch, _ := startTestRun(t, starter, "s", srv, c, "turn_9")
+
+	if err := (&CodexAdapter{id: "shared-agent"}).Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(srv.gotInterrupts()) != 1 {
+		t.Fatal("Stop on a fresh adapter did not reach the running turn")
+	}
+	drain(ch)
+}
+
+func TestCodexStopLeavesOtherAgentsAlone(t *testing.T) {
+	shortInterruptTimers(t)
+	mine := &CodexAdapter{id: "agent-a"}
+	other := &CodexAdapter{id: "agent-b"}
+	srv, c := startInterruptServer(t, "honour")
+	ch, _ := startTestRun(t, other, "s", srv, c, "turn_1")
+	if err := mine.Stop(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(srv.gotInterrupts()) != 0 {
+		t.Fatal("Stop interrupted another agent's turn")
+	}
+	_ = other.Interrupt(context.Background(), "s")
+	drain(ch)
 }

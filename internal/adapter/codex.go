@@ -47,10 +47,18 @@ type CodexAdapter struct {
 
 	mu  sync.Mutex
 	cfg codexConfig
-
-	runsMu sync.Mutex
-	runs   map[string]*codexRun
 }
+
+// In-flight turns live in a process-wide registry keyed by agent id and
+// session, not on the adapter: discovery builds a new CodexAdapter on every
+// lookup, so the instance that serves Stop or Interrupt is usually not the
+// one that started the turn.
+var (
+	codexRunsMu sync.Mutex
+	codexRuns   = map[codexRunKey]*codexRun{}
+)
+
+type codexRunKey struct{ agent, session string }
 
 // codexRun is one in-flight turn: the app-server process serving it and the
 // ids turn/interrupt needs. done closes when the stream goroutine exits.
@@ -153,12 +161,14 @@ func (a *CodexAdapter) Start(context.Context) error { return a.ensureBinary() }
 // app-server process that doesn't end within the grace period. Codex has no
 // long-lived process of its own between turns, so there is nothing else to stop.
 func (a *CodexAdapter) Stop(ctx context.Context) error {
-	a.runsMu.Lock()
-	keys := make([]string, 0, len(a.runs))
-	for k := range a.runs {
-		keys = append(keys, k)
+	codexRunsMu.Lock()
+	var keys []string
+	for k := range codexRuns {
+		if k.agent == a.id {
+			keys = append(keys, k.session)
+		}
 	}
-	a.runsMu.Unlock()
+	codexRunsMu.Unlock()
 	var errs []error
 	for _, k := range keys {
 		if err := a.Interrupt(ctx, k); err != nil {
@@ -361,33 +371,34 @@ func codexSessionKey(k string) string {
 	return k
 }
 
+func (a *CodexAdapter) runKey(sessionKey string) codexRunKey {
+	return codexRunKey{agent: a.id, session: codexSessionKey(sessionKey)}
+}
+
 func (a *CodexAdapter) registerRun(sessionKey string, run *codexRun) error {
-	k := codexSessionKey(sessionKey)
-	a.runsMu.Lock()
-	defer a.runsMu.Unlock()
-	if a.runs == nil {
-		a.runs = map[string]*codexRun{}
+	k := a.runKey(sessionKey)
+	codexRunsMu.Lock()
+	defer codexRunsMu.Unlock()
+	if codexRuns[k] != nil {
+		return fmt.Errorf("codex session %q already has a turn in flight", k.session)
 	}
-	if a.runs[k] != nil {
-		return fmt.Errorf("codex session %q already has a turn in flight", k)
-	}
-	a.runs[k] = run
+	codexRuns[k] = run
 	return nil
 }
 
 func (a *CodexAdapter) unregisterRun(sessionKey string, run *codexRun) {
-	k := codexSessionKey(sessionKey)
-	a.runsMu.Lock()
-	defer a.runsMu.Unlock()
-	if a.runs[k] == run {
-		delete(a.runs, k)
+	k := a.runKey(sessionKey)
+	codexRunsMu.Lock()
+	defer codexRunsMu.Unlock()
+	if codexRuns[k] == run {
+		delete(codexRuns, k)
 	}
 }
 
 func (a *CodexAdapter) activeRun(sessionKey string) *codexRun {
-	a.runsMu.Lock()
-	defer a.runsMu.Unlock()
-	return a.runs[codexSessionKey(sessionKey)]
+	codexRunsMu.Lock()
+	defer codexRunsMu.Unlock()
+	return codexRuns[a.runKey(sessionKey)]
 }
 
 func (a *CodexAdapter) CreateSession(_ context.Context, name string) (*Session, error) {
