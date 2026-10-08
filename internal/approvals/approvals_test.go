@@ -212,12 +212,14 @@ func TestConcurrentConsumeAcrossStoresDispatchesOnce(t *testing.T) {
 func TestMalformedRecordsFailClosed(t *testing.T) {
 	s, _, _ := open(t)
 	cases := map[string]string{
-		"unknown state":         `UPDATE approvals SET state = 'granted'`,
-		"approved without UI":   `UPDATE approvals SET state = 'approved', decided_by = 'dan', decided_via = 'chat', decided_at = 1`,
-		"approved, no decider":  `UPDATE approvals SET state = 'approved', decided_by = '', decided_via = 'local-ui', decided_at = 1`,
-		"bad hash":              `UPDATE approvals SET payload_hash = 'x'`,
-		"consumed, no time":     `UPDATE approvals SET state = 'consumed', decided_by = 'dan', decided_via = 'local-ui', decided_at = 1, consumed_at = 0`,
-		"expires before create": `UPDATE approvals SET expires_at = created_at`,
+		"unknown state":          `UPDATE approvals SET state = 'granted'`,
+		"approved without UI":    `UPDATE approvals SET state = 'approved', decided_by = 'dan', decided_via = 'chat', decided_at = 1`,
+		"approved, no decider":   `UPDATE approvals SET state = 'approved', decided_by = '', decided_via = 'local-ui', decided_at = 1`,
+		"bad hash":               `UPDATE approvals SET payload_hash = 'x'`,
+		"consumed, no time":      `UPDATE approvals SET state = 'consumed', decided_by = 'dan', decided_via = 'local-ui', decided_at = 1, consumed_at = 0`,
+		"approved, consumed_at":  `UPDATE approvals SET state = 'approved', decided_by = 'dan', decided_via = 'local-ui', decided_at = 1, consumed_at = 5`,
+		"requested with decider": `UPDATE approvals SET decided_by = 'dan', decided_via = 'local-ui', decided_at = 1`,
+		"expires before create":  `UPDATE approvals SET expires_at = created_at`,
 	}
 	for name, q := range cases {
 		r, _ := s.Create(ctx, binding(), name, time.Hour)
@@ -274,7 +276,9 @@ func TestUnknownID(t *testing.T) {
 	}
 }
 
-func TestConsumeRaceInReadWriteWindowDispatchesOnce(t *testing.T) {
+func TestConsumeHoldsWriteLockAcrossReadAndWrite(t *testing.T) {
+	// While store a is between its read and its write, store b's Consume must
+	// wait for a's transaction, then see the approval already used.
 	c := &clock{t: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
 	path := filepath.Join(t.TempDir(), "approvals.db")
 	a, _ := Open(path, Options{Now: c.now})
@@ -283,18 +287,108 @@ func TestConsumeRaceInReadWriteWindowDispatchesOnce(t *testing.T) {
 	defer b.Close()
 	r := approved(t, a)
 
-	var inner error
+	bDone := make(chan error, 1)
 	testHookBeforeConsumeWrite = func() {
-		testHookBeforeConsumeWrite = nil // b's own Consume runs without the hook
-		_, inner = b.Consume(ctx, r.ID, binding())
+		testHookBeforeConsumeWrite = nil
+		go func() {
+			_, err := b.Consume(ctx, r.ID, binding())
+			bDone <- err
+		}()
+		select {
+		case err := <-bDone:
+			bDone <- err // b finished inside a's window: the lock didn't hold
+		case <-time.After(200 * time.Millisecond):
+		}
 	}
 	defer func() { testHookBeforeConsumeWrite = nil }()
 
-	_, outer := a.Consume(ctx, r.ID, binding())
-	if inner != nil {
-		t.Fatalf("store b consume in the window: %v", inner)
+	if _, err := a.Consume(ctx, r.ID, binding()); err != nil {
+		t.Fatalf("store a consume: %v", err)
 	}
-	if !errors.Is(outer, ErrAlreadyConsumed) {
-		t.Fatalf("store a consumed an approval b already used: %v", outer)
+	if err := <-bDone; !errors.Is(err, ErrAlreadyConsumed) {
+		t.Fatalf("store b after a committed: %v, want ErrAlreadyConsumed", err)
+	}
+}
+
+func TestConsumeCannotCommitAfterExpiryUsingAStaleClock(t *testing.T) {
+	// Reviewer's scenario: between Consume's read and its write, another
+	// Store grabs the write lock, the approval expires, then the lock is
+	// released. Consume must not succeed after the expiry with a clock value
+	// it read before the wait. With Consume holding the lock across read and
+	// write, the other Store can't get in at all.
+	c := &clock{t: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
+	path := filepath.Join(t.TempDir(), "approvals.db")
+	a, _ := Open(path, Options{Now: c.now})
+	defer a.Close()
+	b, _ := Open(path, Options{Now: c.now})
+	defer b.Close()
+	r, _ := a.Create(ctx, binding(), "stop", time.Minute)
+	_, _ = a.Decide(ctx, r.ID, true, "dan", ViaLocalUI)
+
+	bAcquired := make(chan struct{})
+	bFinished := make(chan struct{})
+	testHookBeforeConsumeWrite = func() {
+		testHookBeforeConsumeWrite = nil
+		go func() {
+			defer close(bFinished)
+			tx, err := b.db.BeginTx(ctx, nil)
+			if err != nil {
+				return
+			}
+			close(bAcquired)
+			time.Sleep(150 * time.Millisecond)
+			c.advance(2 * time.Minute)
+			_ = tx.Rollback()
+		}()
+		select {
+		case <-bAcquired:
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	defer func() { testHookBeforeConsumeWrite = nil }()
+
+	got, err := a.Consume(ctx, r.ID, binding())
+	returnedAt := c.now()
+	<-bFinished
+	if err == nil && !returnedAt.Before(r.ExpiresAt) {
+		t.Fatalf("consume succeeded at %v, after expiry %v (consumed_at %v)", returnedAt, r.ExpiresAt, got.ConsumedAt)
+	}
+	if err != nil && !errors.Is(err, ErrExpired) {
+		t.Fatalf("consume: %v", err)
+	}
+}
+
+func TestOddPathCharactersOpenTheCheckedFile(t *testing.T) {
+	for _, name := range []string{"a?mode=ro.db", "b#frag.db", "c%2e%2e.db", "d e.db"} {
+		dir := filepath.Join(t.TempDir(), "x")
+		path := filepath.Join(dir, name)
+		s, err := Open(path, Options{})
+		if err != nil {
+			t.Fatalf("%q: %v", name, err)
+		}
+		r, err := s.Create(ctx, binding(), "x", time.Hour)
+		if err != nil {
+			t.Fatalf("%q create: %v", name, err)
+		}
+		_ = s.Close()
+		entries, _ := os.ReadDir(dir)
+		found := false
+		for _, e := range entries {
+			if e.Name() == name {
+				found = true
+			}
+		}
+		if !found {
+			var names []string
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Fatalf("%q: database written elsewhere; dir has %v", name, names)
+		}
+		s2, _ := Open(path, Options{})
+		if _, err := s2.Get(ctx, r.ID); err != nil {
+			t.Fatalf("%q reopen: %v", name, err)
+		}
+		_ = s2.Close()
 	}
 }

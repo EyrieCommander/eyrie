@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -142,7 +143,7 @@ func Open(path string, opts Options) (*Store, error) {
 	if err := securePaths(path); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate")
+	db, err := sql.Open("sqlite", sqliteDSN(path))
 	if err != nil {
 		return nil, fmt.Errorf("approvals: %w", err)
 	}
@@ -152,6 +153,19 @@ func Open(path string, opts Options) (*Store, error) {
 		return nil, fmt.Errorf("approvals: schema: %w", err)
 	}
 	return &Store{db: db, now: opts.Now}, nil
+}
+
+// sqliteDSN builds a file: URI SQLite opens at exactly path. SQLite
+// percent-decodes URI paths and the driver splits on the first '?', so a raw
+// concatenation would let '?', '#' or '%xx' in path open a different file
+// from the one securePaths checked.
+func sqliteDSN(path string) string {
+	abs, err := filepath.Abs(path)
+	if err == nil {
+		path = abs
+	}
+	u := url.URL{Scheme: "file", Path: path, OmitHost: true}
+	return u.String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
 }
 
 // Close closes the store.
@@ -246,7 +260,15 @@ func (s *Store) Consume(ctx context.Context, id string, b Binding) (Request, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	r, err := s.getLocked(ctx, id)
+	// BEGIN IMMEDIATE takes SQLite's write lock (waiting up to busy_timeout
+	// for another Store). The clock is read only after that, so an approval
+	// that expires while we wait is seen as expired.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Request{}, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	r, err := s.getTx(ctx, tx, id)
 	if err != nil {
 		return Request{}, err
 	}
@@ -266,11 +288,11 @@ func (s *Store) Consume(ctx context.Context, id string, b Binding) (Request, err
 		testHookBeforeConsumeWrite()
 	}
 	now := s.now().UTC()
-	// The UPDATE re-checks everything, so a concurrent Consume (another Store
-	// on the same file) can't use the same approval twice.
-	res, err := s.db.ExecContext(ctx,
+	// The UPDATE re-checks everything, as a second guard alongside the
+	// transaction: a concurrent Consume can't use the same approval twice.
+	res, err := tx.ExecContext(ctx,
 		`UPDATE approvals SET state = ?, consumed_at = ?
-		 WHERE id = ? AND state = ? AND expires_at > ?
+		 WHERE id = ? AND state = ? AND expires_at > ? AND consumed_at = 0
 		   AND actor = ? AND project = ? AND target = ? AND action = ? AND payload_hash = ?`,
 		Consumed, now.UnixNano(), id, Approved, now.UnixNano(),
 		b.Actor, b.Project, b.Target, b.Action, b.PayloadHash)
@@ -278,17 +300,19 @@ func (s *Store) Consume(ctx context.Context, id string, b Binding) (Request, err
 		return Request{}, err
 	}
 	if n, _ := res.RowsAffected(); n != 1 {
-		if cur, err := s.getLocked(ctx, id); err == nil {
-			switch cur.State {
-			case Consumed:
-				return Request{}, ErrAlreadyConsumed
-			case Expired:
-				return Request{}, ErrExpired
-			}
+		if r.ExpiresAt.After(now) {
+			return Request{}, ErrNotApproved
 		}
-		return Request{}, ErrNotApproved
+		return Request{}, ErrExpired
 	}
-	return s.getLocked(ctx, id)
+	out, err := s.getTx(ctx, tx, id)
+	if err != nil {
+		return Request{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Request{}, err
+	}
+	return out, nil
 }
 
 // testHookBeforeConsumeWrite runs between Consume's read and its write;
@@ -333,6 +357,26 @@ func (s *Store) expireDueLocked(ctx context.Context) error {
 	return err
 }
 
+type execQuerier interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
+}
+
+// getTx is getLocked inside a transaction, with the clock read after the
+// transaction began.
+func (s *Store) getTx(ctx context.Context, q execQuerier, id string) (Request, error) {
+	if _, err := q.ExecContext(ctx,
+		`UPDATE approvals SET state = ? WHERE state IN (?, ?) AND expires_at <= ?`,
+		Expired, Requested, Approved, s.now().UTC().UnixNano()); err != nil {
+		return Request{}, err
+	}
+	r, err := scan(q.QueryRowContext(ctx, `SELECT `+cols+` FROM approvals WHERE id = ?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return Request{}, ErrNotFound
+	}
+	return r, err
+}
+
 func (s *Store) getLocked(ctx context.Context, id string) (Request, error) {
 	if err := s.expireDueLocked(ctx); err != nil {
 		return Request{}, err
@@ -367,8 +411,15 @@ func scan(r scanner) (Request, error) {
 	if (q.State == Approved || q.State == Denied || q.State == Consumed) && (q.DecidedVia != ViaLocalUI || q.DecidedBy == "" || decided == 0) {
 		return Request{}, fmt.Errorf("%w: %s has a decision without a local-UI decider", ErrMalformed, q.ID)
 	}
-	if q.State == Consumed && consumed == 0 {
-		return Request{}, fmt.Errorf("%w: %s", ErrMalformed, q.ID)
+	// consumed_at is set exactly when the state is Consumed. A nonzero
+	// consumed_at on any other state means the row was tampered with or
+	// corrupted, and must never authorise a dispatch.
+	if (q.State == Consumed) != (consumed != 0) {
+		return Request{}, fmt.Errorf("%w: %s has state %s with consumed_at=%d", ErrMalformed, q.ID, q.State, consumed)
+	}
+	// A pending request has no decision.
+	if q.State == Requested && (q.DecidedVia != "" || q.DecidedBy != "" || decided != 0) {
+		return Request{}, fmt.Errorf("%w: %s is requested but carries a decision", ErrMalformed, q.ID)
 	}
 	return q, nil
 }
