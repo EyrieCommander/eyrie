@@ -417,8 +417,17 @@ func TestOpenRefusesSymlinkedDB(t *testing.T) {
 	}
 }
 
+// sqliteHeader reports whether the file at p is a SQLite database (non-empty,
+// with the magic header). securePaths creates an empty file at the checked
+// path, so existence alone proves nothing about where SQLite wrote.
+func sqliteHeader(t *testing.T, p string) bool {
+	t.Helper()
+	b, err := os.ReadFile(p)
+	return err == nil && len(b) >= 16 && string(b[:15]) == "SQLite format 3"
+}
+
 func TestOddPathCharactersOpenTheCheckedFile(t *testing.T) {
-	for _, name := range []string{"a?mode=ro.db", "b#frag.db", "c%2e%2e.db", "d e.db"} {
+	for _, name := range []string{"a?mode=ro.db", "b#frag.db", "c%2e%2e.db", "d%20e.db", "e e.db"} {
 		dir := filepath.Join(t.TempDir(), "x")
 		path := filepath.Join(dir, name)
 		s, err := Open(path, Options{})
@@ -427,14 +436,156 @@ func TestOddPathCharactersOpenTheCheckedFile(t *testing.T) {
 		}
 		mustEnqueue(t, s, "m1", "codex", "x")
 		_ = s.Close()
-		if _, err := os.Stat(path); err != nil {
-			entries, _ := os.ReadDir(dir)
-			t.Fatalf("%q: database not at the checked path (%v); dir has %v", name, err, entries)
+		if !sqliteHeader(t, path) {
+			t.Fatalf("%q: no database at the checked path", name)
 		}
-		s2, _ := Open(path, Options{})
-		if _, err := s2.Get(ctx, "m1"); err != nil {
-			t.Fatalf("%q reopen: %v", name, err)
+		entries, _ := os.ReadDir(dir)
+		for _, e := range entries {
+			n := e.Name()
+			if n == name || n == name+"-wal" || n == name+"-shm" {
+				continue
+			}
+			t.Fatalf("%q: stray file %q next to the database (SQLite opened another path)", name, n)
 		}
-		_ = s2.Close()
+		if parent, _ := os.ReadDir(filepath.Dir(dir)); len(parent) != 1 {
+			t.Fatalf("%q: files outside the db directory: %v", name, parent)
+		}
+	}
+}
+
+func TestDotDotThroughSymlinkUsesOneResolvedPath(t *testing.T) {
+	// /root/safe/link -> /root/other/sub ; open /root/safe/link/../a.db.
+	// The OS resolves that to /root/other/a.db; a lexical clean gives
+	// /root/safe/a.db. Checks and SQLite must agree on the OS answer.
+	root := t.TempDir()
+	safe := filepath.Join(root, "safe")
+	sub := filepath.Join(root, "other", "sub")
+	_ = os.MkdirAll(safe, 0o700)
+	_ = os.MkdirAll(sub, 0o700)
+	if err := os.Symlink(sub, filepath.Join(safe, "link")); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(safe+"/link/../a.db", Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustEnqueue(t, s, "m1", "codex", "x")
+	_ = s.Close()
+	osPath := filepath.Join(root, "other", "a.db")
+	if !sqliteHeader(t, osPath) {
+		t.Fatalf("database not at the OS-resolved path %s", osPath)
+	}
+	if _, err := os.Stat(filepath.Join(safe, "a.db")); err == nil {
+		t.Fatal("a database file appeared at the lexically cleaned path")
+	}
+	if fi, _ := os.Stat(osPath); fi.Mode().Perm() != 0o600 {
+		t.Fatalf("resolved db mode = %v", fi.Mode().Perm())
+	}
+}
+
+func TestConcurrentEnqueueAcrossStores(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mailbox.db")
+	a, _ := Open(path, Options{})
+	defer a.Close()
+	b, _ := Open(path, Options{})
+	defer b.Close()
+	for round := 0; round < 20; round++ {
+		id := "same-" + strconv.Itoa(round)
+		var wg sync.WaitGroup
+		results := make([]struct {
+			dup bool
+			err error
+		}, 2)
+		for i, st := range []*Store{a, b} {
+			wg.Add(1)
+			go func(i int, st *Store) {
+				defer wg.Done()
+				_, results[i].dup, results[i].err = st.Enqueue(ctx, id, "codex", "chief", "same body")
+			}(i, st)
+		}
+		wg.Wait()
+		for _, r := range results {
+			if r.err != nil {
+				t.Fatalf("round %d identical enqueue: %v", round, r.err)
+			}
+		}
+		if results[0].dup == results[1].dup {
+			t.Fatalf("round %d: dup flags %v/%v, want exactly one original", round, results[0].dup, results[1].dup)
+		}
+
+		cid := "conflict-" + strconv.Itoa(round)
+		var errs [2]error
+		wg.Add(2)
+		go func() { defer wg.Done(); _, _, errs[0] = a.Enqueue(ctx, cid, "codex", "chief", "one") }()
+		go func() { defer wg.Done(); _, _, errs[1] = b.Enqueue(ctx, cid, "codex", "chief", "two") }()
+		wg.Wait()
+		ok, conflict := 0, 0
+		for _, e := range errs {
+			switch {
+			case e == nil:
+				ok++
+			case errors.Is(e, ErrConflict):
+				conflict++
+			default:
+				t.Fatalf("round %d conflicting enqueue: %v", round, e)
+			}
+		}
+		if ok != 1 || conflict != 1 {
+			t.Fatalf("round %d: ok=%d conflict=%d, want 1/1", round, ok, conflict)
+		}
+	}
+}
+
+func TestClaimReadsClockAfterLockWait(t *testing.T) {
+	c := &clock{t: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
+	path := filepath.Join(t.TempDir(), "mailbox.db")
+	a, _ := Open(path, Options{Now: c.now})
+	defer a.Close()
+	b, _ := Open(path, Options{Now: c.now})
+	defer b.Close()
+	mustEnqueue(t, a, "m1", "codex", "x")
+	holder, err := b.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type res struct {
+		m   Message
+		err error
+	}
+	out := make(chan res, 1)
+	go func() {
+		m, err := a.Claim(ctx, "codex", "w", time.Second)
+		out <- res{m, err}
+	}()
+	time.Sleep(150 * time.Millisecond)
+	c.advance(2 * time.Second) // the lock wait outlasts the lease
+	_ = holder.Rollback()
+	r := <-out
+	if r.err != nil {
+		t.Fatal(r.err)
+	}
+	if !r.m.LeaseUntil.After(c.now()) {
+		t.Fatalf("lease until %v is not after now %v: computed before the lock wait", r.m.LeaseUntil, c.now())
+	}
+}
+
+func TestStaleTokenRejectedAfterReclaimerAcks(t *testing.T) {
+	s, c, _ := open(t, 3)
+	mustEnqueue(t, s, "m1", "codex", "x")
+	a, _ := s.Claim(ctx, "codex", "w1", time.Minute)
+	c.advance(time.Minute)
+	b, _ := s.Claim(ctx, "codex", "w2", time.Minute)
+	if _, err := s.Ack(ctx, "m1", b.LeaseToken); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Ack(ctx, "m1", a.LeaseToken); !errors.Is(err, ErrNotLeaseHolder) {
+		t.Fatalf("stale token ack after delivery: %v, want ErrNotLeaseHolder", err)
+	}
+	if _, err := s.Ack(ctx, "m1", "unrelated"); !errors.Is(err, ErrNotLeaseHolder) {
+		t.Fatalf("unrelated token ack after delivery: %v", err)
+	}
+	m, err := s.Ack(ctx, "m1", b.LeaseToken)
+	if err != nil || m.DeliveredToken != b.LeaseToken {
+		t.Fatalf("retry of the delivering ack: %+v %v", m, err)
 	}
 }

@@ -21,6 +21,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,7 +72,9 @@ type Message struct {
 	LeaseToken  string
 	LeaseUntil  time.Time
 	DeliveredAt time.Time
-	LastError   string
+	// DeliveredToken is the lease token whose Ack delivered the message.
+	DeliveredToken string
+	LastError      string
 }
 
 // Options tune retry behaviour. Zero values take the defaults.
@@ -118,6 +121,10 @@ func Open(path string, opts Options) (*Store, error) {
 	}
 	if opts.Now == nil {
 		opts.Now = time.Now
+	}
+	path, err := resolvePath(path)
+	if err != nil {
+		return nil, err
 	}
 	if err := securePaths(path); err != nil {
 		return nil, err
@@ -180,11 +187,84 @@ func securePaths(path string) error {
 // concatenation would let '?', '#' or '%xx' in path open a different file
 // from the one securePaths checked.
 func sqliteDSN(path string) string {
-	if abs, err := filepath.Abs(path); err == nil {
-		path = abs
-	}
 	u := url.URL{Scheme: "file", Path: path, OmitHost: true}
 	return u.String() + "?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_txlock=immediate"
+}
+
+// resolvePath turns path into the one absolute, symlink-free path that both
+// the permission checks and SQLite then use. The directory is created first
+// and resolved the way the OS resolves it (EvalSymlinks follows a symlink
+// before applying "..", as open(2) does); a lexical filepath.Abs would turn
+// "/safe/link/../a.db" into "/safe/a.db" while the OS opens
+// "<link target>/../a.db".
+// resolveExisting resolves dir the way open(2) would. EvalSymlinks does
+// that for an existing path. If dir doesn't exist yet, the missing tail is
+// peeled off component by component (by hand, no lexical clean), the
+// existing head is resolved, and the tail is re-attached. A ".." in the
+// missing tail is refused, because it can't be resolved without the
+// directory existing.
+func resolveExisting(dir string) (string, error) {
+	var tail []string
+	cur := dir
+	for {
+		if r, err := filepath.EvalSymlinks(cur); err == nil {
+			r, err = filepath.Abs(r)
+			if err != nil {
+				return "", err
+			}
+			for i := len(tail) - 1; i >= 0; i-- {
+				r = filepath.Join(r, tail[i])
+			}
+			return r, nil
+		} else if !os.IsNotExist(err) {
+			return "", err
+		}
+		i := strings.LastIndexByte(cur, filepath.Separator)
+		if i < 0 {
+			if cur == "" || cur == "." {
+				return "", fmt.Errorf("cannot resolve %q", dir)
+			}
+			tail = append(tail, cur)
+			cur = "."
+			continue
+		}
+		comp := cur[i+1:]
+		if comp == ".." {
+			return "", fmt.Errorf("%q has '..' below a directory that doesn't exist yet", dir)
+		}
+		if comp != "" && comp != "." {
+			tail = append(tail, comp)
+		}
+		cur = cur[:i]
+		if cur == "" {
+			cur = string(filepath.Separator)
+		}
+	}
+}
+
+func resolvePath(path string) (string, error) {
+	// Split on the last separator by hand: filepath.Dir/Base clean the path
+	// lexically, which is the bug this function exists to avoid.
+	dir, base := ".", path
+	if i := strings.LastIndexByte(path, filepath.Separator); i >= 0 {
+		dir, base = path[:i], path[i+1:]
+		if dir == "" {
+			dir = string(filepath.Separator)
+		}
+	}
+	if base == "" || base == "." || base == ".." {
+		return "", fmt.Errorf("mailbox: %q does not name a file", path)
+	}
+	// Resolve the existing part of dir as the OS would, before anything
+	// touches it: os.MkdirAll, filepath.Join and Abs all clean lexically.
+	real, err := resolveExisting(dir)
+	if err != nil {
+		return "", fmt.Errorf("mailbox: %w", err)
+	}
+	if err := os.MkdirAll(real, 0o700); err != nil {
+		return "", fmt.Errorf("mailbox: %w", err)
+	}
+	return filepath.Join(real, base), nil
 }
 
 const schema = `
@@ -199,6 +279,7 @@ CREATE TABLE IF NOT EXISTS messages (
 	next_attempt_at INTEGER NOT NULL,
 	lease_owner     TEXT NOT NULL DEFAULT '',
 	lease_token     TEXT NOT NULL DEFAULT '',
+	delivered_token TEXT NOT NULL DEFAULT '',
 	lease_until     INTEGER NOT NULL DEFAULT 0,
 	delivered_at    INTEGER NOT NULL DEFAULT 0,
 	last_error      TEXT NOT NULL DEFAULT ''
@@ -219,24 +300,38 @@ func (s *Store) Enqueue(ctx context.Context, id, agent, sender, body string) (ms
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	existing, err := s.get(ctx, s.db, id)
-	switch {
-	case err == nil:
-		if existing.Agent != agent || existing.Sender != sender || existing.Body != body {
-			return Message{}, false, ErrConflict
-		}
-		return existing, true, nil
-	case !errors.Is(err, ErrNotFound):
+	// One immediate transaction: insert-if-absent, then read back whatever
+	// row owns the ID. Two Stores racing on the same ID serialise on the
+	// write lock, so the loser sees the winner's row (duplicate or conflict)
+	// instead of a UNIQUE error.
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
 		return Message{}, false, err
 	}
+	defer func() { _ = tx.Rollback() }()
 	now := s.opts.Now().UTC()
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO messages (id, agent, sender, body, state, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		id, agent, sender, body, Queued, now.UnixNano(), now.UnixNano()); err != nil {
+	res, err := tx.ExecContext(ctx,
+		`INSERT INTO messages (id, agent, sender, body, state, created_at, next_attempt_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO NOTHING`,
+		id, agent, sender, body, Queued, now.UnixNano(), now.UnixNano())
+	if err != nil {
 		return Message{}, false, fmt.Errorf("mailbox: enqueue: %w", err)
 	}
-	m, err := s.get(ctx, s.db, id)
-	return m, false, err
+	inserted, _ := res.RowsAffected()
+	m, err := s.get(ctx, tx, id)
+	if err != nil {
+		return Message{}, false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Message{}, false, err
+	}
+	if inserted == 1 {
+		return m, false, nil
+	}
+	if m.Agent != agent || m.Sender != sender || m.Body != body {
+		return Message{}, false, ErrConflict
+	}
+	return m, true, nil
 }
 
 // Claim leases the oldest deliverable message for agent to owner for lease.
@@ -251,11 +346,13 @@ func (s *Store) Claim(ctx context.Context, agent, owner string, lease time.Durat
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for {
-		now := s.opts.Now().UTC()
-		tx, err := s.db.BeginTx(ctx, nil)
+		tx, err := s.db.BeginTx(ctx, nil) // waits for the write lock
 		if err != nil {
 			return Message{}, err
 		}
+		// Read the clock only once the lock is held: a lease computed before
+		// a busy_timeout wait could already be expired when Claim returns.
+		now := s.opts.Now().UTC()
 		var id string
 		var attempts int
 		err = tx.QueryRowContext(ctx, `
@@ -323,9 +420,15 @@ func (s *Store) Ack(ctx context.Context, id, token string) (Message, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := s.opts.Now().UTC()
+	if token == "" {
+		if _, err := s.get(ctx, s.db, id); err != nil {
+			return Message{}, err
+		}
+		return Message{}, ErrNotLeaseHolder
+	}
 	res, err := s.db.ExecContext(ctx,
-		`UPDATE messages SET state = ?, delivered_at = ?, lease_owner = '', lease_token = '', lease_until = 0, last_error = ''
-		 WHERE id = ? AND state = ? AND lease_token = ? AND lease_token != ''`,
+		`UPDATE messages SET state = ?, delivered_at = ?, delivered_token = lease_token, lease_owner = '', lease_token = '', lease_until = 0, last_error = ''
+		 WHERE id = ? AND state = ? AND lease_token = ?`,
 		Delivered, now.UnixNano(), id, Leased, token)
 	if err != nil {
 		return Message{}, err
@@ -334,7 +437,10 @@ func (s *Store) Ack(ctx context.Context, id, token string) (Message, error) {
 	if err != nil {
 		return Message{}, err
 	}
-	if n, _ := res.RowsAffected(); n == 1 || m.State == Delivered {
+	// A repeat of the ack that delivered it is fine; an ack carrying any
+	// other token (an earlier, reclaimed attempt) is not, even though the
+	// message is delivered.
+	if n, _ := res.RowsAffected(); n == 1 || (m.State == Delivered && m.DeliveredToken == token) {
 		return m, nil
 	}
 	return Message{}, ErrNotLeaseHolder
@@ -408,7 +514,7 @@ func (s *Store) List(ctx context.Context, agent string, states ...State) ([]Mess
 	return out, rows.Err()
 }
 
-const cols = `id, agent, sender, body, state, attempts, created_at, next_attempt_at, lease_owner, lease_token, lease_until, delivered_at, last_error`
+const cols = `id, agent, sender, body, state, attempts, created_at, next_attempt_at, lease_owner, lease_token, lease_until, delivered_at, last_error, delivered_token`
 
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
@@ -429,7 +535,7 @@ func scan(r scanner) (Message, error) {
 	var state string
 	var created, next, leaseUntil, delivered int64
 	if err := r.Scan(&m.ID, &m.Agent, &m.Sender, &m.Body, &state, &m.Attempts,
-		&created, &next, &m.LeaseOwner, &m.LeaseToken, &leaseUntil, &delivered, &m.LastError); err != nil {
+		&created, &next, &m.LeaseOwner, &m.LeaseToken, &leaseUntil, &delivered, &m.LastError, &m.DeliveredToken); err != nil {
 		return Message{}, err
 	}
 	m.State = State(state)
