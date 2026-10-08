@@ -3,8 +3,11 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/Audacity88/eyrie/internal/config"
 )
 
 type guardReq struct {
@@ -97,10 +100,55 @@ func TestBrowserGuardWildcardBindKeepsOriginChecks(t *testing.T) {
 	})
 }
 
-// The guard is actually installed on the management server.
-func TestManagementServerUsesBrowserGuard(t *testing.T) {
-	src := managementHandler(http.NewServeMux(), "127.0.0.1")
-	if _, ok := src.(*browserGuard); !ok {
-		t.Fatalf("management handler is %T, want *browserGuard", src)
+// The guard is installed on the server New actually builds: requests go
+// through s.server.Handler (what Start serves), not a helper. A refused
+// cross-site request must not reach the route; a same-origin one must.
+func TestNewServerHandlerRefusesCrossSite(t *testing.T) {
+	t.Setenv("HOME", t.TempDir()) // New creates stores under ~/.eyrie
+	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("ANTHROPIC_API_KEY", "")
+	cfg := config.DefaultConfig()
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := s.server.Handler
+	do := func(method, path, host, origin string) int {
+		req := httptest.NewRequest(method, path, strings.NewReader(`{"name":"x"}`))
+		req.Host = host
+		req.Header.Set("Content-Type", "text/plain")
+		if origin != "" {
+			req.Header.Set("Origin", origin)
+		}
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		return rec.Code
+	}
+	if got := do("POST", "/api/projects", "127.0.0.1:7200", "https://evil.example"); got != 403 {
+		t.Errorf("cross-site POST /api/projects: %d, want 403", got)
+	}
+	if got := do("GET", "/api/projects", "evil.example:7200", ""); got != 403 {
+		t.Errorf("rebinding GET /api/projects: %d, want 403", got)
+	}
+	ws := httptest.NewRequest("GET", "/api/terminal/ws?session=eyrie-guard-test", nil)
+	ws.Host = "127.0.0.1:7200"
+	ws.Header.Set("Origin", "https://evil.example")
+	ws.Header.Set("Connection", "Upgrade")
+	ws.Header.Set("Upgrade", "websocket")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, ws)
+	if rec.Code != 403 {
+		t.Errorf("cross-site terminal websocket: %d, want 403", rec.Code)
+	}
+	if got := do("GET", "/api/projects", "127.0.0.1:7200", ""); got != 200 {
+		t.Errorf("loopback GET /api/projects: %d, want 200", got)
+	}
+	// No project was created by the refused POST.
+	req := httptest.NewRequest("GET", "/api/projects", nil)
+	req.Host = "127.0.0.1:7200"
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if strings.Contains(rec.Body.String(), `"name":"x"`) {
+		t.Fatal("refused cross-site POST created a project")
 	}
 }
