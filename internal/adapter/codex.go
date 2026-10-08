@@ -387,20 +387,38 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting codex app-server: %w", err)
 	}
-	run.setKill(func() { _ = killCodexGroup(cmd) })
+	// The kill path (Interrupt's forced fallback, Stop) also shuts the RPC
+	// client down: during startup a full notification buffer would otherwise
+	// keep readLoop blocked, so the pending turn/start never fails, abort
+	// never runs, and the session stays registered.
+	var clientMu sync.Mutex
+	var client *codexRPCClient
+	run.setKill(func() {
+		_ = killCodexGroup(cmd)
+		clientMu.Lock()
+		c := client
+		clientMu.Unlock()
+		if c != nil {
+			c.shutdown()
+		}
+	})
 
 	// abort ends the app server on an early error exit. Wait reaps the child
 	// and closes its pipes; Kill alone leaves a zombie per failed attempt.
-	var client *codexRPCClient
 	abort := func() {
 		_ = killCodexGroup(cmd)
-		if client != nil {
-			client.shutdown() // unblock readLoop so Wait's pipe copy can finish
+		clientMu.Lock()
+		c := client
+		clientMu.Unlock()
+		if c != nil {
+			c.shutdown() // unblock readLoop so Wait's pipe copy can finish
 		}
 		_ = cmd.Wait()
 	}
 
+	clientMu.Lock()
 	client = newCodexRPCClient(stdin, stdout)
+	clientMu.Unlock()
 	go client.readLoop()
 
 	if _, err := client.request(ctx, "initialize", map[string]any{
@@ -744,33 +762,46 @@ func (e *CodexResumeError) Unwrap() error { return e.Err }
 
 // killCodexGroup kills the app server and everything it started. Killing
 // the process group (Setpgid at launch) isn't enough: a tool can call
-// setsid or setpgid and leave the group. So it first snapshots the
-// descendant tree by parent pid, stops each process (SIGSTOP, so nothing
-// can fork further or reparent while the tree is torn down), then SIGKILLs
-// every pid in the tree, every process group they lead, and the original
-// group.
+// setsid or setpgid and leave the group.
 //
-// Limit: a process that has already double-forked and been reparented to
-// launchd before the snapshot is no longer a descendant and is not found.
-// Catching that needs a supervisor such as a launchd job or a jail, which is
-// out of scope for this adapter.
+// So it freezes the tree first. Every pid ever seen as a descendant is
+// kept, in a set that only grows, and each newly seen pid gets SIGSTOP the
+// moment it's found. Then it re-scans, until a scan turns up nothing new.
+// At that point every known process is stopped, so none can fork, and any
+// child forked before its parent stopped has been found by a later scan.
+// Then every pid in the set, every group they lead, and the original group
+// get SIGKILL. A pid that has since been reparented (its parent exited
+// before being stopped) is still in the set, so it still gets killed.
+//
+// Limit: a process that double-forked and was reparented to launchd before
+// the first scan is no longer a descendant and is not found. That needs an
+// OS-level supervisor.
 func killCodexGroup(cmd *exec.Cmd) error {
 	if cmd.Process == nil {
 		return nil
 	}
 	root := cmd.Process.Pid
-	tree := codexProcessTree(root)
-	for _, pid := range tree {
-		_ = syscall.Kill(pid, syscall.SIGSTOP)
+	known := map[int]bool{}
+	var order []int
+	for round := 0; round < codexFreezeMaxRounds; round++ {
+		fresh := 0
+		for _, pid := range codexDescendants(root, known) {
+			if !known[pid] {
+				known[pid] = true
+				order = append(order, pid)
+				_ = syscall.Kill(pid, syscall.SIGSTOP)
+				fresh++
+			}
+		}
+		if fresh == 0 && round > 0 {
+			break
+		}
 	}
-	// Re-scan once stopped: anything forked between the first snapshot and
-	// the stop is now visible and can't move.
-	tree = codexProcessTree(root)
-	for _, pid := range tree {
-		_ = syscall.Kill(pid, syscall.SIGKILL)
+	for _, pid := range order {
 		if pgid, err := syscall.Getpgid(pid); err == nil && pgid == pid {
 			_ = syscall.Kill(-pid, syscall.SIGKILL)
 		}
+		_ = syscall.Kill(pid, syscall.SIGKILL)
 	}
 	if err := syscall.Kill(-root, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
 		return cmd.Process.Kill()
@@ -778,10 +809,16 @@ func killCodexGroup(cmd *exec.Cmd) error {
 	return nil
 }
 
-// codexProcessTree returns root and all its live descendants, found by
-// walking parent pids from `ps -A -o pid=,ppid=`. If ps fails it returns
-// just root, and the group kill still applies.
-func codexProcessTree(root int) []int {
+// codexFreezeMaxRounds bounds the freeze loop. Each round stops every newly
+// found process, so a tree stops growing after its depth in rounds; 64 is
+// far past any real tool tree.
+const codexFreezeMaxRounds = 64
+
+// codexDescendants returns root and every live process whose parent chain
+// reaches root or any pid in known (so children of a stopped process whose
+// own parent already exited are still found). From `ps -A -o pid=,ppid=`.
+// If ps fails it returns just root, and the group kill still applies.
+func codexDescendants(root int, known map[int]bool) []int {
 	out, err := exec.Command("/bin/ps", "-A", "-o", "pid=,ppid=").Output()
 	if err != nil {
 		return []int{root}
@@ -800,6 +837,12 @@ func codexProcessTree(root int) []int {
 	}
 	seen := map[int]bool{root: true}
 	tree := []int{root}
+	for pid := range known {
+		if !seen[pid] {
+			seen[pid] = true
+			tree = append(tree, pid)
+		}
+	}
 	for i := 0; i < len(tree); i++ {
 		for _, c := range children[tree[i]] {
 			if !seen[c] {
@@ -1095,7 +1138,8 @@ func cloneStringMap(in map[string]string) map[string]string {
 type codexRPCClient struct {
 	in            io.WriteCloser
 	out           io.Reader
-	writeMu       sync.Mutex
+	writes        chan codexWrite
+	writerOnce    sync.Once
 	nextID        int
 	pendingMu     sync.Mutex
 	pending       map[string]chan codexRPCMessage
@@ -1125,6 +1169,7 @@ func newCodexRPCClient(in io.WriteCloser, out io.Reader) *codexRPCClient {
 		notifications: make(chan codexRPCMessage, 128),
 		requests:      make(chan codexRPCMessage, 16),
 		stop:          make(chan struct{}),
+		writes:        make(chan codexWrite),
 	}
 }
 
@@ -1200,22 +1245,21 @@ func (c *codexRPCClient) failPending() {
 }
 
 func (c *codexRPCClient) request(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	c.writeMu.Lock()
+	c.pendingMu.Lock()
+	if c.closed {
+		c.pendingMu.Unlock()
+		return nil, io.ErrUnexpectedEOF
+	}
 	c.nextID++
 	id := c.nextID
 	key := strconv.Itoa(id)
 	ch := make(chan codexRPCMessage, 1)
-	c.pendingMu.Lock()
-	if c.closed {
-		c.pendingMu.Unlock()
-		c.writeMu.Unlock()
-		return nil, io.ErrUnexpectedEOF
-	}
 	c.pending[key] = ch
 	c.pendingMu.Unlock()
-	err := c.writeLocked(map[string]any{"id": id, "method": method, "params": params})
-	c.writeMu.Unlock()
-	if err != nil {
+	if err := c.send(ctx, map[string]any{"id": id, "method": method, "params": params}); err != nil {
+		c.pendingMu.Lock()
+		delete(c.pending, key)
+		c.pendingMu.Unlock()
 		return nil, err
 	}
 	select {
@@ -1232,26 +1276,66 @@ func (c *codexRPCClient) request(ctx context.Context, method string, params any)
 	}
 }
 
-func (c *codexRPCClient) notify(method string, params any) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.writeLocked(map[string]any{"method": method, "params": params})
-}
-
-func (c *codexRPCClient) respond(id json.RawMessage, result any) error {
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
-	return c.writeLocked(map[string]any{"id": json.RawMessage(id), "result": result})
-}
-
-func (c *codexRPCClient) writeLocked(v any) error {
+// send queues one message for the writer goroutine and waits until it has
+// been written, the context ends, or the client shuts down, whichever comes
+// first. The write itself may block (a server that stops reading fills the
+// stdin pipe), but only the writer goroutine waits on it: callers, and
+// Interrupt's timeout in particular, are never held by a stuck write.
+func (c *codexRPCClient) send(ctx context.Context, v any) error {
 	data, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
 	data = append(data, '\n')
-	_, err = c.in.Write(data)
-	return err
+	w := codexWrite{data: data, done: make(chan error, 1)}
+	c.startWriter()
+	select {
+	case c.writes <- w:
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.stop:
+		return io.ErrClosedPipe
+	}
+	select {
+	case err := <-w.done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.stop:
+		return io.ErrClosedPipe
+	}
+}
+
+type codexWrite struct {
+	data []byte
+	done chan error
+}
+
+// startWriter starts the single goroutine that owns stdin. Writes go out in
+// order, one at a time. It exits on shutdown; a write still blocked then
+// returns once the process dies and the pipe closes.
+func (c *codexRPCClient) startWriter() {
+	c.writerOnce.Do(func() {
+		go func() {
+			for {
+				select {
+				case w := <-c.writes:
+					_, err := c.in.Write(w.data)
+					w.done <- err
+				case <-c.stop:
+					return
+				}
+			}
+		}()
+	})
+}
+
+func (c *codexRPCClient) notify(method string, params any) error {
+	return c.send(context.Background(), map[string]any{"method": method, "params": params})
+}
+
+func (c *codexRPCClient) respond(id json.RawMessage, result any) error {
+	return c.send(context.Background(), map[string]any{"id": json.RawMessage(id), "result": result})
 }
 
 func codexThreadStartParams(cfg codexConfig) map[string]any {

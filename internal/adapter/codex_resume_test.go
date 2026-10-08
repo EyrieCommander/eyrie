@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -212,7 +213,18 @@ func TestMain(m *testing.M) {
 				ID     json.RawMessage `json:"id"`
 				Method string          `json:"method"`
 			}
-			if json.Unmarshal(sc.Bytes(), &req) != nil || len(req.ID) == 0 || req.Method == "turn/start" {
+			if json.Unmarshal(sc.Bytes(), &req) != nil || len(req.ID) == 0 {
+				continue
+			}
+			if req.Method == "turn/start" {
+				// EYRIE_FAKE_CODEX_FLOOD: flood notifications past the client's
+				// 128-slot buffer before (never) answering, so its read loop
+				// is stuck on a full channel during startup.
+				if os.Getenv("EYRIE_FAKE_CODEX_FLOOD") != "" {
+					for i := 0; i < 300; i++ {
+						_ = enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "x"}})
+					}
+				}
 				continue
 			}
 			if req.Method == "thread/start" {
@@ -281,6 +293,20 @@ func TestCodexStreamMessageFailedResumeReapsAppServer(t *testing.T) {
 }
 
 func TestCodexInterruptDuringTurnStartUnblocksAndReaps(t *testing.T) {
+	testCodexInterruptDuringTurnStart(t, false)
+}
+
+// Review r5 P2: with the notification buffer full during startup, readLoop
+// is blocked, so a kill alone never fails the pending turn/start. The kill
+// path must shut the client down too.
+func TestCodexInterruptDuringTurnStartWithFullBuffer(t *testing.T) {
+	testCodexInterruptDuringTurnStart(t, true)
+}
+
+func testCodexInterruptDuringTurnStart(t *testing.T, flood bool) {
+	if flood {
+		t.Setenv("EYRIE_FAKE_CODEX_FLOOD", "1")
+	}
 	shortInterruptTimers(t)
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "hang.pid")
@@ -468,5 +494,120 @@ func TestCodexReadLoopUnblocksWhenNobodyReads(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("pending request not released after readLoop exit")
+	}
+}
+
+// forkerScript builds a detached tree slowly enough that a teardown can
+// land mid-growth: the root starts children one at a time; each child calls
+// setsid (leaving the group), records its pid, and starts one detached
+// grandchild after a short delay. Hard caps: 40 children, each with one
+// grandchild, so at most 81 processes, and every process exits on its own
+// after 60 s even if the test fails to kill it.
+const forkerScript = `/usr/bin/python3 - "$1" <<'PY'
+import os, sys, time, signal
+log = sys.argv[1]
+signal.alarm(60)
+def note():
+    with open(log, "a") as f:
+        f.write(str(os.getpid()) + chr(10))
+def child(depth):
+    os.setsid()
+    signal.alarm(60)
+    note()
+    if depth == 0:
+        time.sleep(0.01)
+        if os.fork() == 0:
+            child(1)
+    time.sleep(60)
+    os._exit(0)
+for _ in range(40):
+    if os.fork() == 0:
+        child(0)
+    time.sleep(0.005)
+time.sleep(60)
+PY`
+
+// Review r5 P1: descendants found by a later scan must be stopped too, and
+// pids found earlier must still be killed after they're reparented.
+func TestKillCodexGroupFreezesAForkingTree(t *testing.T) {
+	for round := 0; round < 3; round++ {
+		pids := filepath.Join(t.TempDir(), "pids")
+		cmd := exec.Command("/bin/sh", "-c", forkerScript, "sh", pids)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		// Kill mid-growth: once some children exist, while more are coming.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			raw, _ := os.ReadFile(pids)
+			if n := len(strings.Fields(string(raw))); n >= 10 || time.Now().After(deadline) {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		if err := killCodexGroup(cmd); err != nil {
+			t.Fatal(err)
+		}
+		_ = cmd.Wait()
+		time.Sleep(200 * time.Millisecond) // anything that escaped would have recorded itself by now
+		raw, _ := os.ReadFile(pids)
+		var alive []string
+		total := 0
+		for _, f := range strings.Fields(string(raw)) {
+			pid, err := strconv.Atoi(f)
+			if err != nil {
+				continue
+			}
+			total++
+			if syscall.Kill(pid, 0) == nil {
+				alive = append(alive, f)
+				_ = syscall.Kill(pid, syscall.SIGKILL)
+			}
+		}
+		if total == 0 {
+			t.Fatalf("the forker recorded no children; the test proves nothing (pids file %d bytes)", len(raw))
+		}
+		if len(alive) > 0 {
+			t.Fatalf("round %d: %d of %d detached children survived: %v", round, len(alive), total, alive)
+		}
+	}
+}
+
+// Review r5 P1: Interrupt's timeout must not be held by a write the server
+// never reads. A pipe nobody drains blocks Write; request() must still
+// return when its context ends.
+func TestRequestReturnsOnContextEvenIfWriteBlocks(t *testing.T) {
+	_, inW := io.Pipe() // nobody reads: every Write blocks
+	outR, outW := io.Pipe()
+	defer outW.Close()
+	defer inW.Close()
+	c := newCodexRPCClient(inW, outR)
+	go c.readLoop()
+	defer c.shutdown()
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() { _, err := c.request(ctx, "turn/interrupt", map[string]any{}); done <- err }()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("request succeeded with a stuck pipe")
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Fatalf("request took %v to honour a 200ms context", d)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("request stayed blocked in Write past its context")
+	}
+	// A second caller isn't blocked behind the stuck one either.
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel2()
+	go func() { _, err := c.request(ctx2, "turn/interrupt", map[string]any{}); done <- err }()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("second request blocked behind the stuck writer")
 	}
 }
