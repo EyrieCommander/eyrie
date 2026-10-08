@@ -106,9 +106,13 @@ type Handle interface {
 	Events() <-chan Event
 	// Respond answers a native approval prompt with one of its options.
 	Respond(ctx context.Context, promptID, optionID string) error
-	// Cancel asks the runtime to stop. Wait reports whether it did.
+	// Cancel asks the runtime to stop. It must respect ctx; Run bounds it.
+	// Wait reports whether the runtime actually stopped.
 	Cancel(ctx context.Context) error
-	// Wait blocks until the attempt ends or ctx is done.
+	// Wait blocks until the attempt ends or ctx is done. After a cancel,
+	// exit counts as confirmed only if Wait returns nil or an error
+	// wrapping ErrCancelled; any other error means the runtime's state is
+	// unknown (e.g. the transport failed and work may continue).
 	Wait(ctx context.Context) (Result, error)
 }
 
@@ -147,7 +151,9 @@ func (p *NativePrompt) Offers(optionID string) bool {
 }
 
 // Result is what the harness reports at the end. Run turns it into a
-// receipt; it is a claim, not the outcome.
+// receipt; it is a claim, not the outcome. Summary and Err are runtime
+// text and may echo the prompt or secrets, so they are never copied into
+// receipts; only the caller sees them.
 type Result struct {
 	Success bool
 	Summary string
@@ -179,6 +185,9 @@ var (
 	ErrStartAmbiguous   = errors.New("start outcome unknown")
 	ErrDuplicateAttempt = errors.New("attempt already recorded")
 	ErrOptionNotOffered = errors.New("approval option not offered by the runtime")
+	// ErrCancelled is what Wait wraps when the runtime confirmed it stopped
+	// because of Cancel.
+	ErrCancelled = errors.New("attempt cancelled; runtime confirmed exit")
 )
 
 // Validate checks a request is complete. It does not consult any adapter.

@@ -94,6 +94,10 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	// cancellation is handled below as an explicit cancel.
 	runCtx, cancelRun := context.WithTimeout(context.WithoutCancel(ctx), req.Limits.Timeout)
 	defer cancelRun()
+	grace := req.Limits.CancelGrace
+	if grace <= 0 {
+		grace = DefaultCancelGrace
+	}
 
 	h, err := a.Start(runCtx, req)
 	if err != nil {
@@ -101,26 +105,44 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 		if errors.Is(err, ErrStartAmbiguous) {
 			state = StateUnknown // may be running; reconcile before retry
 		}
-		return finish(ctx, rec, base, state, "start: "+err.Error())
+		return finish(ctx, rec, base, state, "start failed: "+errorClass(err))
 	}
+
+	// Background workers (event pump, Wait) get a cleanup context that
+	// ends when Run returns, so nothing outlives the call even if the
+	// runtime never confirms exit. approvalsCtx ends earlier: the moment
+	// cancellation begins, no approver decision can reach the runtime.
+	workCtx, stopWork := context.WithCancel(context.WithoutCancel(ctx))
+	defer stopWork()
+	approvalsCtx, stopApprovals := context.WithCancel(runCtx)
+	defer stopApprovals()
+
 	base.NativeSession = h.NativeSession()
 	if err := record(ctx, rec, base, StateStarted, ""); err != nil {
-		// Launched but unrecorded: stop it and report unknown.
-		_ = h.Cancel(context.WithoutCancel(ctx))
+		// Launched but unrecorded: stop it (bounded) and report unknown.
+		stopApprovals()
+		boundedCancel(ctx, h, grace)
 		return unknown(base, fmt.Errorf("record started: %w", err))
 	}
 
-	// Answer native prompts through the approver as they arrive.
 	promptFail := make(chan error, 1)
 	go func() {
-		for ev := range h.Events() {
-			if ev.Kind != EventApproval || ev.Approval == nil {
-				continue
-			}
-			if err := answer(runCtx, h, appr, req, *ev.Approval); err != nil {
-				select {
-				case promptFail <- err:
-				default:
+		for {
+			select {
+			case <-workCtx.Done():
+				return
+			case ev, ok := <-h.Events():
+				if !ok {
+					return
+				}
+				if ev.Kind != EventApproval || ev.Approval == nil {
+					continue
+				}
+				if err := answer(approvalsCtx, h, appr, req, *ev.Approval); err != nil {
+					select {
+					case promptFail <- err:
+					default:
+					}
 				}
 			}
 		}
@@ -132,7 +154,7 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	}
 	done := make(chan waited, 1)
 	go func() {
-		r, err := h.Wait(context.WithoutCancel(ctx))
+		r, err := h.Wait(workCtx)
 		done <- waited{r, err}
 	}()
 
@@ -147,28 +169,65 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	case err := <-promptFail:
 		why = "approval: " + err.Error()
 	}
+	stopApprovals()
 
-	// Cancel shows "requested" until the runtime confirms exit.
+	// Cancel shows "requested" until the runtime confirms exit. The whole
+	// cancel (request plus confirmation) is bounded by grace.
 	if err := record(ctx, rec, base, StateCancelRequested, why); err != nil {
-		_ = h.Cancel(context.WithoutCancel(ctx))
+		boundedCancel(ctx, h, grace)
 		return unknown(base, fmt.Errorf("record cancel_requested: %w", err))
 	}
-	cerr := h.Cancel(context.WithoutCancel(ctx))
-	grace := req.Limits.CancelGrace
-	if grace <= 0 {
-		grace = DefaultCancelGrace
+	deadline := time.NewTimer(grace)
+	defer deadline.Stop()
+	cancelCtx, cancelCancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
+	defer cancelCancel()
+	cancelErr := make(chan error, 1)
+	go func() { cancelErr <- h.Cancel(cancelCtx) }()
+
+	select {
+	case w := <-done:
+		// Exit is confirmed only by a clean Wait or ErrCancelled. Any other
+		// error (transport failure) leaves the runtime's state unknown.
+		if w.err == nil || errors.Is(w.err, ErrCancelled) {
+			return finish(ctx, rec, base, StateCancelled, why)
+		}
+		return finish(ctx, rec, base, StateUnknown, why+"; exit not confirmed: wait failed: "+errorClass(w.err))
+	case <-deadline.C:
+		reason := why + "; exit not confirmed within " + grace.String()
+		select {
+		case err := <-cancelErr:
+			if err != nil {
+				reason += "; cancel failed: " + errorClass(err)
+			}
+		default:
+			reason += "; cancel request did not return"
+		}
+		return finish(ctx, rec, base, StateUnknown, reason)
 	}
-	timer := time.NewTimer(grace)
-	defer timer.Stop()
+}
+
+// boundedCancel asks the runtime to stop without waiting longer than grace.
+func boundedCancel(ctx context.Context, h Handle, grace time.Duration) {
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grace)
+	defer cancel()
+	done := make(chan struct{})
+	go func() { _ = h.Cancel(cctx); close(done) }()
 	select {
 	case <-done:
-		if cerr != nil {
-			why += "; cancel error: " + cerr.Error()
-		}
-		return finish(ctx, rec, base, StateCancelled, why)
-	case <-timer.C:
-		return finish(ctx, rec, base, StateUnknown, why+"; exit not confirmed within "+grace.String())
+	case <-cctx.Done():
 	}
+}
+
+// errorClass reduces an error to a safe diagnostic for receipts: contract
+// sentinels and context errors by name, anything else as "runtime error".
+// Runtime error text can echo prompts or credentials, so it isn't stored.
+func errorClass(err error) string {
+	for _, known := range []error{ErrStartAmbiguous, ErrCancelled, ErrOptionNotOffered, context.DeadlineExceeded, context.Canceled} {
+		if errors.Is(err, known) {
+			return known.Error()
+		}
+	}
+	return "runtime error (detail withheld from receipt)"
 }
 
 // answer forwards an approver decision verbatim, only if the runtime
@@ -179,10 +238,15 @@ func answer(ctx context.Context, h Handle, appr Approver, req Request, p NativeP
 	}
 	opt, err := appr.Decide(ctx, req, p)
 	if err != nil {
-		return fmt.Errorf("prompt %q: %w", p.ID, err)
+		return fmt.Errorf("prompt %q: approver: %w", p.ID, err)
 	}
 	if !p.Offers(opt) {
 		return fmt.Errorf("prompt %q: %w: %q", p.ID, ErrOptionNotOffered, opt)
+	}
+	// Cancellation may have begun while the approver was deciding; a late
+	// decision must not reach the runtime.
+	if ctx.Err() != nil {
+		return fmt.Errorf("prompt %q: decision arrived after cancellation; not sent", p.ID)
 	}
 	return h.Respond(ctx, p.ID, opt)
 }
@@ -193,20 +257,17 @@ func finishResult(ctx context.Context, rec Recorder, base Receipt, req Request, 
 	if base.Usage == nil {
 		base.Usage = &Usage{Kind: UsageUnknown}
 	}
+	// Runtime Summary/Err text is not stored (see Result).
 	switch {
 	case werr != nil:
-		return finish(ctx, rec, base, StateUnknown, "wait: "+werr.Error())
+		return finish(ctx, rec, base, StateUnknown, "wait failed: "+errorClass(werr))
 	case res.Model != "" && res.Model != req.Model:
 		// Work by a model nobody selected doesn't count as success.
 		return finish(ctx, rec, base, StateFailed, fmt.Sprintf("model mismatch: requested %q, runtime used %q", req.Model, res.Model))
 	case res.Success:
-		return finish(ctx, rec, base, StateSucceeded, res.Summary)
+		return finish(ctx, rec, base, StateSucceeded, "runtime reported success")
 	default:
-		reason := res.Err
-		if reason == "" {
-			reason = res.Summary
-		}
-		return finish(ctx, rec, base, StateFailed, reason)
+		return finish(ctx, rec, base, StateFailed, "runtime reported failure")
 	}
 }
 

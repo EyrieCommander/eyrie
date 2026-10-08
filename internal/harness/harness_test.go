@@ -3,6 +3,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -84,7 +85,7 @@ func TestLifecycle(t *testing.T) {
 			script:     FakeScript{Result: Result{Success: false, Err: "tests failed"}},
 			wantStarts: 1,
 			wantStates: []State{StateDispatching, StateStarted, StateFailed},
-			wantReason: "tests failed",
+			wantReason: "runtime reported failure",
 		},
 		{
 			name:       "runtime used another model: failed, not success",
@@ -402,5 +403,196 @@ func TestUnlistedModelsPassThrough(t *testing.T) {
 	c.Models = nil
 	if err := Check("fake", c, goodRequest("a1")); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Review 72495816 #1: after a cancel, a Wait error other than ErrCancelled
+// (e.g. transport failure) doesn't confirm exit: unknown, not cancelled.
+func TestCancelWithWaitErrorIsUnknown(t *testing.T) {
+	rec := &MemoryRecorder{}
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true, WaitErr: errors.New("broken pipe")}}
+	req := goodRequest("a1")
+	req.Limits.Timeout = 30 * time.Millisecond
+	r, err := Run(context.Background(), f, rec, nil, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.State != StateUnknown || !strings.Contains(r.Reason, "wait failed") {
+		t.Fatalf("state = %v reason = %q, want unknown/wait failed", r.State, r.Reason)
+	}
+}
+
+// runWithin runs Run but fails the test (instead of hanging it) if Run
+// doesn't return within d.
+func runWithin(t *testing.T, d time.Duration, f *Fake, rec *MemoryRecorder, req Request) (Receipt, error) {
+	t.Helper()
+	type out struct {
+		r   Receipt
+		err error
+	}
+	ch := make(chan out, 1)
+	go func() { r, err := Run(context.Background(), f, rec, nil, req); ch <- out{r, err} }()
+	select {
+	case o := <-ch:
+		return o.r, o.err
+	case <-time.After(d):
+		t.Fatalf("Run did not return within %v (stalled cancel not bounded)", d)
+		return Receipt{}, nil
+	}
+}
+
+// Review #2: a stalled cancellation RPC can't hang Run; the whole cancel
+// is bounded by CancelGrace, here and in receipt-failure cleanup.
+func TestStalledCancelIsBounded(t *testing.T) {
+	t.Run("after timeout", func(t *testing.T) {
+		rec := &MemoryRecorder{}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true, IgnoreCancel: true, CancelBlocks: true}}
+		t.Cleanup(f.Finish)
+		req := goodRequest("a1")
+		req.Limits.Timeout = 30 * time.Millisecond
+		start := time.Now()
+		r, err := runWithin(t, 3*time.Second, f, rec, req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("Run took %v with a 200ms grace", el)
+		}
+		if r.State != StateUnknown || !strings.Contains(r.Reason, "cancel") {
+			t.Fatalf("state = %v reason = %q", r.State, r.Reason)
+		}
+	})
+	t.Run("started receipt fails", func(t *testing.T) {
+		rec := &MemoryRecorder{Fail: func(r Receipt) error {
+			if r.State == StateStarted {
+				return errors.New("disk full")
+			}
+			return nil
+		}}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true, IgnoreCancel: true, CancelBlocks: true}}
+		t.Cleanup(f.Finish)
+		start := time.Now()
+		r, err := runWithin(t, 3*time.Second, f, rec, goodRequest("a1"))
+		if err == nil || r.State != StateUnknown {
+			t.Fatalf("state = %v err = %v", r.State, err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("cleanup cancel took %v", el)
+		}
+	})
+	t.Run("cancel_requested receipt fails", func(t *testing.T) {
+		rec := &MemoryRecorder{Fail: func(r Receipt) error {
+			if r.State == StateCancelRequested {
+				return errors.New("disk full")
+			}
+			return nil
+		}}
+		f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true, IgnoreCancel: true, CancelBlocks: true}}
+		t.Cleanup(f.Finish)
+		req := goodRequest("a1")
+		req.Limits.Timeout = 30 * time.Millisecond
+		start := time.Now()
+		if r, err := runWithin(t, 3*time.Second, f, rec, req); err == nil || r.State != StateUnknown {
+			t.Fatalf("state = %v err = %v", r.State, err)
+		}
+		if el := time.Since(start); el > 2*time.Second {
+			t.Fatalf("cleanup cancel took %v", el)
+		}
+	})
+}
+
+// slowApprover ignores ctx, then approves; done closes when it returns.
+type slowApprover struct {
+	delay time.Duration
+	done  chan struct{}
+}
+
+func (a *slowApprover) Decide(context.Context, Request, NativePrompt) (string, error) {
+	defer close(a.done)
+	time.Sleep(a.delay)
+	return "accept", nil
+}
+
+// Review #3: once cancellation begins, a pending approver decision can't
+// reach the runtime, even if the approver ignores its context.
+func TestLateApprovalAfterCancelIsNotSent(t *testing.T) {
+	rec := &MemoryRecorder{}
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, IgnoreCancel: true, KeepEventsOpen: true}}
+	t.Cleanup(f.Finish)
+	appr := &slowApprover{delay: 300 * time.Millisecond, done: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	time.AfterFunc(30*time.Millisecond, cancel)
+	req := goodRequest("a1")
+	req.Limits.CancelGrace = time.Second // still cancelling when the approver returns
+	r, _ := Run(ctx, f, rec, appr, req)
+	<-appr.done
+	time.Sleep(50 * time.Millisecond) // let a (wrong) Respond land
+	if got := f.Responses(); len(got) != 0 {
+		t.Fatalf("decision sent after cancellation began: %v", got)
+	}
+	if r.State != StateUnknown {
+		t.Fatalf("state = %v, want unknown (runtime ignored cancel)", r.State)
+	}
+}
+
+// Review #4: runtime text (summaries, errors) never reaches receipts; it
+// may echo the prompt or a credential.
+func TestRuntimeTextNotInReceipts(t *testing.T) {
+	const secret = "sk-live-SECRET-123"
+	leak := "echo: do the thing " + secret
+	scripts := map[string]FakeScript{
+		"success summary": {Result: Result{Success: true, Summary: leak}},
+		"failure err":     {Result: Result{Success: false, Err: leak, Summary: leak}},
+		"start error":     {StartErr: errors.New(leak)},
+		"ambiguous start": {StartErr: errors.Join(ErrStartAmbiguous, errors.New(leak))},
+		"wait error":      {WaitErr: errors.New(leak)},
+		"cancel + wait":   {Hang: true, WaitErr: errors.New(leak)},
+		"cancel error":    {Hang: true, IgnoreCancel: true, CancelErr: errors.New(leak)},
+	}
+	for name, sc := range scripts {
+		t.Run(name, func(t *testing.T) {
+			rec := &MemoryRecorder{}
+			f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: sc}
+			t.Cleanup(f.Finish)
+			req := goodRequest("a1")
+			req.Limits.Timeout = 30 * time.Millisecond
+			r, _ := Run(context.Background(), f, rec, nil, req)
+			for _, x := range append(rec.Receipts(), r) {
+				if strings.Contains(x.Reason, secret) || strings.Contains(x.Reason, req.Prompt) {
+					t.Fatalf("receipt leaks runtime text: %q", x.Reason)
+				}
+			}
+		})
+	}
+}
+
+// Review #5: Run's background workers (Wait, event pump) don't outlive it,
+// even when the runtime never confirms exit and keeps events open.
+func TestNoWorkerLeakAfterUnconfirmedCancel(t *testing.T) {
+	settle := func(max int) int {
+		deadline := time.Now().Add(2 * time.Second)
+		n := runtime.NumGoroutine()
+		for n > max && time.Now().Before(deadline) {
+			time.Sleep(10 * time.Millisecond)
+			n = runtime.NumGoroutine()
+		}
+		return n
+	}
+	before := settle(runtime.NumGoroutine())
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Hang: true, IgnoreCancel: true, KeepEventsOpen: true}}
+	req := goodRequest("a1")
+	req.Limits.Timeout = 30 * time.Millisecond
+	r, err := Run(context.Background(), f, &MemoryRecorder{}, nil, req)
+	if err != nil || r.State != StateUnknown {
+		t.Fatalf("state = %v err = %v", r.State, err)
+	}
+	// The fake's own runner is still blocked (it ignored cancel): +1.
+	if n := settle(before + 1); n > before+1 {
+		buf := make([]byte, 1<<16)
+		t.Fatalf("goroutines %d -> %d after Run returned; leaked workers:\n%s", before, n, buf[:runtime.Stack(buf, true)])
+	}
+	f.Finish()
+	if n := settle(before); n > before {
+		t.Fatalf("goroutines %d -> %d after the fake finished", before, n)
 	}
 }

@@ -2,7 +2,6 @@ package harness
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 )
@@ -30,6 +29,11 @@ type FakeScript struct {
 	// IgnoreCancel makes Cancel return without ending the attempt.
 	IgnoreCancel bool
 	CancelErr    error
+	// CancelBlocks makes Cancel block until its ctx is done (a stalled
+	// cancellation RPC).
+	CancelBlocks bool
+	// KeepEventsOpen keeps the event stream open until the attempt ends.
+	KeepEventsOpen bool
 }
 
 func (f *Fake) Name() string { return f.NameValue }
@@ -105,6 +109,18 @@ func (h *fakeHandle) run() {
 	if !h.script.Hang {
 		h.end()
 	}
+	if h.script.KeepEventsOpen {
+		<-h.ended
+	}
+}
+
+// Finish ends the last attempt regardless of script (test cleanup).
+func (f *Fake) Finish() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.last != nil {
+		f.last.end()
+	}
 }
 
 func (h *fakeHandle) end() { h.endOnce.Do(func() { close(h.ended) }) }
@@ -120,8 +136,12 @@ func (h *fakeHandle) Respond(_ context.Context, promptID, optionID string) error
 	return nil
 }
 
-func (h *fakeHandle) Cancel(context.Context) error {
+func (h *fakeHandle) Cancel(ctx context.Context) error {
 	h.cancelled.Store(true)
+	if h.script.CancelBlocks {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if !h.script.IgnoreCancel {
 		h.end()
 	}
@@ -134,8 +154,11 @@ func (h *fakeHandle) Wait(ctx context.Context) (Result, error) {
 	case <-ctx.Done():
 		return Result{}, ctx.Err()
 	}
-	if h.cancelled.Load() {
-		return Result{}, errors.New("cancelled")
+	if h.script.WaitErr != nil {
+		return Result{}, h.script.WaitErr
 	}
-	return h.script.Result, h.script.WaitErr
+	if h.cancelled.Load() {
+		return Result{}, ErrCancelled
+	}
+	return h.script.Result, nil
 }
