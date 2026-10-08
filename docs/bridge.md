@@ -29,7 +29,17 @@ TLS ends at Funnel or the tunnel. Expose **only** the bridge port. Never the das
 - **Tailscale Funnel (recommended):** `tailscale funnel --bg 7201`. Then set `client_ip_header = "X-Forwarded-For"` so rate limits and the access log see the real client.
 - **cloudflared:** a tunnel whose ingress targets `http://127.0.0.1:7201` only. Set `client_ip_header = "Cf-Connecting-Ip"`.
 
-Check after setup: `curl -s -o /dev/null -w '%{http_code}' https://<public-url>/api/agents` must print `404`, and the dashboard port must not answer on the tailnet or tunnel address.
+Check after setup (the bridge answers 401 before routing, so the isolation check must carry the token; put it in an env var rather than on the command line):
+
+```sh
+read -rs BRIDGE_TOKEN; export BRIDGE_TOKEN
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $BRIDGE_TOKEN" https://<public-url>/api/agents          # must print 404
+curl -s -o /dev/null -w '%{http_code}\n' -H "Authorization: Bearer $BRIDGE_TOKEN" https://<public-url>/bridge/v1/fs/roots   # 200 (or 404 if no roots)
+curl -s -o /dev/null -w '%{http_code}\n' https://<public-url>/bridge/v1/fs/roots                                           # 401 without the token
+unset BRIDGE_TOKEN
+```
+
+The dashboard port (7200) must not answer on the tailnet or tunnel address at all: `curl -m 3 http://<tailnet-ip>:7200/api/agents` should fail to connect.
 
 ## Token rotation
 
