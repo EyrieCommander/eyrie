@@ -589,3 +589,84 @@ func TestStaleTokenRejectedAfterReclaimerAcks(t *testing.T) {
 		t.Fatalf("retry of the delivering ack: %+v %v", m, err)
 	}
 }
+
+func TestOpenRefusesGroupWritableAncestor(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "shared")
+	if err := os.MkdirAll(filepath.Join(parent, "mine"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o770); err != nil { // group-writable, not sticky
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	_, err := Open(filepath.Join(parent, "mine", "x.db"), Options{})
+	if !errors.Is(err, ErrInsecurePath) {
+		t.Fatalf("open under a group-writable ancestor: %v, want ErrInsecurePath", err)
+	}
+	if _, serr := os.Stat(filepath.Join(parent, "mine", "x.db")); serr == nil {
+		t.Fatal("database file created before the ancestry check refused")
+	}
+}
+
+func TestOpenAllowsStickyWritableAncestor(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "tmpish")
+	if err := os.MkdirAll(filepath.Join(parent, "mine"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(parent, 0o777|os.ModeSticky); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+	s, err := Open(filepath.Join(parent, "mine", "x.db"), Options{})
+	if err != nil {
+		t.Fatalf("sticky world-writable ancestor (like /tmp) refused: %v", err)
+	}
+	_ = s.Close()
+}
+
+func TestOpenDanglingSymlinkCreatesNothing(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "mb")
+	_ = os.MkdirAll(dir, 0o700)
+	target := filepath.Join(t.TempDir(), "outside", "planted.db")
+	_ = os.MkdirAll(filepath.Dir(target), 0o700)
+	if err := os.Symlink(target, filepath.Join(dir, "x.db")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Open(filepath.Join(dir, "x.db"), Options{}); err == nil {
+		t.Fatal("opened through a dangling symlink")
+	}
+	if _, err := os.Lstat(target); err == nil {
+		t.Fatal("Open created the symlink's target outside the mailbox directory")
+	}
+}
+
+func TestReleaseRacingReclaimInTheWindowIsRejected(t *testing.T) {
+	// Store a's Release has read a valid lease; before its write, store b
+	// reclaims the (expired) message. a's conditional write must not
+	// overwrite b's lease.
+	c := &clock{t: time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)}
+	path := filepath.Join(t.TempDir(), "mailbox.db")
+	a, _ := Open(path, Options{MaxAttempts: 5, Backoff: fixedBackoff, Now: c.now})
+	defer a.Close()
+	b, _ := Open(path, Options{MaxAttempts: 5, Backoff: fixedBackoff, Now: c.now})
+	defer b.Close()
+	mustEnqueue(t, a, "m1", "codex", "x")
+	old, _ := a.Claim(ctx, "codex", "w1", time.Minute)
+	var cur Message
+	var claimErr error
+	testHookReleaseBetweenReadAndWrite = func() {
+		testHookReleaseBetweenReadAndWrite = nil
+		c.advance(time.Minute)
+		cur, claimErr = b.Claim(ctx, "codex", "w2", time.Minute)
+	}
+	defer func() { testHookReleaseBetweenReadAndWrite = nil }()
+	if _, err := a.Release(ctx, "m1", old.LeaseToken, "late"); !errors.Is(err, ErrNotLeaseHolder) {
+		t.Fatalf("release after an in-window reclaim: %v, want ErrNotLeaseHolder", err)
+	}
+	if claimErr != nil {
+		t.Fatal(claimErr)
+	}
+	if m, _ := b.Get(ctx, "m1"); m.State != Leased || m.LeaseToken != cur.LeaseToken {
+		t.Fatalf("b's lease overwritten: %+v", m)
+	}
+}

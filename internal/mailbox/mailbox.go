@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -145,24 +146,43 @@ func Open(path string, opts Options) (*Store, error) {
 	return &Store{db: db, opts: opts}, nil
 }
 
+// securePaths checks that path (already resolved by resolvePath, so it has
+// no symlinks or "..") can't be redirected by anyone else, then creates the
+// database file without following a symlink.
+//
+// The directory and every ancestor up to / must be owned by root or the
+// current user, and must not be group- or world-writable unless it has the
+// sticky bit (like /tmp), where others can't rename or delete entries they
+// don't own. That is the same rule ssh applies to ~/.ssh. Without it, a
+// 0700 directory under a group-writable parent could be swapped out between
+// this check and SQLite's open.
 func securePaths(path string) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("mailbox: %w", err)
+	if err := checkAncestry(dir); err != nil {
+		return err
 	}
-	di, err := os.Stat(dir)
+	// O_NOFOLLOW: a symlink (dangling or not) at the db path is refused
+	// without creating anything at its target.
+	fd, err := syscall.Open(path, syscall.O_RDWR|syscall.O_CREAT|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0o600)
 	if err != nil {
-		return fmt.Errorf("mailbox: %w", err)
+		if errors.Is(err, syscall.ELOOP) {
+			return fmt.Errorf("mailbox: %s is a symlink", path)
+		}
+		return fmt.Errorf("mailbox: %s: %w", path, err)
 	}
-	if di.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("%w: %s (%v)", ErrInsecurePath, dir, di.Mode().Perm())
+	var st syscall.Stat_t
+	ferr := syscall.Fstat(fd, &st)
+	if ferr == nil && st.Mode&syscall.S_IFMT != syscall.S_IFREG {
+		ferr = fmt.Errorf("%s is not a regular file", path)
 	}
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
-	if err != nil {
-		return fmt.Errorf("mailbox: %w", err)
+	if ferr == nil && st.Mode&0o777 != 0o600 {
+		ferr = syscall.Fchmod(fd, 0o600)
 	}
-	_ = f.Close()
-	for _, p := range []string{path, path + "-wal", path + "-shm"} {
+	_ = syscall.Close(fd)
+	if ferr != nil {
+		return fmt.Errorf("mailbox: %w", ferr)
+	}
+	for _, p := range []string{path + "-wal", path + "-shm"} {
 		fi, err := os.Lstat(p)
 		if os.IsNotExist(err) {
 			continue
@@ -180,6 +200,48 @@ func securePaths(path string) error {
 		}
 	}
 	return nil
+}
+
+// checkAncestry walks from dir up to / (dir is absolute and symlink-free).
+// dir itself must be owned by the current user and 0700-or-tighter on
+// group/other write; each ancestor must be owned by root or the current user
+// and either not group/world-writable or sticky.
+func checkAncestry(dir string) error {
+	uid := uint32(os.Getuid())
+	for cur, first := dir, true; ; first = false {
+		fi, err := os.Lstat(cur)
+		if err != nil {
+			return fmt.Errorf("mailbox: %w", err)
+		}
+		st, ok := fi.Sys().(*syscall.Stat_t)
+		if !ok {
+			return fmt.Errorf("mailbox: cannot read owner of %s", cur)
+		}
+		mode := fi.Mode()
+		if mode&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s is a symlink", ErrInsecurePath, cur)
+		}
+		if first {
+			if st.Uid != uid {
+				return fmt.Errorf("%w: %s is owned by uid %d, not %d", ErrInsecurePath, cur, st.Uid, uid)
+			}
+			if mode.Perm()&0o022 != 0 {
+				return fmt.Errorf("%w: %s (%v)", ErrInsecurePath, cur, mode.Perm())
+			}
+		} else {
+			if st.Uid != uid && st.Uid != 0 {
+				return fmt.Errorf("%w: ancestor %s is owned by uid %d", ErrInsecurePath, cur, st.Uid)
+			}
+			if mode.Perm()&0o022 != 0 && mode&os.ModeSticky == 0 {
+				return fmt.Errorf("%w: ancestor %s is group/world-writable and not sticky (%v)", ErrInsecurePath, cur, mode.Perm())
+			}
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return nil
+		}
+		cur = parent
+	}
 }
 
 // sqliteDSN builds a file: URI SQLite opens at exactly path. SQLite
@@ -459,6 +521,9 @@ func (s *Store) Release(ctx context.Context, id, token, reason string) (Message,
 	if m.State != Leased || token == "" || m.LeaseToken != token {
 		return Message{}, ErrNotLeaseHolder
 	}
+	if testHookReleaseBetweenReadAndWrite != nil {
+		testHookReleaseBetweenReadAndWrite()
+	}
 	now := s.opts.Now().UTC()
 	var res sql.Result
 	// Conditional on the token, so a reclaim between the read and this write
@@ -480,6 +545,10 @@ func (s *Store) Release(ctx context.Context, id, token, reason string) (Message,
 	}
 	return s.get(ctx, s.db, id)
 }
+
+// testHookReleaseBetweenReadAndWrite runs between Release's read and its
+// conditional write; tests use it to force a reclaim in that window.
+var testHookReleaseBetweenReadAndWrite func()
 
 // Get returns one message.
 func (s *Store) Get(ctx context.Context, id string) (Message, error) {
