@@ -38,38 +38,48 @@ func (s *Server) AttachChief(svc *bridge.Service) {
 }
 
 func (s *Server) registerChiefRoutes() {
-	s.mux.HandleFunc("GET /api/chief/status", s.handleChiefStatus)
-	s.mux.HandleFunc("GET /api/chief/messages", s.handleChiefMessages)
-	s.mux.HandleFunc("POST /api/chief/messages", sameOriginJSON(s.handleChiefSend))
-	s.mux.HandleFunc("POST /api/chief/messages/{id}/retry", sameOriginJSON(s.handleChiefRetry))
-	s.mux.HandleFunc("GET /api/chief/events", s.handleChiefEvents)
+	// Every Chief route checks the Host (reads expose the transcript, so
+	// DNS rebinding must not reach them either); mutations also require a
+	// same-origin JSON request.
+	s.mux.HandleFunc("GET /api/chief/status", loopbackOnly(s.handleChiefStatus))
+	s.mux.HandleFunc("GET /api/chief/messages", loopbackOnly(s.handleChiefMessages))
+	s.mux.HandleFunc("POST /api/chief/messages", loopbackOnly(sameOriginJSON(s.handleChiefSend)))
+	s.mux.HandleFunc("POST /api/chief/messages/{id}/retry", loopbackOnly(sameOriginJSON(s.handleChiefRetry)))
+	s.mux.HandleFunc("GET /api/chief/events", loopbackOnly(s.handleChiefEvents))
 }
 
-// sameOriginJSON guards Chief mutations against cross-site requests. A
-// prompt POST wakes the chief, so a page on another origin must not be able
-// to send one through Dan's browser. Rules:
-//   - Host must be a loopback name (blocks DNS rebinding, where an attacker's
-//     domain resolves to 127.0.0.1 and Origin matches Host).
-//   - If Origin is present it must equal the request's own scheme://Host.
-//     The production UI is same-origin; the Vite dev proxy forwards the dev
-//     server's Host and Origin unchanged, so they match too. Browsers always
-//     send Origin on POST; only non-browser clients (curl) omit it, and those
-//     must also not send Sec-Fetch-Site.
-//   - Content-Type must be application/json, so a cross-origin request can't
-//     be a CORS "simple request" (text/plain form posts are refused).
-func sameOriginJSON(next http.HandlerFunc) http.HandlerFunc {
+// loopbackOnly refuses requests whose Host is not a loopback name. A page
+// on an attacker's domain that rebinds DNS to 127.0.0.1 is same-origin with
+// itself, so Origin checks alone can't stop it; its Host header can.
+func loopbackOnly(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if !loopbackHost(r.Host) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "forbidden host"})
 			return
 		}
-		origin := r.Header.Get("Origin")
-		if origin != "" {
-			if origin != "http://"+r.Host && origin != "https://"+r.Host {
-				writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
-				return
-			}
-		} else if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+		next(w, r)
+	}
+}
+
+// sameOriginJSON guards Chief mutations against cross-site requests. A
+// prompt POST wakes the chief, so a page on another origin must not be able
+// to send one through Dan's browser. Each check stands on its own:
+//   - Sec-Fetch-Site, when sent, must be same-origin or none.
+//   - Origin, when sent, must equal this request's own origin: the scheme
+//     it actually arrived on (the dashboard serves plain HTTP on loopback)
+//     plus its Host. The Vite dev proxy forwards Host and Origin unchanged.
+//   - Content-Type must be application/json, so a cross-origin request
+//     can't be a CORS "simple request".
+//
+// Browsers always send Origin on POST; only non-browser clients (curl)
+// omit both headers.
+func sameOriginJSON(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if site := r.Header.Get("Sec-Fetch-Site"); site != "" && site != "same-origin" && site != "none" {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
+			return
+		}
+		if origin := r.Header.Get("Origin"); origin != "" && origin != requestOrigin(r) {
 			writeJSON(w, http.StatusForbidden, map[string]string{"error": "cross-origin request refused"})
 			return
 		}
@@ -80,6 +90,17 @@ func sameOriginJSON(next http.HandlerFunc) http.HandlerFunc {
 		}
 		next(w, r)
 	}
+}
+
+// requestOrigin is scheme://Host for the connection this request came in
+// on. X-Forwarded-Proto is deliberately ignored: the dashboard is not
+// meant to sit behind a proxy, and a client could set it.
+func requestOrigin(r *http.Request) string {
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return scheme + "://" + r.Host
 }
 
 // loopbackHost reports whether a Host header names this machine's loopback.

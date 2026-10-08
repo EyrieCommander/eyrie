@@ -73,7 +73,7 @@ Any other path is 404; a wrong method on a bridge route is 405.
 
 ## Management side (loopback)
 
-The Chief tab talks to `/api/chief/*` on the dashboard (management API), never to the bridge. `POST /api/chief/messages` and `.../retry` refuse cross-site requests: the `Host` must be a loopback name (blocks DNS rebinding), an `Origin` header must equal the request's own `scheme://Host`, a `Sec-Fetch-Site` other than `same-origin`/`none` is refused, and the body must be `Content-Type: application/json` (so a cross-site form or `text/plain` post can't wake the chief).
+The Chief tab talks to `/api/chief/*` on the dashboard (management API), never to the bridge. Every Chief route, reads included, requires a loopback `Host` (so a DNS-rebinding page can't read the transcript or send prompts). The POSTs (`/api/chief/messages`, `.../retry`) also check each of these on its own: a `Sec-Fetch-Site` other than `same-origin`/`none` is refused; an `Origin` must equal the request's real `scheme://Host` (plain HTTP on loopback; `X-Forwarded-Proto` is ignored); and the body must be `Content-Type: application/json`, so a cross-site form or `text/plain` post can't wake the chief.
 
 ## Local state
 

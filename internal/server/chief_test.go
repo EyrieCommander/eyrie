@@ -39,7 +39,9 @@ func TestManagementStaysLoopbackAndOffBridge(t *testing.T) {
 	s.registerChiefRoutes()
 
 	rec := httptest.NewRecorder()
-	s.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/chief/status", nil))
+	statusReq := httptest.NewRequest("GET", "/api/chief/status", nil)
+	statusReq.Host = "127.0.0.1:7200"
+	s.mux.ServeHTTP(rec, statusReq)
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":true`) {
 		t.Fatalf("management chief status: %d %s", rec.Code, rec.Body.String())
 	}
@@ -101,7 +103,9 @@ func TestChiefSendStoresBeforeDelivery(t *testing.T) {
 	s2 := &Server{mux: http.NewServeMux(), events: NewEventBus()}
 	s2.registerChiefRoutes()
 	rec = httptest.NewRecorder()
-	s2.mux.ServeHTTP(rec, httptest.NewRequest("GET", "/api/chief/messages", nil))
+	disabledReq := httptest.NewRequest("GET", "/api/chief/messages", nil)
+	disabledReq.Host = "127.0.0.1:7200"
+	s2.mux.ServeHTTP(rec, disabledReq)
 	if rec.Code != 503 {
 		t.Fatalf("disabled: %d", rec.Code)
 	}

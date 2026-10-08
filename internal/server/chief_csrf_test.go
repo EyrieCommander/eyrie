@@ -1,12 +1,14 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/Audacity88/eyrie/internal/bridge"
 )
@@ -61,6 +63,10 @@ func TestChiefMutationsRefuseCrossSite(t *testing.T) {
 		{"other localhost port", "127.0.0.1:7200", "http://127.0.0.1:9999", "application/json", "same-site", 403},
 		{"DNS rebinding host", "evil.example:7200", "http://evil.example:7200", "application/json", "same-origin", 403},
 		{"null origin", "127.0.0.1:7200", "null", "application/json", "cross-site", 403},
+		// Each header is checked on its own (review 8, finding 2):
+		{"https origin on an http request", "127.0.0.1:7200", "https://127.0.0.1:7200", "application/json", "", 403},
+		{"matching origin but cross-site fetch", "127.0.0.1:7200", "http://127.0.0.1:7200", "application/json", "cross-site", 403},
+		{"matching origin but same-site fetch", "127.0.0.1:7200", "http://127.0.0.1:7200", "application/json", "same-site", 403},
 	}
 	for _, tc := range refused {
 		if got := send(tc.host, tc.origin, tc.ctype, tc.site, body); got != tc.want {
@@ -86,6 +92,32 @@ func TestChiefMutationsRefuseCrossSite(t *testing.T) {
 		if got := send(tc.host, tc.origin, "application/json", tc.site, body); got != http.StatusAccepted {
 			t.Errorf("%s: %d, want 202", tc.name, got)
 		}
+	}
+
+	// Review 8, finding 1: reads refuse a rebinding Host too, so an
+	// attacker's page can't fetch the transcript same-origin.
+	for _, path := range []string{"/api/chief/messages", "/api/chief/status", "/api/chief/events"} {
+		// Bounded so an unguarded SSE route fails the test instead of
+		// streaming forever.
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		req := httptest.NewRequest("GET", path, nil).WithContext(ctx)
+		req.Host = "evil.example:7200"
+		rec := httptest.NewRecorder()
+		s.mux.ServeHTTP(rec, req)
+		if rec.Code != 403 {
+			t.Errorf("GET %s with rebinding Host: %d, want 403", path, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "hi") {
+			t.Errorf("GET %s with rebinding Host leaked transcript", path)
+		}
+		cancel()
+	}
+	readReq := httptest.NewRequest("GET", "/api/chief/messages", nil)
+	readReq.Host = "localhost:7200"
+	rec0 := httptest.NewRecorder()
+	s.mux.ServeHTTP(rec0, readReq)
+	if rec0.Code != 200 || !strings.Contains(rec0.Body.String(), `"hi"`) {
+		t.Fatalf("loopback read: %d %s", rec0.Code, rec0.Body.String())
 	}
 
 	// Retry is guarded the same way.
