@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -161,6 +162,15 @@ func TestCodexThreadAfterResetStartsAndSavesNewThread(t *testing.T) {
 // EYRIE_FAKE_CODEX_RESUME_FAIL is set it serves a minimal app server whose
 // thread/resume always fails, after writing its pid to that path.
 func TestMain(m *testing.M) {
+	if pidFile := os.Getenv("EYRIE_FAKE_CODEX_CHILD"); pidFile != "" {
+		// Spawns a long-lived grandchild (as a Codex tool call would), writes
+		// its pid, then hangs on turn/start like the HANG_TURN server.
+		child := exec.Command("sleep", "300")
+		if err := child.Start(); err == nil {
+			_ = os.WriteFile(pidFile, []byte(strconv.Itoa(child.Process.Pid)), 0o600)
+		}
+		os.Setenv("EYRIE_FAKE_CODEX_HANG_TURN", pidFile+".server")
+	}
 	if pidFile := os.Getenv("EYRIE_FAKE_CODEX_HANG_TURN"); pidFile != "" {
 		// Answers everything except turn/start, which it never answers.
 		_ = os.WriteFile(pidFile, []byte(strconv.Itoa(os.Getpid())), 0o600)
@@ -320,4 +330,48 @@ func TestCodexConcurrentTurnRefusedBeforeLaunch(t *testing.T) {
 func runHasClient(r *codexRun) bool {
 	c, _, _, _ := r.interruptTarget()
 	return c != nil
+}
+
+func TestCodexKillReachesSpawnedToolProcesses(t *testing.T) {
+	shortInterruptTimers(t)
+	dir := t.TempDir()
+	childPid := filepath.Join(dir, "child.pid")
+	t.Setenv("EYRIE_FAKE_CODEX_CHILD", childPid)
+	t.Setenv("CODEX_HOME", filepath.Join(dir, "src"))
+	self, _ := os.Executable()
+	a := newTestCodexAdapter(t, codexConfig{BinaryPath: self, CWD: dir})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go func() { _, _ = a.StreamMessage(ctx, "hi", "s") }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		if _, err := os.Stat(childPid); err == nil && a.activeRun("s") != nil && runHasClient(a.activeRun("s")) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("fake app server never spawned its child")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	raw, _ := os.ReadFile(childPid)
+	pid, _ := strconv.Atoi(string(raw))
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+	if err := a.Interrupt(context.Background(), "s"); err != nil {
+		t.Fatal(err)
+	}
+	gone := false
+	for i := 0; i < 100; i++ {
+		if err := syscall.Kill(pid, 0); errors.Is(err, syscall.ESRCH) {
+			gone = true
+			break
+		}
+		// The grandchild is reparented to init once the app server dies;
+		// init reaps it, so ESRCH arrives shortly after the kill.
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !gone {
+		t.Fatalf("tool process %d survived Stop", pid)
+	}
 }

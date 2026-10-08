@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/Audacity88/eyrie/internal/config"
@@ -73,6 +74,20 @@ type codexRun struct {
 	killFn   func()
 	killed   bool // Interrupt had to force-kill; the stream must end in an error
 	stopping bool // Interrupt arrived before the process existed
+	killedC  chan struct{}
+}
+
+// killedCh closes when kill is called.
+func (r *codexRun) killedCh() <-chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.killedC == nil {
+		r.killedC = make(chan struct{})
+		if r.killed {
+			close(r.killedC)
+		}
+	}
+	return r.killedC
 }
 
 func (r *codexRun) setThread(c *codexRPCClient, threadID string) {
@@ -103,6 +118,9 @@ func (r *codexRun) setKill(f func()) {
 // the run so setKill kills it the moment it starts.
 func (r *codexRun) kill() {
 	r.mu.Lock()
+	if !r.killed && r.killedC != nil {
+		close(r.killedC)
+	}
 	r.killed = true
 	f := r.killFn
 	if f == nil {
@@ -318,6 +336,10 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 
 	cmd := exec.CommandContext(ctx, a.commandPath(), "app-server")
 	cmd.Dir = cfg.CWD
+	// Own process group, so a kill reaches the shells and tools Codex spawns,
+	// not just the app server.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return killCodexGroup(cmd) }
 	if err := a.prepareCodexRuntime(cfg); err != nil {
 		return nil, err
 	}
@@ -336,12 +358,12 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting codex app-server: %w", err)
 	}
-	run.setKill(func() { _ = cmd.Process.Kill() })
+	run.setKill(func() { _ = killCodexGroup(cmd) })
 
 	// abort ends the app server on an early error exit. Wait reaps the child
 	// and closes its pipes; Kill alone leaves a zombie per failed attempt.
 	abort := func() {
-		_ = cmd.Process.Kill()
+		_ = killCodexGroup(cmd)
 		_ = cmd.Wait()
 	}
 
@@ -377,10 +399,15 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 
 	launched = true
 	ch := make(chan ChatEvent, 64)
+	var unregisterOnce sync.Once
+	unregister := func() { unregisterOnce.Do(func() { a.unregisterRun(sessionKey, run) }) }
 	go func() {
 		defer close(run.done)
-		defer a.unregisterRun(sessionKey, run)
-		a.streamCodexEvents(ctx, cmd, &stderr, client, run, ch)
+		defer unregister()
+		// unregister runs before the terminal event goes out: a caller that
+		// sends its next message as soon as it sees "done" must not be told
+		// the session is still busy.
+		a.streamCodexEvents(ctx, cmd, &stderr, client, run, ch, unregister)
 	}()
 	return ch, nil
 }
@@ -650,22 +677,63 @@ func (e *CodexResumeError) Error() string {
 
 func (e *CodexResumeError) Unwrap() error { return e.Err }
 
-func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent) {
-	defer close(ch)
-	defer func() {
-		_ = cmd.Process.Kill()
-		_ = cmd.Wait()
-	}()
-	runCodexEventLoop(ctx, stderr, client, run, ch)
+// killCodexGroup SIGKILLs the app server's whole process group (it was
+// started with Setpgid, so its pgid is its pid).
+func killCodexGroup(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	if err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return cmd.Process.Kill()
+	}
+	return nil
 }
 
-func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent) {
+func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent, beforeTerminal func()) {
+	defer close(ch)
+	defer func() {
+		_ = killCodexGroup(cmd)
+		_ = cmd.Wait()
+	}()
+	runCodexEventLoop(ctx, stderr, client, run, ch, beforeTerminal)
+}
+
+func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexRPCClient, run *codexRun, ch chan<- ChatEvent, beforeTerminal func()) {
+	var killed <-chan struct{}
+	if run != nil {
+		killed = run.killedCh()
+	}
+	// emit delivers an event unless the consumer has gone away: a stalled
+	// reader must not pin this goroutine (and the session) after a cancel or
+	// kill.
+	emit := func(e ChatEvent) bool {
+		select {
+		case ch <- e:
+			return true
+		case <-ctx.Done():
+			return false
+		case <-killed:
+			return false
+		}
+	}
+	sentTerminal := false
+	terminal := func(e ChatEvent) {
+		sentTerminal = true
+		if beforeTerminal != nil {
+			beforeTerminal()
+		}
+		// Best effort: if nobody is reading, drop it rather than block.
+		select {
+		case ch <- e:
+		default:
+			emit(e)
+		}
+	}
 	// A stream that ends because Interrupt killed the app server must not
 	// look like a finished reply to SendMessage.
-	sentTerminal := false
 	defer func() {
 		if !sentTerminal && run != nil && run.wasKilled() {
-			ch <- ChatEvent{Type: "error", Error: "Codex turn interrupted"}
+			terminal(ChatEvent{Type: "error", Error: "Codex turn interrupted"})
 		}
 	}()
 
@@ -674,20 +742,18 @@ func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexR
 	for {
 		select {
 		case <-ctx.Done():
-			sentTerminal = true
-			ch <- ChatEvent{Type: "error", Error: ctx.Err().Error()}
+			terminal(ChatEvent{Type: "error", Error: ctx.Err().Error()})
 			return
 		case req, ok := <-client.requests:
 			if !ok {
 				if stderr.Len() > 0 {
-					sentTerminal = true
-					ch <- ChatEvent{Type: "error", Error: strings.TrimSpace(stderr.String())}
+					terminal(ChatEvent{Type: "error", Error: strings.TrimSpace(stderr.String())})
 				}
 				return
 			}
 			event, response := codexChatEventFromServerRequest(req.Method, req.Params)
-			if event.Type != "" {
-				ch <- event
+			if event.Type != "" && !emit(event) {
+				return
 			}
 			_ = client.respond(req.ID, response)
 		case note, ok := <-client.notifications:
@@ -707,12 +773,10 @@ func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexR
 			}
 			if note.Method == "turn/completed" {
 				if errMsg := codexTurnError(note.Params); errMsg != "" {
-					sentTerminal = true
-					ch <- ChatEvent{Type: "error", Error: errMsg}
+					terminal(ChatEvent{Type: "error", Error: errMsg})
 					return
 				}
-				sentTerminal = true
-				ch <- ChatEvent{Type: "done", Content: full.String(), InputTokens: inputTokens, OutputTokens: outputTokens}
+				terminal(ChatEvent{Type: "done", Content: full.String(), InputTokens: inputTokens, OutputTokens: outputTokens})
 				return
 			}
 			event, ok := codexChatEventFromNotification(note.Method, note.Params)
@@ -722,7 +786,9 @@ func runCodexEventLoop(ctx context.Context, stderr *bytes.Buffer, client *codexR
 			if event.Type == "delta" {
 				full.WriteString(event.Content)
 			}
-			ch <- event
+			if !emit(event) {
+				return
+			}
 		}
 	}
 }

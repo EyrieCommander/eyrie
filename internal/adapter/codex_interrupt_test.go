@@ -92,7 +92,7 @@ func startTestRun(t *testing.T, a *CodexAdapter, key string, srv *interruptServe
 		defer close(run.done)
 		defer a.unregisterRun(key, run)
 		defer close(ch)
-		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch)
+		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch, nil)
 	}()
 	return ch, &kills
 }
@@ -312,4 +312,63 @@ func (c *chanAgent) collect() (string, error) {
 		}
 	}
 	return b.String(), nil
+}
+
+func TestCodexStalledConsumerDoesNotPinTheSession(t *testing.T) {
+	shortInterruptTimers(t)
+	a := &CodexAdapter{id: "t-stalled"}
+	srv, c := startInterruptServer(t, "ignore")
+	run := &codexRun{done: make(chan struct{})}
+	run.setThread(c, "thr_1")
+	run.setKill(func() { srv.hangUp() })
+	run.setTurnID("turn_1")
+	_ = a.registerRun("s", run)
+	ch := make(chan ChatEvent) // unbuffered and never read
+	go func() {
+		defer close(run.done)
+		defer a.unregisterRun("s", run)
+		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch, nil)
+	}()
+	// Fill the stream: the loop blocks on its first send.
+	srv.mu.Lock()
+	for i := 0; i < 5; i++ {
+		_ = srv.enc.Encode(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"delta": "x"}})
+	}
+	srv.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+
+	if err := a.Interrupt(context.Background(), "s"); err != nil {
+		t.Fatalf("interrupt with a stalled consumer: %v", err)
+	}
+	if a.activeRun("s") != nil {
+		t.Fatal("session still registered after interrupt with a stalled consumer")
+	}
+}
+
+func TestCodexSessionFreeWhenDoneIsDelivered(t *testing.T) {
+	a := &CodexAdapter{id: "t-done-free"}
+	srv, c := startInterruptServer(t, "honour")
+	run := &codexRun{done: make(chan struct{})}
+	run.setThread(c, "thr_1")
+	_ = a.registerRun("s", run)
+	ch := make(chan ChatEvent, 4)
+	release := make(chan struct{})
+	go func() {
+		defer close(run.done)
+		defer close(ch)
+		runCodexEventLoop(context.Background(), &bytes.Buffer{}, c, run, ch, func() { a.unregisterRun("s", run) })
+		<-release // simulate slow process cleanup after the terminal event
+	}()
+	srv.mu.Lock()
+	_ = srv.enc.Encode(map[string]any{"method": "turn/completed", "params": map[string]any{"turn": map[string]any{"id": "t", "status": "completed"}}})
+	srv.mu.Unlock()
+	e := <-ch
+	if e.Type != "done" {
+		t.Fatalf("event = %+v", e)
+	}
+	if a.activeRun("s") != nil {
+		close(release)
+		t.Fatal("session still busy when done was delivered; an immediate next turn would be refused")
+	}
+	close(release)
 }

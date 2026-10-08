@@ -216,7 +216,12 @@ func (s *Server) handleAgentAction(w http.ResponseWriter, r *http.Request) {
 	for _, ar := range result.Agents {
 		if ar.Agent.Name == name {
 			var execErr error
-			if ar.Agent.ConfigPath != "" && ar.Agent.InstanceID != "" {
+			if lifecycleViaAdapter(ar.Agent.Framework) {
+				// No daemon for the manager to signal: the adapter owns the
+				// runtime (Codex launches an app server per turn), so only
+				// the adapter can actually stop it.
+				execErr = adapterLifecycle(ctx, discovery.NewAgent(ar.Agent), la)
+			} else if ar.Agent.ConfigPath != "" && ar.Agent.InstanceID != "" {
 				execErr = manager.ExecuteWithConfig(ctx, ar.Agent.Framework, ar.Agent.ConfigPath, la)
 			} else {
 				execErr = manager.Execute(ctx, ar.Agent.Framework, la)
