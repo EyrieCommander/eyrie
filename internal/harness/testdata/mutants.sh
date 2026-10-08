@@ -186,7 +186,7 @@ mut run.go "caller cancel during the started write: gate and recheck both gone" 
   '	if startWhy == "" {
 		startWhy = cancelReason(ctx, runCtx, req)
 	}' '' \
-  'func (g *approvalGate) open() bool { return !g.closed.Load() && g.caller.Err() == nil }' 'func (g *approvalGate) open() bool { return !g.closed.Load() }'
+  '	return !g.closed.Load() && g.caller.Err() == nil && g.appr.Err() == nil' '	return !g.closed.Load() && g.appr.Err() == nil'
 mut run.go "failed cancel_requested write aborts the cancel" \
   '		holdCancel()
 		return unknown(base, fmt.Errorf("record cancel_requested' '		_ = holdCancel
@@ -197,7 +197,7 @@ mut run.go "late receipt write accepted" \
 		}
 		return err' '		return err'
 mut run.go "gate ignores caller cancellation (async only)" \
-  'func (g *approvalGate) open() bool { return !g.closed.Load() && g.caller.Err() == nil }' 'func (g *approvalGate) open() bool { return !g.closed.Load() }'
+  '	return !g.closed.Load() && g.caller.Err() == nil && g.appr.Err() == nil' '	return !g.closed.Load() && g.appr.Err() == nil'
 mut run.go "pump keeps answering after an approval failure" \
   '					stopApprovals()
 					select {
@@ -220,4 +220,6 @@ mut run.go "Wait error ends the cancel early (normal path)" \
 		return finish(ctx, rec, base, StateUnknown, reason)' '		return finish(ctx, rec, base, StateUnknown, reason)'
 mut run.go "Wait error ends the cancel early (failed write)" \
   '				doneCh = nil // Wait failed; keep waiting on the cancel' '				return'
+mut run.go "gate ignores the approvals context (decision at the deadline sent)" \
+  '	return !g.closed.Load() && g.caller.Err() == nil && g.appr.Err() == nil' '	return !g.closed.Load() && g.caller.Err() == nil'
 exit $bad

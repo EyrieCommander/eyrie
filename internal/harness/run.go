@@ -138,9 +138,11 @@ func Run(ctx context.Context, a Adapter, rec Recorder, appr Approver, req Reques
 	// cancellation is refused even before Run notices the cancel.
 	// approvalsCtx (handed to the approver and to Respond) is cancelled by
 	// stop, by the timeout, and on caller cancellation, so pending
-	// decisions unblock; it is not what the gate relies on.
+	// decisions unblock. The gate checks it too, so a decision returned
+	// after the timeout is refused even before the main loop stops
+	// approvals.
 	approvalsCtx, cancelApprovals := context.WithCancel(runCtx)
-	gate := newApprovalGate(ctx, cancelApprovals)
+	gate := newApprovalGate(ctx, approvalsCtx, cancelApprovals)
 	stopApprovals := func() { gate.stop(grace) }
 	defer gate.close()
 	stopOnCaller := context.AfterFunc(ctx, cancelApprovals)
@@ -394,22 +396,30 @@ func answer(ctx context.Context, g *approvalGate, h Handle, appr Approver, req R
 // the approvals context, then takes sem (waiting at most grace for a send
 // already in progress). After stop returns, no new send can begin.
 type approvalGate struct {
-	caller context.Context
+	caller context.Context // the caller's context
+	appr   context.Context // approvalsCtx: ends at the attempt timeout too
 	cancel context.CancelFunc
 	sem    chan struct{}
 	closed atomic.Bool
 }
 
-func newApprovalGate(caller context.Context, cancel context.CancelFunc) *approvalGate {
-	return &approvalGate{caller: caller, cancel: cancel, sem: make(chan struct{}, 1)}
+func newApprovalGate(caller, appr context.Context, cancel context.CancelFunc) *approvalGate {
+	return &approvalGate{caller: caller, appr: appr, cancel: cancel, sem: make(chan struct{}, 1)}
 }
 
-func (g *approvalGate) open() bool { return !g.closed.Load() && g.caller.Err() == nil }
+// open is false once stop has run, the caller has cancelled, or the
+// approvals context has ended (attempt timeout included), whichever the
+// main loop has or hasn't noticed yet.
+func (g *approvalGate) open() bool {
+	return !g.closed.Load() && g.caller.Err() == nil && g.appr.Err() == nil
+}
 
 func (g *approvalGate) send(fn func() error) error {
 	select {
 	case g.sem <- struct{}{}:
 	case <-g.caller.Done():
+		return errLateDecision
+	case <-g.appr.Done():
 		return errLateDecision
 	}
 	defer func() { <-g.sem }()

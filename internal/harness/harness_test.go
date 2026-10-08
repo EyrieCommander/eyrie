@@ -1215,3 +1215,94 @@ func TestLateApprovalAfterTimeoutIsNotSent(t *testing.T) {
 		t.Fatalf("decision sent after the timeout began cancellation: %v", got)
 	}
 }
+
+// deadlineApprover returns an offered option the moment its context ends
+// (the attempt timeout), i.e. a decision that arrives at the deadline.
+type deadlineApprover struct{ done chan struct{} }
+
+func (a *deadlineApprover) Decide(ctx context.Context, _ Request, _ NativePrompt) (string, error) {
+	defer close(a.done)
+	<-ctx.Done()
+	return "accept", nil
+}
+
+// Review 6: a decision returned at the attempt deadline, while the main
+// loop is held before it closes the gate (caller context still live), is
+// refused: the gate observes the approvals context, not only the caller.
+func TestDecisionAtDeadlineBeforeGateCloseIsRefused(t *testing.T) {
+	// Looped: Run's send also selects on the approvals context, so a single
+	// run can pass by chance if the gate's own check is missing.
+	for i := 0; i < 16; i++ {
+		decisionAtDeadline(t, i)
+	}
+}
+
+func decisionAtDeadline(t *testing.T, i int) {
+	t.Helper()
+	appr := &deadlineApprover{done: make(chan struct{})}
+	orig := beforeStopApprovals
+	beforeStopApprovals = func() { // hold the main loop until the decision is in
+		select {
+		case <-appr.done:
+		case <-time.After(2 * time.Second):
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	defer func() { beforeStopApprovals = orig }()
+	f := &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{Prompts: []NativePrompt{cmdPrompt}, IgnoreCancel: true, KeepEventsOpen: true}}
+	defer f.Finish()
+	req := goodRequest("a1")
+	req.Limits.Timeout = 20 * time.Millisecond
+	req.Limits.CancelGrace = 60 * time.Millisecond
+	r, err := runCtxWithin(t, 5*time.Second, context.Background(), f, &MemoryRecorder{}, appr, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(r.Reason, "timeout") {
+		t.Fatalf("run %d: reason = %q", i, r.Reason)
+	}
+	select {
+	case <-appr.done:
+	default:
+		t.Fatalf("run %d: approver never returned; the deadline path wasn't exercised", i)
+	}
+	if got := f.Responses(); len(got) != 0 {
+		t.Fatalf("run %d: decision sent after the attempt timeout: %v", i, got)
+	}
+}
+
+// Cancellation waits (bounded by grace) for a Respond already in flight:
+// the runtime never gets Cancel while it is still receiving a decision.
+// The gate refusing late decisions doesn't cover this; the main loop's
+// stopApprovals does.
+func TestCancelWaitsForInFlightRespond(t *testing.T) {
+	var f *Fake
+	var overlapped, hookRan atomic.Bool
+	f = &Fake{NameValue: "fake", Caps: fullCaps(), Script: FakeScript{
+		Prompts: []NativePrompt{cmdPrompt}, KeepEventsOpen: true, IgnoreCancel: true,
+		RespondHook: func() {
+			hookRan.Store(true)
+			time.Sleep(120 * time.Millisecond) // timeout fires meanwhile
+			if f.Cancelled() {
+				overlapped.Store(true)
+			}
+		},
+	}}
+	t.Cleanup(f.Finish)
+	req := goodRequest("a1")
+	req.Limits.Timeout = 30 * time.Millisecond
+	req.Limits.CancelGrace = 500 * time.Millisecond
+	r, err := runCtxWithin(t, 5*time.Second, context.Background(), f, &MemoryRecorder{}, &fixedApprover{option: "accept"}, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hookRan.Load() {
+		t.Fatal("Respond never started; test did not exercise the in-flight path")
+	}
+	if !strings.Contains(r.Reason, "timeout") {
+		t.Fatalf("reason = %q", r.Reason)
+	}
+	if overlapped.Load() {
+		t.Fatal("Cancel sent while a Respond was still in flight")
+	}
+}
