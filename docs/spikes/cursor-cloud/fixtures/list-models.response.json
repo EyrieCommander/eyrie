@@ -1,0 +1,11 @@
+{
+  "items": [
+    {
+      "id": "composer-2",
+      "displayName": "Composer 2",
+      "aliases": [
+        "composer-latest"
+      ]
+    }
+  ]
+}

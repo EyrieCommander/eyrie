@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "run_not_cancellable",
+    "message": "<server text>"
+  }
+}

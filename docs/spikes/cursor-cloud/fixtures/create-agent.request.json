@@ -1,0 +1,18 @@
+{
+  "prompt": {
+    "text": "<bounded brief from the frozen request>"
+  },
+  "model": {
+    "id": "composer-2"
+  },
+  "name": "eyrie <task_id>/<attempt_id>",
+  "agentId": "bc-00000000-0000-0000-0000-0000000000a1",
+  "repos": [
+    {
+      "url": "https://github.com/your-org/your-repo",
+      "startingRef": "eyrie/approved-ref"
+    }
+  ],
+  "workOnCurrentBranch": false,
+  "autoCreatePR": false
+}

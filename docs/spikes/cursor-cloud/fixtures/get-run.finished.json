@@ -1,0 +1,17 @@
+{
+  "id": "run-00000000-0000-0000-0000-0000000000b1",
+  "agentId": "bc-00000000-0000-0000-0000-0000000000a1",
+  "status": "FINISHED",
+  "createdAt": "2026-04-13T18:30:00.000Z",
+  "updatedAt": "2026-04-13T18:45:00.000Z",
+  "durationMs": 12357,
+  "result": "<final assistant reply; not copied into receipts>",
+  "git": {
+    "branches": [
+      {
+        "repoUrl": "github.com/your-org/your-repo",
+        "branch": "cursor/example-a1b2"
+      }
+    ]
+  }
+}

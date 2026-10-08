@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "agent_id_conflict",
+    "message": "<server text>"
+  }
+}

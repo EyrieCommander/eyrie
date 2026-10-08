@@ -1,0 +1,6 @@
+{
+  "error": {
+    "code": "rate_limit_exceeded",
+    "message": "<server text>"
+  }
+}
