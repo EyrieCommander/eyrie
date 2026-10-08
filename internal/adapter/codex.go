@@ -386,9 +386,14 @@ func (a *CodexAdapter) codexThread(ctx context.Context, client *codexRPCClient, 
 		threadID = cfg.Threads[sessionKey]
 	}
 	if threadID != "" {
-		if _, err := client.request(ctx, "thread/resume", map[string]any{"threadId": threadID}); err == nil {
-			return threadID, nil
+		// A saved thread that can't be resumed is an error, not a cue to start
+		// over: silently minting a new thread drops the conversation's context
+		// and leaves the caller believing it continued. Starting fresh is an
+		// explicit choice, made through ResetSession.
+		if _, err := client.request(ctx, "thread/resume", map[string]any{"threadId": threadID}); err != nil {
+			return "", &CodexResumeError{SessionKey: sessionKey, ThreadID: threadID, Err: err}
 		}
+		return threadID, nil
 	}
 
 	result, err := client.request(ctx, "thread/start", codexThreadStartParams(cfg))
@@ -410,6 +415,21 @@ func (a *CodexAdapter) codexThread(ctx context.Context, client *codexRPCClient, 
 	})
 	return threadID, nil
 }
+
+// CodexResumeError reports that a session's saved Codex thread could not be
+// resumed. The saved mapping is left in place; ResetSession clears it so the
+// next message starts a new thread.
+type CodexResumeError struct {
+	SessionKey string
+	ThreadID   string
+	Err        error
+}
+
+func (e *CodexResumeError) Error() string {
+	return fmt.Sprintf("codex thread/resume failed for session %q (thread %s): %v; reset the session to start a new thread", e.SessionKey, e.ThreadID, e.Err)
+}
+
+func (e *CodexResumeError) Unwrap() error { return e.Err }
 
 func (a *CodexAdapter) streamCodexEvents(ctx context.Context, cmd *exec.Cmd, stderr *bytes.Buffer, client *codexRPCClient, ch chan<- ChatEvent) {
 	defer close(ch)
