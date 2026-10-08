@@ -60,13 +60,33 @@ var (
 
 type codexRunKey struct{ agent, session string }
 
+// codexLastTurn records when each agent's most recent turn ended, so Status
+// can report LastTask across adapter instances.
+var codexLastTurn = map[string]time.Time{}
+
+const codexTaskPreviewMax = 80
+
+// codexTaskPreview is the first line of a prompt, trimmed to
+// codexTaskPreviewMax runes. Status is served on the loopback management API
+// only; it never goes to the bridge.
+func codexTaskPreview(message string) string {
+	line, _, _ := strings.Cut(strings.TrimSpace(message), "\n")
+	line = strings.TrimSpace(line)
+	if r := []rune(line); len(r) > codexTaskPreviewMax {
+		line = string(r[:codexTaskPreviewMax-1]) + "…"
+	}
+	return line
+}
+
 // codexRun is one in-flight turn: the app-server process serving it and the
 // ids turn/interrupt needs. done closes when the stream goroutine exits.
 type codexRun struct {
-	client   *codexRPCClient
-	threadID string
-	kill     func()
-	done     chan struct{}
+	client    *codexRPCClient
+	threadID  string
+	kill      func()
+	done      chan struct{}
+	startedAt time.Time
+	task      string // short preview of the prompt, for the status view
 
 	mu     sync.Mutex
 	turnID string
@@ -140,6 +160,14 @@ func (a *CodexAdapter) Status(_ context.Context) (*AgentStatus, error) {
 		Channels:       []string{"codex-app-server"},
 		ProviderStatus: "ok",
 		BusyState:      "idle",
+	}
+	busy, task, last := a.runSnapshot()
+	if busy {
+		st.BusyState = "busy"
+		st.CurrentTask = task
+	}
+	if !last.IsZero() {
+		st.LastTask = &last
 	}
 	return st, nil
 }
@@ -298,10 +326,12 @@ func (a *CodexAdapter) StreamMessage(ctx context.Context, message, sessionKey st
 		return nil, err
 	}
 	run := &codexRun{
-		client:   client,
-		threadID: threadID,
-		kill:     func() { _ = cmd.Process.Kill() },
-		done:     make(chan struct{}),
+		client:    client,
+		threadID:  threadID,
+		kill:      func() { _ = cmd.Process.Kill() },
+		done:      make(chan struct{}),
+		startedAt: time.Now(),
+		task:      codexTaskPreview(message),
 	}
 	if err := a.registerRun(sessionKey, run); err != nil {
 		_ = cmd.Process.Kill()
@@ -392,7 +422,45 @@ func (a *CodexAdapter) unregisterRun(sessionKey string, run *codexRun) {
 	defer codexRunsMu.Unlock()
 	if codexRuns[k] == run {
 		delete(codexRuns, k)
+		codexLastTurn[k.agent] = time.Now()
 	}
+}
+
+// runSnapshot reports whether this agent has a turn in flight, a description
+// of the oldest one (and how many more are running), and the most recent
+// activity time: the newest in-flight start, else when the last turn ended.
+func (a *CodexAdapter) runSnapshot() (busy bool, task string, last time.Time) {
+	codexRunsMu.Lock()
+	defer codexRunsMu.Unlock()
+	var oldest *codexRun
+	var oldestKey string
+	n := 0
+	for k, r := range codexRuns {
+		if k.agent != a.id {
+			continue
+		}
+		n++
+		if oldest == nil || r.startedAt.Before(oldest.startedAt) || (r.startedAt.Equal(oldest.startedAt) && k.session < oldestKey) {
+			oldest, oldestKey = r, k.session
+		}
+		if r.startedAt.After(last) {
+			last = r.startedAt
+		}
+	}
+	if n == 0 {
+		return false, "", codexLastTurn[a.id]
+	}
+	task = "session " + oldestKey
+	if oldest.task != "" {
+		task += ": " + oldest.task
+	}
+	if !oldest.startedAt.IsZero() {
+		task += " (since " + oldest.startedAt.UTC().Format(time.RFC3339) + ")"
+	}
+	if n > 1 {
+		task += fmt.Sprintf(" +%d more", n-1)
+	}
+	return true, task, last
 }
 
 func (a *CodexAdapter) activeRun(sessionKey string) *codexRun {

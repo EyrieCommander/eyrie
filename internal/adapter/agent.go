@@ -164,8 +164,13 @@ type AgentStatus struct {
 }
 
 // InferBusyState populates BusyState based on LastTask timestamp.
-// Call after Status() to enrich the response.
+// Call after Status() to enrich the response. A BusyState the adapter already
+// set is authoritative (it knows whether a turn is in flight) and is kept;
+// inferring from LastTask would call a turn running longer than a minute idle.
 func (s *AgentStatus) InferBusyState() {
+	if s.BusyState != "" {
+		return
+	}
 	if s.Errors24h > 5 {
 		s.BusyState = "error"
 		return
