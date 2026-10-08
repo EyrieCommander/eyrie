@@ -54,9 +54,13 @@ export default function ChiefChat() {
     reload();
     const unsub = subscribeChiefEvents(() => reload());
     const tick = setInterval(() => setNow(Date.now()), 1000);
+    // Fallback in case the event stream is down for a while: the store is
+    // the truth, so a slow re-read can't double-show anything.
+    const poll = setInterval(() => reload(), 15_000);
     return () => {
       unsub();
       clearInterval(tick);
+      clearInterval(poll);
     };
   }, [reload]);
 

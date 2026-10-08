@@ -57,6 +57,7 @@ var bridgeCheckCmd = &cobra.Command{
 			return err
 		}
 		fsys, rerrs := bridge.NewFS(cfg.Roots, cfg.ExtraDeny)
+		defer fsys.Close()
 		for _, e := range rerrs {
 			fmt.Fprintf(cmd.OutOrStdout(), "warning: %v (root skipped)\n", e)
 		}
@@ -95,17 +96,20 @@ func startBridge(srv *server.Server) func() {
 	}
 	storePath, err := bridge.DefaultStorePath()
 	if err != nil {
+		fsys.Close()
 		slog.Error("bridge refused to start", "error", err)
 		return noop
 	}
 	store, err := bridge.OpenStore(storePath)
 	if err != nil {
+		fsys.Close()
 		slog.Error("bridge refused to start: store", "error", err)
 		return noop
 	}
 	logPath := cfg.AccessLog
 	if logPath == "" {
 		if logPath, err = bridge.DefaultAccessLogPath(); err != nil {
+			fsys.Close()
 			store.Close()
 			slog.Error("bridge refused to start", "error", err)
 			return noop
@@ -113,16 +117,28 @@ func startBridge(srv *server.Server) func() {
 	}
 	alog, err := bridge.OpenAccessLog(logPath)
 	if err != nil {
+		fsys.Close()
 		store.Close()
 		slog.Error("bridge refused to start: access log", "error", err)
 		return noop
 	}
 	svc := bridge.NewService(store, cfg)
+	bs := bridge.NewServer(cfg, fsys, svc, alog)
+	// Bind first. If the port is taken, the Chief front door stays off:
+	// sending prompts with nowhere for replies to land would strand them.
+	ln, err := bs.Listen()
+	if err != nil {
+		svc.Close()
+		fsys.Close()
+		_ = alog.Close()
+		_ = store.Close()
+		slog.Error("bridge refused to start", "error", err)
+		return noop
+	}
 	srv.AttachChief(svc)
 	svc.ResumePending()
-	bs := bridge.NewServer(cfg, fsys, svc, alog)
 	go func() {
-		if err := bs.Serve(); err != nil {
+		if err := bs.ServeListener(ln); err != nil {
 			slog.Error("bridge listener stopped", "error", err)
 		}
 	}()
@@ -132,6 +148,7 @@ func startBridge(srv *server.Server) func() {
 		defer cancel()
 		_ = bs.Shutdown(ctx)
 		svc.Close()
+		fsys.Close()
 		_ = alog.Close()
 		_ = store.Close()
 	}

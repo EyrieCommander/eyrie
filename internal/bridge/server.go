@@ -65,11 +65,21 @@ func (s *Server) Handler() http.Handler { return s.handler }
 // Addr is the loopback address the bridge binds. Never 0.0.0.0.
 func (s *Server) Addr() string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(s.cfg.Port)) }
 
-// Serve listens on 127.0.0.1:<port> and serves until Shutdown.
-func (s *Server) Serve() error {
+// Listen binds 127.0.0.1:<port>. Callers bind first and only then enable
+// anything that depends on the bridge being reachable.
+func (s *Server) Listen() (net.Listener, error) {
 	ln, err := net.Listen("tcp", s.Addr())
 	if err != nil {
-		return fmt.Errorf("bridge listen %s: %w", s.Addr(), err)
+		return nil, fmt.Errorf("bridge listen %s: %w", s.Addr(), err)
+	}
+	return ln, nil
+}
+
+// Serve listens on 127.0.0.1:<port> and serves until Shutdown.
+func (s *Server) Serve() error {
+	ln, err := s.Listen()
+	if err != nil {
+		return err
 	}
 	return s.ServeListener(ln)
 }

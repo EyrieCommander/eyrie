@@ -20,7 +20,7 @@ The bridge starts with `eyrie dashboard` only when `~/.eyrie/bridge.toml` exists
 3. Pick roots: `[roots]` maps an alias to an absolute folder, e.g. `picker-docs = "/abs/path"`. The chief only ever sees aliases, never paths.
 4. Generate the token: `eyrie bridge token rotate`. It prints the token **once** and saves only its SHA-256. Give the token and the public bridge URL to the chief through a private secret request.
 5. `eyrie bridge check` validates the file without starting anything.
-6. Restart `eyrie dashboard`. The log line `bridge listening addr=127.0.0.1:7201` confirms it.
+6. Restart `eyrie dashboard`. The log line `bridge listening addr=127.0.0.1:7201` confirms it. If the port is taken, the bridge logs `bridge refused to start` and the Chief tab stays off (no prompts are sent with nowhere for replies to land).
 
 ## Exposing it: Funnel or a tunnel (bridge port only)
 
@@ -48,11 +48,12 @@ Check after setup: `curl -s -o /dev/null -w '%{http_code}' https://<public-url>/
 
 Any other path is 404; a wrong method on a bridge route is 405.
 
-**Wake payload** (Eyrie → chief, `Authorization: Bearer <key>` and `X-Automation-Key: <key>`): `{"source":"eyrie","type":"eyrie.prompt","conversation_id","message_id","text","ts"}`, text capped at 4,000 characters with `"truncated":true`. 10 s timeout per attempt, retries after ~2 s, 10 s, 30 s with the same `message_id`, then `failed` with a Retry button (same `message_id`). Prompts are saved before sending and survive restarts; prompts still `pending` at startup are resent.
+**Wake payload** (Eyrie → chief, `Authorization: Bearer <key>` and `X-Automation-Key: <key>`; redirects are never followed, so the key can't be forwarded elsewhere, and a 3xx counts as a failed attempt): `{"source":"eyrie","type":"eyrie.prompt","conversation_id","message_id","text","ts"}`, text capped at 4,000 characters with `"truncated":true`. 10 s timeout per attempt, retries after ~2 s, 10 s, 30 s with the same `message_id`, then `failed` with a Retry button (same `message_id`). Prompts are saved before sending and survive restarts; prompts still `pending` at startup are resent.
 
 ## Safety rules
 
-- **Paths:** relative only. Absolute paths, NUL bytes, backslashes, and any `..` component are refused (400). Any symlink component is refused (403) in slice 1; the resolved path must sit at or under the root, and files are opened through `os.OpenRoot` as a second guard.
+- **Paths:** relative only. Absolute paths, NUL bytes, backslashes, and any `..` component are refused (400).
+- **Opening:** each root is opened once at startup as a directory descriptor (a root that is itself a symlink is refused). Every request walks from that descriptor with `openat(O_NOFOLLOW)` one component at a time, so a symlink anywhere in the path is refused (403) at open time, and swapping a file or the root's pathname after startup cannot redirect a read. The final open is non-blocking and the file type is checked with `fstat` on the opened descriptor: FIFOs, devices and sockets are refused (400) without blocking, and hidden from list and search. Unix only; elsewhere every fs call 404s.
 - **Deny list** (built in; `extra_deny` can only add), case-insensitive on every path component: names starting with `.`, `*.pem`, `*.key`, `*.p12`, `*.pfx`, `*.jks`, `*.keystore`, `*.kdbx`, `id_rsa*`, `id_ed25519*`, `id_ecdsa*`, `*.env`, `*secret*`, `*credential*`. Denied paths: 403 on read, hidden from list and search.
 - **Auth:** constant-time compare of SHA-256(token). Missing/wrong: 401, no body.
 - **Limits:** 60 req/min per token, burst 20; at most 4 concurrent; > 10 failed auths/min from one address → 429. All 429s carry `Retry-After`.

@@ -1038,13 +1038,16 @@ export async function retryChiefMessage(messageId: string): Promise<ChiefMessage
   return res.json();
 }
 
-/** Subscribe to chief refresh hints. Returns an unsubscribe function. */
+/** Subscribe to chief refresh hints. Returns an unsubscribe function.
+ *  The stream carries no data, only "re-read the store". Every `connected`
+ *  frame (first connect and every EventSource auto-reconnect) also triggers
+ *  a re-read, because updates published while disconnected are not replayed. */
 export function subscribeChiefEvents(onChange: () => void): () => void {
   const es = new EventSource(`${BASE}/api/chief/events`);
   es.onmessage = (e) => {
     try {
       const ev = JSON.parse(e.data);
-      if (ev.type === "chief_updated") onChange();
+      if (ev.type === "chief_updated" || ev.type === "connected") onChange();
     } catch { /* ignore */ }
   };
   return () => es.close();

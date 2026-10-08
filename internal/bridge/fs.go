@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"errors"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -25,6 +24,7 @@ const (
 	maxSnippetRunes  = 200
 	searchFileBudget = 20000
 	sniffBytes       = 8 << 10
+	maxSearchDepth   = 64
 )
 
 // searchTimeBudget is a var so tests can shrink it.
@@ -60,36 +60,48 @@ var (
 )
 
 // FS is the read-only, allowlisted view of Dan's folders.
+//
+// Each root is opened once, at startup, as a directory descriptor. Every
+// request walks from that descriptor with openat(O_NOFOLLOW) one component
+// at a time (open_unix.go), so:
+//   - replacing a root's pathname later cannot redirect the bridge;
+//   - a symlink anywhere in the path is refused at open time, not just at
+//     an earlier check, so a check-then-swap race cannot reach a link;
+//   - the final open is non-blocking and the kind is checked by fstat on the
+//     opened descriptor, so FIFOs and devices are refused without blocking.
+//
+// This replaces os.Root, which follows in-root symlinks even when asked
+// for O_NOFOLLOW and so can be raced onto a denied file.
 type FS struct {
-	roots map[string]string // alias -> symlink-resolved absolute path
+	roots map[string]*rootHandle
 	deny  []string
 }
 
-// NewFS resolves each root once. A root that does not exist or is not a
-// directory is skipped (so it 404s) and reported, rather than failing the
-// whole bridge.
+// NewFS opens each root once. A root that does not exist, is not a
+// directory, or is itself a symlink is skipped (so it 404s) and reported.
 func NewFS(roots map[string]string, extraDeny []string) (*FS, []error) {
-	f := &FS{roots: map[string]string{}}
+	f := &FS{roots: map[string]*rootHandle{}}
 	f.deny = append(f.deny, baseDeny...)
 	for _, g := range extraDeny {
 		f.deny = append(f.deny, strings.ToLower(g))
 	}
 	var errs []error
 	for alias, p := range roots {
-		real, err := filepath.EvalSymlinks(filepath.Clean(p))
-		if err == nil {
-			var fi os.FileInfo
-			if fi, err = os.Stat(real); err == nil && !fi.IsDir() {
-				err = errors.New("not a directory")
-			}
-		}
+		h, err := openRootHandle(filepath.Clean(p))
 		if err != nil {
 			errs = append(errs, &rootError{alias, err})
 			continue
 		}
-		f.roots[alias] = real
+		f.roots[alias] = h
 	}
 	return f, errs
+}
+
+// Close releases the root descriptors.
+func (f *FS) Close() {
+	for _, h := range f.roots {
+		h.close()
+	}
 }
 
 type rootError struct {
@@ -150,53 +162,24 @@ func cleanRel(p string) (string, error) {
 	return c, nil
 }
 
-// resolve checks alias, path shape, the deny list on every component, and
-// symlinks (any symlink component is refused in slice 1), then confirms the
-// symlink-resolved result sits at or under the root.
-func (f *FS) resolve(alias, p string) (root, rel string, err error) {
-	root, ok := f.roots[alias]
+// open validates alias and path, then opens through the root descriptor.
+func (f *FS) open(alias, p string, kind openKind) (*os.File, string, error) {
+	h, ok := f.roots[alias]
 	if !ok {
-		return "", "", errUnknownRoot
+		return nil, "", errUnknownRoot
 	}
-	rel, err = cleanRel(p)
+	rel, err := cleanRel(p)
 	if err != nil {
-		return "", "", err
+		return nil, "", err
 	}
-	if rel == "." {
-		return root, rel, nil
+	if rel == "." && kind == wantFile {
+		return nil, "", errNotFile
 	}
-	cur := root
-	for _, c := range strings.Split(rel, "/") {
-		if f.denied(c) {
-			return "", "", errDenied
-		}
-		cur = filepath.Join(cur, c)
-		fi, err := os.Lstat(cur)
-		if err != nil {
-			return "", "", errNotFound
-		}
-		if fi.Mode()&fs.ModeSymlink != 0 {
-			return "", "", errDenied
-		}
-	}
-	real, err := filepath.EvalSymlinks(cur)
+	fh, err := f.openRel(h, rel, kind)
 	if err != nil {
-		return "", "", errNotFound
+		return nil, "", err
 	}
-	if real != root && !strings.HasPrefix(real, root+string(filepath.Separator)) {
-		return "", "", errDenied
-	}
-	return root, rel, nil
-}
-
-// openUnder opens rel through os.Root as a second guard against escape.
-func openUnder(root, rel string) (*os.File, error) {
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, err
-	}
-	defer r.Close()
-	return r.Open(rel)
+	return fh, rel, nil
 }
 
 // Entry is one list result.
@@ -207,24 +190,14 @@ type Entry struct {
 	Mtime string `json:"mtime"`
 }
 
-// List returns visible entries of a directory, sorted, capped.
+// List returns visible entries of a directory, sorted, capped. Symlinks,
+// FIFOs, devices and sockets are hidden, as are denied names.
 func (f *FS) List(alias, p string) ([]Entry, bool, error) {
-	root, rel, err := f.resolve(alias, p)
+	d, _, err := f.open(alias, p, wantDir)
 	if err != nil {
 		return nil, false, err
 	}
-	d, err := openUnder(root, rel)
-	if err != nil {
-		return nil, false, errNotFound
-	}
 	defer d.Close()
-	fi, err := d.Stat()
-	if err != nil {
-		return nil, false, errNotFound
-	}
-	if !fi.IsDir() {
-		return nil, false, errNotDir
-	}
 	des, err := d.ReadDir(-1)
 	if err != nil {
 		return nil, false, errNotFound
@@ -244,17 +217,19 @@ func (f *FS) List(alias, p string) ([]Entry, bool, error) {
 		case t.IsRegular():
 			typ = "file"
 		default:
-			continue // symlinks, devices, sockets: hidden
+			continue
 		}
-		info, err := de.Info()
-		if err != nil {
+		// Stat relative to the open directory descriptor, never by pathname
+		// (DirEntry.Info would re-resolve the name from the process cwd).
+		size, mtime, ok := statAt(d, de.Name())
+		if !ok {
 			continue
 		}
 		if len(out) == maxListEntries {
 			truncated = true
 			break
 		}
-		out = append(out, Entry{Name: de.Name(), Type: typ, Size: info.Size(), Mtime: info.ModTime().UTC().Format(time.RFC3339)})
+		out = append(out, Entry{Name: de.Name(), Type: typ, Size: size, Mtime: mtime.UTC().Format(time.RFC3339)})
 	}
 	return out, truncated, nil
 }
@@ -273,7 +248,6 @@ func looksBinary(b []byte, eof bool) bool {
 	}
 	for i := 1; i < utf8.UTFMax && i <= len(b); i++ {
 		if utf8.Valid(b[:len(b)-i]) {
-			// Only a short tail is invalid: accept if it is a rune prefix.
 			return !isRunePrefix(b[len(b)-i:])
 		}
 	}
@@ -312,24 +286,14 @@ type ReadResult struct {
 
 // Read returns lines [offset, offset+limit) of a text file.
 func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
-	root, rel, err := f.resolve(alias, p)
+	fh, rel, err := f.open(alias, p, wantFile)
 	if err != nil {
 		return nil, err
-	}
-	if rel == "." {
-		return nil, errNotFile
-	}
-	fh, err := openUnder(root, rel)
-	if err != nil {
-		return nil, errNotFound
 	}
 	defer fh.Close()
 	fi, err := fh.Stat()
 	if err != nil {
 		return nil, errNotFound
-	}
-	if !fi.Mode().IsRegular() {
-		return nil, errNotFile
 	}
 	if fi.Size() > maxReadFileSize {
 		return nil, errTooLarge
@@ -342,7 +306,7 @@ func (f *FS) Read(alias, p string, offset, limit int) (*ReadResult, error) {
 		return nil, errBinary
 	}
 	res := &ReadResult{Path: rel, Size: fi.Size(), Offset: offset}
-	br := bufio.NewReader(fh)
+	br := bufio.NewReader(io.LimitReader(fh, maxReadFileSize))
 	var sb strings.Builder
 	line := 0
 	for {
@@ -373,102 +337,117 @@ type Hit struct {
 	Snippet string `json:"snippet"`
 }
 
-var errStopWalk = errors.New("stop")
+type searchState struct {
+	lq        string
+	max       int
+	deadline  time.Time
+	files     int
+	hits      []Hit
+	truncated bool
+}
 
-// Search does a case-insensitive literal match on names and contents.
+func (st *searchState) over() bool {
+	if len(st.hits) >= st.max || st.files >= searchFileBudget || time.Now().After(st.deadline) {
+		st.truncated = true
+		return true
+	}
+	return false
+}
+
+// Search does a case-insensitive literal match on names and contents. It
+// walks directory descriptors with openat(O_NOFOLLOW), so it never follows a
+// symlink and never leaves the root, even if paths change mid-walk.
 func (f *FS) Search(alias, p, q string, max int) ([]Hit, bool, error) {
-	root, rel, err := f.resolve(alias, p)
+	d, rel, err := f.open(alias, p, wantDir)
 	if err != nil {
 		return nil, false, err
 	}
+	defer d.Close()
 	if max <= 0 || max > maxSearchHits {
 		max = maxSearchHits
 	}
-	lq := strings.ToLower(q)
-	deadline := time.Now().Add(searchTimeBudget)
-	hits := []Hit{}
-	files := 0
-	truncated := false
-	r, err := os.OpenRoot(root)
-	if err != nil {
-		return nil, false, errNotFound
+	st := &searchState{lq: strings.ToLower(q), max: max, deadline: time.Now().Add(searchTimeBudget)}
+	prefix := ""
+	if rel != "." {
+		prefix = rel + "/"
 	}
-	defer r.Close()
-	// fs.WalkDir over the os.Root's FS: never follows symlinks, never leaves root.
-	walkErr := fs.WalkDir(r.FS(), rel, func(path string, de fs.DirEntry, err error) error {
-		if err != nil {
-			if de != nil && de.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if time.Now().After(deadline) || files >= searchFileBudget || len(hits) >= max {
-			truncated = true
-			return errStopWalk
-		}
-		if path == rel {
-			return nil
-		}
-		if f.denied(de.Name()) {
-			if de.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if de.IsDir() || !de.Type().IsRegular() {
-			return nil
-		}
-		files++
-		if strings.Contains(strings.ToLower(de.Name()), lq) {
-			hits = append(hits, Hit{Path: path, Line: 0, Snippet: snippet(de.Name(), lq)})
-		}
-		if f.searchFile(r, path, lq, max, deadline, &hits) {
-			truncated = true
-			return errStopWalk
-		}
-		return nil
-	})
-	if walkErr != nil && walkErr != errStopWalk {
-		return nil, false, errNotFound
+	f.searchDir(d, prefix, 0, st)
+	if len(st.hits) > max {
+		st.hits = st.hits[:max]
+		st.truncated = true
 	}
-	if len(hits) > max {
-		hits = hits[:max]
-		truncated = true
-	}
-	return hits, truncated, nil
+	return st.hits, st.truncated, nil
 }
 
-// searchFile appends content hits; returns true if a budget was hit mid-file.
-func (f *FS) searchFile(r *os.Root, rel, lq string, max int, deadline time.Time, hits *[]Hit) bool {
-	fh, err := r.Open(rel)
-	if err != nil {
-		return false
+func (f *FS) searchDir(d *os.File, prefix string, depth int, st *searchState) {
+	if depth > maxSearchDepth {
+		st.truncated = true
+		return
 	}
-	defer fh.Close()
+	des, err := d.ReadDir(-1)
+	if err != nil {
+		return
+	}
+	sort.Slice(des, func(i, j int) bool { return des[i].Name() < des[j].Name() })
+	for _, de := range des {
+		if st.over() {
+			return
+		}
+		name := de.Name()
+		if f.denied(name) {
+			continue
+		}
+		t := de.Type()
+		switch {
+		case t.IsDir():
+			sub, err := openChild(d, name, wantDir)
+			if err != nil {
+				continue
+			}
+			f.searchDir(sub, prefix+name+"/", depth+1, st)
+			sub.Close()
+		case t.IsRegular():
+			st.files++
+			rel := prefix + name
+			if strings.Contains(strings.ToLower(name), st.lq) {
+				st.hits = append(st.hits, Hit{Path: rel, Line: 0, Snippet: snippet(name, st.lq)})
+			}
+			fh, err := openChild(d, name, wantFile)
+			if err != nil {
+				continue
+			}
+			f.searchFile(fh, rel, st)
+			fh.Close()
+		}
+	}
+}
+
+func (f *FS) searchFile(fh *os.File, rel string, st *searchState) {
 	fi, err := fh.Stat()
-	if err != nil || !fi.Mode().IsRegular() || fi.Size() > maxReadFileSize {
-		return false
+	if err != nil || fi.Size() > maxReadFileSize {
+		return
 	}
 	if bin, err := sniff(fh); err != nil || bin {
-		return false
+		return
 	}
-	sc := bufio.NewScanner(fh)
+	sc := bufio.NewScanner(io.LimitReader(fh, maxReadFileSize))
 	sc.Buffer(make([]byte, 64<<10), 1<<20)
 	n := 0
 	for sc.Scan() {
 		n++
-		if len(*hits) >= max {
-			return true
+		if len(st.hits) >= st.max {
+			st.truncated = true
+			return
 		}
-		if n%1024 == 0 && time.Now().After(deadline) {
-			return true
+		if n%1024 == 0 && time.Now().After(st.deadline) {
+			st.truncated = true
+			return
 		}
 		line := sc.Text()
-		if strings.Contains(strings.ToLower(line), lq) {
-			*hits = append(*hits, Hit{Path: rel, Line: n, Snippet: snippet(line, lq)})
+		if strings.Contains(strings.ToLower(line), st.lq) {
+			st.hits = append(st.hits, Hit{Path: rel, Line: n, Snippet: snippet(line, st.lq)})
 		}
 	}
-	return false
 }
 
 // snippet returns up to maxSnippetRunes runes of s around the first match.

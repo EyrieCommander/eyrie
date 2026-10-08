@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -57,6 +58,21 @@ type Waker struct {
 	Client *http.Client
 }
 
+// errRedirect stops the client before it follows a redirect: the wake key
+// travels in headers, and Go forwards custom headers like X-Automation-Key
+// to the redirect target. A 3xx is reported as a failed attempt.
+var errRedirect = errors.New("wake: redirect refused")
+
+// client returns the configured client with redirects disabled.
+func (w *Waker) client() *http.Client {
+	c := http.Client{}
+	if w.Client != nil {
+		c = *w.Client
+	}
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return errRedirect }
+	return &c
+}
+
 // sendOnce POSTs the payload. Errors never include the key or URL query.
 func (w *Waker) sendOnce(ctx context.Context, p WakePayload) error {
 	body, err := json.Marshal(p)
@@ -72,13 +88,12 @@ func (w *Waker) sendOnce(ctx context.Context, p WakePayload) error {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+w.Key)
 	req.Header.Set("X-Automation-Key", w.Key)
-	c := w.Client
-	if c == nil {
-		c = http.DefaultClient
-	}
-	resp, err := c.Do(req)
+	resp, err := w.client().Do(req)
 	if err != nil {
 		// *url.Error embeds the full URL; report only the cause class.
+		if errors.Is(err, errRedirect) {
+			return errRedirect
+		}
 		if ctx.Err() != nil {
 			return fmt.Errorf("wake: timed out")
 		}
